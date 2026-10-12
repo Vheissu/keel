@@ -1,0 +1,298 @@
+<div class="integration-toolbar">
+  <p>Retain build artifacts from your existing CI.</p>
+  <div class="header-actions">
+    <button class="button secondary" click.trigger="refresh()" disabled.bind="loading || busy">
+      Refresh imports
+    </button>
+    <button
+      class="button primary"
+      if.bind="canWrite"
+      click.trigger="open('connect')"
+      disabled.bind="!data.configured || !projects.length || busy"
+    >
+      Connect GitHub Actions
+    </button>
+  </div>
+</div>
+<div class="alert error" role="alert" if.bind="error && !form">${error}</div>
+<div class="alert success" role="status" if.bind="notice">${notice}</div>
+<div class="loading-inline" role="status" if.bind="loading">
+  <boat-mark animated.bind="true"></boat-mark>
+  <span>Loading connections…</span>
+</div>
+<p class="help" if.bind="data && !data.configured">
+  Provider connections require a server credential key. Run setup or configure KEEL_CREDENTIAL_KEY.
+</p>
+<p class="help" if.bind="!projects.length">Create a project before connecting a provider.</p>
+<template if.bind="data">
+  <section aria-label="Provider connections">
+    <div class="connection-grid">
+      <article class="connection-card" repeat.for="connection of data.connections; key: id">
+        <div class="section-heading">
+          <h2>${connection.name}</h2>
+          <span>${connection.enabled ? 'Enabled' : 'Disabled'}</span>
+        </div>
+        <p>
+          <a
+            href.bind="'https://github.com/' + connection.repository"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            ${connection.repository} ↗
+          </a>
+        </p>
+        <dl class="connection-details">
+          <dt>Project</dt>
+          <dd>${projectName(connection.project_id)}</dd>
+          <dt>Workflow</dt>
+          <dd>${connection.workflow_id} · ${connection.branch}</dd>
+          <dt>Artifact</dt>
+          <dd>${connection.artifact_name}</dd>
+        </dl>
+        <details class="webhook-details">
+          <summary>Webhook setup</summary>
+          <p>
+            In GitHub repository settings, add this URL with content type application/json, the
+            secret you supplied, and the Workflow runs event.
+          </p>
+          <code>${webhookUrl(connection)}</code>
+          <p>
+            GitHub must be able to reach the API over HTTPS. Loopback addresses work only for local
+            testing.
+          </p>
+        </details>
+        <div class="connection-actions" if.bind="canWrite">
+          <button
+            class="button primary"
+            click.trigger="open('import', connection)"
+            disabled.bind="!connection.enabled || busy"
+          >
+            Import run
+          </button>
+          <button
+            class="button secondary"
+            click.trigger="open('rotate', connection)"
+            disabled.bind="busy"
+          >
+            Rotate credentials
+          </button>
+          <button class="button secondary" click.trigger="toggle(connection)" disabled.bind="busy">
+            ${connection.enabled ? 'Disable' : 'Enable'}
+          </button>
+        </div>
+      </article>
+    </div>
+    <div class="empty-state" if.bind="!data.connections.length">
+      <boat-mark></boat-mark>
+      <h2>Bring your builds aboard.</h2>
+      <p>Connect a GitHub Actions workflow to retain its artifacts and create releases in Keel.</p>
+    </div>
+  </section>
+  <section class="imports-section" aria-labelledby="imports-title">
+    <div class="section-heading">
+      <h2 id="imports-title">Artifact imports</h2>
+      <span>Latest ${data.limit}</span>
+    </div>
+    <div class="table-wrap">
+      <table if.bind="data.imports.length">
+        <thead>
+          <tr>
+            <th>Connection / run</th>
+            <th>Status</th>
+            <th>Details</th>
+            <th>Requested · your timezone</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr repeat.for="job of data.imports; key: id">
+            <td>
+              <strong>${connectionName(job.connection_id)}</strong>
+              <small>Run ${job.run_id} · attempt ${job.run_attempt}</small>
+            </td>
+            <td><span class="badge">${statusLabel(job.status)}</span></td>
+            <td class="import-details">
+              <span if.bind="job.status === 'succeeded'">
+                Verified and retained. Ready to use in a release.
+              </span>
+              <span if.bind="job.error_message">${job.error_message}</span>
+              <small if.bind="job.status === 'pending' && job.attempts">
+                Next attempt after ${date(job.available_at)}
+              </small>
+              <span if.bind="job.status === 'pending' && !job.attempts">
+                Waiting for the import worker.
+              </span>
+              <span if.bind="job.status === 'processing'">
+                Verifying the run and downloading its archive.
+              </span>
+            </td>
+            <td>${date(job.created_at)}</td>
+            <td>
+              <button
+                class="button secondary"
+                if.bind="job.status === 'failed' && canWrite"
+                click.trigger="retry(job)"
+                disabled.bind="busy"
+              >
+                Retry import
+              </button>
+              <a
+                class="text-link"
+                if.bind="job.status === 'succeeded'"
+                href="#artifacts"
+                click.trigger="refreshWorkspace()"
+              >
+                View artifacts
+              </a>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="empty-state compact" if.bind="!data.imports.length">
+        <p>Successful workflow webhooks and manual requests will appear here.</p>
+      </div>
+    </div>
+    <p class="help">
+      GitHub Actions artifact ingestion is available. Bitbucket Pipelines, Azure Pipelines, GitLab
+      CI and Jenkins adapters are not implemented yet. Imports do not trigger deployments.
+    </p>
+  </section>
+</template>
+<dialog
+  class="form-dialog"
+  ref="dialog"
+  aria-labelledby="integration-dialog-title"
+  cancel.trigger="cancel($event)"
+>
+  <div class="dialog-heading">
+    <div>
+      <span class="eyebrow">GitHub Actions</span>
+      <h2 id="integration-dialog-title">${formTitle}</h2>
+    </div>
+    <button
+      class="icon-button"
+      click.trigger="close()"
+      aria-label="Close connection dialog"
+      disabled.bind="busy"
+    >
+      ×
+    </button>
+  </div>
+  <form if.bind="form" submit.trigger="submit()">
+    <div class="alert error" role="alert" if.bind="error">${error}</div>
+    <fieldset disabled.bind="busy">
+      <template if.bind="form === 'connect'">
+        <label for="connection-name">Connection name</label>
+        <input
+          id="connection-name"
+          value.bind="name"
+          required
+          maxlength="100"
+          placeholder="Application build"
+        />
+        <label for="connection-project">Project</label>
+        <select id="connection-project" value.bind="projectId" required>
+          <option repeat.for="project of projects" model.bind="project.id">${project.name}</option>
+        </select>
+        <label for="connection-repository">GitHub repository</label>
+        <input
+          id="connection-repository"
+          value.bind="repository"
+          required
+          placeholder="owner/repository"
+          autocapitalize="none"
+          spellcheck="false"
+        />
+        <label for="connection-workflow">Workflow ID</label>
+        <input
+          id="connection-workflow"
+          value.bind="workflowId"
+          required
+          inputmode="numeric"
+          pattern="[1-9][0-9]*"
+        />
+        <p class="help">
+          Use the numeric ID returned by GitHub’s workflows API or gh workflow list.
+        </p>
+        <label for="connection-branch">Allowed branch</label>
+        <input
+          id="connection-branch"
+          value.bind="branch"
+          required
+          maxlength="255"
+          autocapitalize="none"
+        />
+        <label for="connection-artifact">GitHub artifact name</label>
+        <input id="connection-artifact" value.bind="artifactName" required maxlength="100" />
+      </template>
+      <template if.bind="form === 'connect' || form === 'rotate'">
+        <label for="provider-token">GitHub access token</label>
+        <input
+          id="provider-token"
+          type="password"
+          value.bind="providerToken"
+          required
+          minlength="16"
+          maxlength="1024"
+          autocomplete="new-password"
+        />
+        <p class="help">
+          Use a fine-grained token with Actions: read access to this repository. Credentials are
+          encrypted and never returned by the API.
+        </p>
+        <label for="webhook-secret">Webhook secret</label>
+        <input
+          id="webhook-secret"
+          type="password"
+          value.bind="webhookSecret"
+          required
+          minlength="32"
+          maxlength="256"
+          autocomplete="new-password"
+        />
+        <p class="help">
+          Supply a random secret of at least 32 characters and use the same value in GitHub’s
+          webhook settings.
+        </p>
+      </template>
+      <template if.bind="form === 'import'">
+        <p class="help">
+          Import the configured artifact from a successful run of ${selected.repository}. Keel
+          retains the ZIP archive and verifies GitHub’s checksum. Maximum 25 MiB.
+        </p>
+        <label for="github-run-id">Workflow run ID</label>
+        <input
+          id="github-run-id"
+          value.bind="runId"
+          required
+          inputmode="numeric"
+          pattern="[1-9][0-9]*"
+        />
+        <label for="github-run-attempt">Run attempt</label>
+        <input
+          id="github-run-attempt"
+          type="number"
+          value.bind="runAttempt"
+          required
+          min="1"
+          max="10000"
+        />
+        <p class="help">
+          Use the current attempt number from GitHub. Re-running a workflow increments it.
+        </p>
+      </template>
+    </fieldset>
+    <div class="dialog-actions">
+      <span class="saving" role="status" if.bind="busy">
+        <boat-mark animated.bind="true"></boat-mark>
+        Saving…
+      </span>
+      <button class="button secondary" type="button" click.trigger="close()" disabled.bind="busy">
+        Cancel
+      </button>
+      <button class="button primary" type="submit" disabled.bind="busy">
+        ${form === 'import' ? 'Queue import' : 'Save connection'}
+      </button>
+    </div>
+  </form>
+</dialog>

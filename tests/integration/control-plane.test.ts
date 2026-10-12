@@ -514,11 +514,15 @@ describe('control plane against PostgreSQL', () => {
     expect((await get('/snapshot')).json().deployments[0].status).toBe('awaiting_approval');
   });
 
-  it('does not expose fake provider capabilities or agent execution endpoints', async () => {
+  it('advertises only implemented providers and rejects agent execution endpoints', async () => {
     const providers = (await get('/providers')).json().providers;
 
     expect(providers).toHaveLength(5);
-    expect(providers.every((p: { available: boolean }) => !p.available)).toBe(true);
+
+    expect(
+      providers.filter((p: { available: boolean }) => p.available).map((p: { id: string }) => p.id),
+    ).toEqual(['github-actions']);
+
     expect((await post('/deployments/complete', { status: 'succeeded' })).statusCode).toBe(404);
   });
 });

@@ -16,6 +16,7 @@ export interface ProviderConnection {
   organisationId: string;
   provider: Provider;
   credentialReference: string;
+  repository: string;
 }
 
 export interface ExternalPipeline {
@@ -53,11 +54,36 @@ export interface CIProviderAdapter {
   cancelRun?(connection: ProviderConnection, runId: string): Promise<void>;
 }
 
-// No provider is connected until an implementation can fulfil its capabilities.
-export const providers: { id: Provider; name: string; available: boolean }[] = [
-  { id: 'github-actions', name: 'GitHub Actions', available: false },
+export const githubCapabilities: ProviderCapabilities = {
+  listPipelines: true,
+  getRun: true,
+  listArtifacts: true,
+  triggerRun: false,
+  cancelRun: false,
+  deployment: false,
+  rollback: false,
+};
+
+const unavailableCapabilities: ProviderCapabilities = {
+  listPipelines: false,
+  getRun: false,
+  listArtifacts: false,
+  triggerRun: false,
+  cancelRun: false,
+  deployment: false,
+  rollback: false,
+};
+
+// Availability describes implemented adapters, not configured connections.
+const providerNames: { id: Provider; name: string; available: boolean }[] = [
+  { id: 'github-actions', name: 'GitHub Actions', available: true },
   { id: 'bitbucket-pipelines', name: 'Bitbucket Pipelines', available: false },
   { id: 'azure-pipelines', name: 'Azure Pipelines', available: false },
   { id: 'gitlab-ci', name: 'GitLab CI/CD', available: false },
   { id: 'jenkins', name: 'Jenkins', available: false },
 ];
+
+export const providers = providerNames.map((provider) => ({
+  ...provider,
+  capabilities: provider.available ? githubCapabilities : unavailableCapabilities,
+}));

@@ -2,15 +2,15 @@
 
 Build anywhere. Deploy everywhere.
 
-Keel is a continuous delivery application for artifacts built by your existing CI. This repository contains the first control-plane foundation from [PLAN.md](PLAN.md).
+Keel is a continuous delivery application for artifacts built by your existing CI. This repository contains the control-plane foundation and GitHub Actions artifact ingestion stage from [PLAN.md](PLAN.md).
 
 You can create projects, publish files with SHA-256 verification, create immutable releases, request deployments to staging or production, approve them from a separate identity, and inspect the audit trail. The Aurelia interface uses navy, sea teal, off-white, and small animated boats for loading states. Motion follows the operating system’s reduced-motion preference.
 
-Deployment execution is not implemented yet. Requests remain queued; Keel does not run scripts or report a successful deployment. Provider connections, Temporal workers, agents, S3 storage, and rollback are the next stages.
+Deployment execution is not implemented yet. Requests remain queued; Keel does not run scripts or report a successful deployment. GitHub artifact imports and S3 storage are available. Bitbucket ingestion, Temporal deployment workers, agents and rollback are the next stages.
 
 ## Run locally
 
-Use Node.js 22.12+ and Docker with Compose. The database uses port 55439, the API 4040, and the web app 5173.
+Use Node.js 22.12+ and Docker with Compose. The database uses port 55439, the API 4040, and the web app 5173. The dev command also starts the artifact import worker.
 
 ```sh
 npm ci
@@ -24,7 +24,15 @@ Use `KEEL_APPROVER_TOKEN` from `.env` in another browser session to approve or r
 
 Tokens are stored as SHA-256 hashes in PostgreSQL. The browser keeps its token in memory; reloading the page requires reconnecting. `npm run setup` preserves your data and can be rerun. Changing a bootstrap token in `.env` and rerunning setup revokes the previous token for that local identity.
 
-Artifacts live in `.data/artifacts/<organisation>/<sha256>`. Keep this directory with the database when backing up local state. `npm run infra:down` stops PostgreSQL without removing its volume.
+The default local store keeps artifacts in `.data/artifacts/<organisation>/<sha256>`. [S3 setup and migration](docs/storage.md) are available when you want a shared artifact store. Keep this directory with the database when backing up local state. `npm run infra:down` stops PostgreSQL without removing its volume.
+
+## Import from GitHub Actions
+
+Open **Integrations** to connect a project to a GitHub repository, workflow, branch and artifact name. The UI accepts a repository-scoped token with Actions read access and a random webhook secret. Setup generates `KEEL_CREDENTIAL_KEY` for encrypting these credentials; retain it with your backups.
+
+A signed successful-workflow webhook or manual import request queues the import worker. It verifies the run and archive checksum, then retains the ZIP with its source provenance. Create a release from that artifact in the Releases screen. Imports do not create deployments automatically.
+
+See [GitHub setup and CLI examples](docs/github-actions.md).
 
 ## Publish from a build
 
@@ -57,6 +65,8 @@ npm run test:e2e
 npm run format:check
 ```
 
+Run `npm run infra:storage` followed by `npm run test:s3` for the real S3-compatible storage tests. CI runs these alongside the default suite.
+
 Integration and browser tests use real PostgreSQL in temporary schemas, with separate organisations and artifact directories. They do not mutate the local workspace. Override `TEST_DATABASE_URL` to use a separate PostgreSQL database. Tests need permission to create and drop schemas.
 
 The suite covers organisation isolation, immutable records, checksums, idempotent retries, concurrent environment locks, approval policy, cancelled requests, browser publishing, keyboard navigation, mobile overflow, reduced motion, and axe accessibility checks. The GitHub Actions workflow runs the same checks against PostgreSQL 17.
@@ -68,6 +78,8 @@ To serve a compiled local build:
 ```sh
 npm run build
 NODE_ENV=production npm start
+# In another terminal:
+npm run worker:artifacts
 ```
 
 Open **http://127.0.0.1:4040**. This uses the same local configuration; it is not a supported production deployment package.

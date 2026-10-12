@@ -191,6 +191,7 @@ export class ControlPlane {
     p: Principal,
     input: z.infer<typeof artifactInput>,
     bytes: Buffer,
+    provenance: Record<string, unknown> = { source: 'direct-upload', published_by: p.actor_id },
   ) {
     if (
       !(
@@ -208,7 +209,6 @@ export class ControlPlane {
     }
 
     await this.store.put(p.organisation_id, input.digest, bytes);
-    const provenance = { source: 'direct-upload', published_by: p.actor_id };
 
     const result = await tx.query(
       `

@@ -1,7 +1,9 @@
 import { resolve } from 'node:path';
 import fastifyStatic from '@fastify/static';
 import { database } from '../../../packages/database/src/index.js';
-import { LocalArtifactStore } from './artifact-store.js';
+import { artifactStore } from './storage-config.js';
+import { CredentialVault } from './credential-vault.js';
+import { IntegrationService } from './integration-service.js';
 import { ControlPlane } from './control-plane.js';
 import { createApp } from './app.js';
 
@@ -13,8 +15,14 @@ const db = database(process.env.DATABASE_URL);
 
 // Resolve from the repository root in both workspace dev and compiled startup.
 const root = process.env.INIT_CWD || process.cwd();
-const store = new LocalArtifactStore(resolve(root, process.env.ARTIFACT_PATH || '.data/artifacts'));
-const app = await createApp(new ControlPlane(db, store), true);
+const control = new ControlPlane(db, artifactStore(root));
+
+const vault = process.env.KEEL_CREDENTIAL_KEY
+  ? new CredentialVault(process.env.KEEL_CREDENTIAL_KEY)
+  : undefined;
+
+const integrations = new IntegrationService(control, vault);
+const app = await createApp(control, true, integrations);
 
 if (process.env.NODE_ENV === 'production') {
   await app.register(fastifyStatic, { root: resolve(root, 'apps/web/dist'), wildcard: false });

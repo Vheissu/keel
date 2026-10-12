@@ -9,6 +9,7 @@ const pages = [
   'Releases',
   'Deployments',
   'Environments',
+  'Integrations',
   'Audit log',
 ] as const;
 
@@ -87,6 +88,7 @@ export class MyApp {
       Releases: 'Immutable snapshots. The same artifact in every environment.',
       Deployments: 'Review approvals and track deployment requests.',
       Environments: 'Choose where releases go and who approves them.',
+      Integrations: 'Connect existing CI workflows and retain their build artifacts.',
       'Audit log': 'A record of changes and the people behind them.',
     }[this.page];
   }

@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, randomBytes } from 'node:crypto';
 import { mkdtemp, rm, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -11,18 +11,38 @@ import { migrate } from '../../packages/database/src/migrate.js';
 import { createApp } from '../../apps/api/src/app.js';
 import { ControlPlane } from '../../apps/api/src/control-plane.js';
 import { LocalArtifactStore } from '../../apps/api/src/artifact-store.js';
+import { CredentialVault } from '../../apps/api/src/credential-vault.js';
+import { IntegrationService } from '../../apps/api/src/integration-service.js';
+import { ArtifactImportWorker } from '../../apps/api/src/artifact-import-worker.js';
+import { GitHubActionsAdapter } from '../../packages/integrations/src/github-actions.js';
+import { githubFixture } from '../github-fixture.js';
 
 const schema = `e2e_${randomUUID().replaceAll('-', '')}`;
 const admin = new pg.Pool({ connectionString: testDatabaseUrl });
 const db = new pg.Pool({ connectionString: testDatabaseUrl, options: `-c search_path=${schema}` });
 let app: FastifyInstance, root: string, f: Awaited<ReturnType<typeof fixture>>;
 let errors: string[] = [];
+let github = githubFixture();
+let importWorker: ArtifactImportWorker;
 
 test.beforeAll(async () => {
   await admin.query(`CREATE SCHEMA ${schema}`);
   await migrate(db);
   root = await mkdtemp(join(tmpdir(), 'keel-e2e-'));
-  app = await createApp(new ControlPlane(db, new LocalArtifactStore(root)));
+  const control = new ControlPlane(db, new LocalArtifactStore(root));
+
+  const integrations = new IntegrationService(
+    control,
+    new CredentialVault(randomBytes(32).toString('base64')),
+    (credentials) =>
+      new GitHubActionsAdapter(
+        async () => credentials,
+        (...args) => github.transport(...args),
+      ),
+  );
+
+  importWorker = new ArtifactImportWorker(integrations);
+  app = await createApp(control, false, integrations);
   await app.listen({ host: '127.0.0.1', port: 4051 });
   await mkdir('output/playwright', { recursive: true });
 });
@@ -30,6 +50,7 @@ test.beforeAll(async () => {
 test.beforeEach(async ({ page }) => {
   f = await fixture(db);
   errors = [];
+  github = githubFixture();
   page.on('pageerror', (error) => errors.push(error.message));
 });
 
@@ -86,7 +107,11 @@ test('publishes an artifact, creates a release, and obtains a separate productio
     .click();
 
   await expect(page.getByRole('dialog')).not.toBeVisible();
-  await expect(page.getByRole('status')).toContainText('Artifact verified and retained.');
+
+  await expect(
+    page.getByRole('status').filter({ hasText: 'Artifact verified and retained.' }),
+  ).toBeVisible();
+
   await page.getByRole('link', { name: 'Releases', exact: true }).click();
   await page.getByRole('button', { name: 'Create release', exact: true }).click();
   await page.getByLabel('Release version', { exact: true }).fill('1.0.0');
@@ -186,4 +211,78 @@ test('has accessible overview and forms and respects reduced-motion loading', as
 
   releaseRequest();
   await expect(page.getByText('Loading workspace…')).toHaveCount(0);
+});
+
+test('connects GitHub, retries a failed import, and uses the retained artifact in a release', async ({
+  page,
+}) => {
+  await app.inject({
+    method: 'POST',
+    url: '/api/v1/projects',
+    headers: { authorization: `Bearer ${f.operator.token}`, 'idempotency-key': randomUUID() },
+    payload: { name: 'Imported application', slug: 'imported-application' },
+  });
+
+  await connect(page);
+  await page.getByRole('link', { name: 'Integrations', exact: true }).click();
+  await page.getByRole('button', { name: 'Connect GitHub Actions', exact: true }).click();
+  await expect(page.getByLabel('Connection name', { exact: true })).toBeFocused();
+  await page.getByLabel('Connection name', { exact: true }).fill('Application builds');
+  await page.getByLabel('GitHub repository', { exact: true }).fill('keel-test/application');
+  await page.getByLabel('Workflow ID', { exact: true }).fill('42');
+  await page.getByLabel('GitHub access token', { exact: true }).fill('github-browser-test-token');
+
+  await page
+    .getByLabel('Webhook secret', { exact: true })
+    .fill('browser-webhook-test-secret-over-32-characters');
+
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.getByRole('button', { name: 'Save connection', exact: true }).click();
+  await expect(page.getByRole('dialog')).not.toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Application builds' })).toBeVisible();
+  await page.getByRole('button', { name: 'Import run', exact: true }).click();
+  await page.getByLabel('Workflow run ID', { exact: true }).fill('9001');
+  await page.getByRole('button', { name: 'Queue import', exact: true }).click();
+  await expect(page.getByRole('cell', { name: 'Queued', exact: true })).toBeVisible();
+
+  const retainedBytes = github.state.bytes;
+
+  github.state.bytes = Buffer.from('tampered-download');
+  await importWorker.runOnce();
+  await page.getByRole('button', { name: 'Refresh imports', exact: true }).click();
+  await expect(page.getByRole('cell', { name: 'Failed', exact: true })).toBeVisible();
+  github.state.bytes = retainedBytes;
+  await page.getByRole('button', { name: 'Retry import', exact: true }).click();
+  await expect(page.getByRole('cell', { name: 'Queued', exact: true })).toBeVisible();
+  await importWorker.runOnce();
+  await page.getByRole('button', { name: 'Refresh imports', exact: true }).click();
+  await expect(page.getByRole('cell', { name: 'Retained', exact: true })).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.screenshot({ path: 'output/playwright/integrations-desktop.png', fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole('heading', { name: 'Application builds' })).toBeVisible();
+
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+
+  await page.screenshot({ path: 'output/playwright/integrations-mobile.png', fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole('link', { name: 'View artifacts', exact: true }).click();
+
+  await expect(
+    page.getByRole('cell', { name: 'application gh-9001.1.8001', exact: true }),
+  ).toBeVisible();
+
+  await page.getByRole('link', { name: 'Releases', exact: true }).click();
+  await page.getByRole('button', { name: 'Create release', exact: true }).click();
+  await page.getByLabel('Release version', { exact: true }).fill('2.0.0');
+
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: 'Create release', exact: true })
+    .click();
+
+  await page.getByRole('button', { name: '2.0.0', exact: true }).click();
+  await expect(page.getByRole('dialog')).toContainText('"source": "github-actions"');
 });

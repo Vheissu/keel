@@ -53,7 +53,12 @@
         <p>${subtitle}</p>
       </div>
       <div class="header-actions" if.bind="data">
-        <button class="button secondary" click.trigger="refresh()" disabled.bind="loading || busy">
+        <button
+          class="button secondary"
+          if.bind="page !== 'Integrations'"
+          click.trigger="refresh()"
+          disabled.bind="loading || busy"
+        >
           <span aria-hidden="true">↻</span>
           Refresh
         </button>
@@ -235,7 +240,7 @@
       </template>
       <div
         class="list-toolbar"
-        if.bind="page !== 'Overview' && page !== 'Environments' && page !== 'Audit log'"
+        if.bind="page !== 'Overview' && page !== 'Environments' && page !== 'Audit log' && page !== 'Integrations'"
       >
         <label class="search-label" for="search">Search ${page.toLowerCase()}</label>
         <input
@@ -476,6 +481,13 @@
           protection.
         </p>
       </template>
+      <integrations-panel
+        if.bind="page === 'Integrations'"
+        api.bind="api"
+        projects.bind="data.projects"
+        can-write.bind="canWrite"
+        refresh-workspace.bind="() => refresh()"
+      ></integrations-panel>
       <template if.bind="page === 'Audit log'">
         <div class="table-wrap">
           <table>
@@ -595,7 +607,7 @@
         <input id="artifact-file" type="file" files.bind="files" required />
         <p class="help">
           Keel calculates SHA-256 in your browser and verifies the received bytes. Files are
-          retained locally. Maximum 25 MB.
+          retained in the configured artifact store. Maximum 25 MiB.
         </p>
       </template>
       <template if.bind="form === 'release'">

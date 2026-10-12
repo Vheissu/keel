@@ -19,6 +19,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
+      TEST_S3_ENDPOINT: http://127.0.0.1:59000
       TEST_DATABASE_URL: postgres://keel:keel-test-only@127.0.0.1:5432/keel
     steps:
       - uses: actions/checkout@v4
@@ -28,6 +29,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run format:check
+      - run: npm run infra:storage
       - run: npm run check
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e

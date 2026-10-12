@@ -1084,3 +1084,94 @@ nav-icon svg {
     font-size: 10px;
   }
 }
+
+.integration-toolbar,
+.connection-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.integration-toolbar {
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.integration-toolbar > p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.connection-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
+  gap: 20px;
+}
+
+.connection-card {
+  min-width: 0;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 24px;
+}
+
+.connection-card h2,
+.imports-section h2 {
+  font-size: 17px;
+}
+
+.connection-card a {
+  color: var(--teal);
+  overflow-wrap: anywhere;
+  text-decoration: underline;
+}
+
+.connection-details {
+  display: grid;
+  grid-template-columns: 85px minmax(0, 1fr);
+  gap: 10px;
+  font-size: 13px;
+  margin: 24px 0;
+}
+
+.connection-details dt {
+  color: var(--muted);
+}
+
+.connection-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.webhook-details {
+  margin: 20px 0;
+  font-size: 13px;
+}
+
+.webhook-details summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.webhook-details p {
+  line-height: 1.6;
+}
+
+.webhook-details code {
+  display: block;
+  padding: 12px;
+  background: #edf3f4;
+  overflow-wrap: anywhere;
+}
+
+.imports-section {
+  margin-top: 34px;
+}
+
+.import-details {
+  min-width: 240px;
+  max-width: 380px;
+  white-space: normal;
+}

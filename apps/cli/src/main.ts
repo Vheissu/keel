@@ -11,6 +11,10 @@ const { values, positionals } = parseArgs({
     name: { type: 'string' },
     version: { type: 'string' },
     artifact: { type: 'string' },
+    connection: { type: 'string' },
+    run: { type: 'string' },
+    attempt: { type: 'string' },
+    config: { type: 'string' },
     process: { type: 'string' },
     'idempotency-key': { type: 'string' },
     json: { type: 'boolean' },
@@ -22,10 +26,17 @@ const help = `Keel · publish existing build outputs and create immutable releas
 
   npm run keel -- artifact publish <file> --project <uuid> --name application --version 1.0.0
   npm run keel -- release create --project <uuid> --artifact <uuid> --version 1.0.0 --process process.yaml
+  npm run keel -- integration list
+  npm run keel -- integration connect --config github.json
+  npm run keel -- integration rotate <connection-uuid>
+  npm run keel -- integration enable|disable|pipelines <connection-uuid>
+  npm run keel -- artifact import --connection <uuid> --run <run-id> --attempt 1
+  npm run keel -- import retry <import-uuid>
   npm run keel -- validate <process.yaml>
   npm run keel -- status --json
 
 Set KEEL_URL (default http://127.0.0.1:4040) and KEEL_TOKEN.
+Connection creation and rotation use KEEL_GITHUB_TOKEN and KEEL_GITHUB_WEBHOOK_SECRET.
 For retryable CI steps, pass a stable --idempotency-key (8–128 characters).
 Results are JSON. Deployment requests and approvals are available in the UI and API.
 `;
@@ -109,6 +120,78 @@ try {
     );
   } else if (command === 'status') {
     console.log(JSON.stringify(await request('/snapshot'), null, 2));
+  } else if (command === 'integration' && subcommand === 'list') {
+    console.log(JSON.stringify(await request('/integrations'), null, 2));
+  } else if (command === 'integration' && (subcommand === 'connect' || subcommand === 'rotate')) {
+    const credentials = {
+      token: process.env.KEEL_GITHUB_TOKEN,
+      webhook_secret: process.env.KEEL_GITHUB_WEBHOOK_SECRET,
+    };
+
+    if (!credentials.token || !credentials.webhook_secret) {
+      throw new Error('Set KEEL_GITHUB_TOKEN and KEEL_GITHUB_WEBHOOK_SECRET.');
+    }
+
+    if (subcommand === 'connect') {
+      const config = JSON.parse(await readFile(required('config'), 'utf8'));
+
+      console.log(
+        JSON.stringify(
+          await request('/integrations/github', { ...config, ...credentials }),
+          null,
+          2,
+        ),
+      );
+    } else {
+      if (!file) {
+        throw new Error('Provide a connection UUID.');
+      }
+
+      console.log(
+        JSON.stringify(
+          await request(`/integrations/${encodeURIComponent(file)}/credentials`, credentials),
+          null,
+          2,
+        ),
+      );
+    }
+  } else if (command === 'integration' && ['enable', 'disable', 'pipelines'].includes(subcommand)) {
+    if (!file) {
+      throw new Error('Provide a connection UUID.');
+    }
+
+    const path = `/integrations/${encodeURIComponent(file)}`;
+
+    if (subcommand === 'pipelines') {
+      console.log(JSON.stringify(await request(`${path}/pipelines`), null, 2));
+    } else {
+      console.log(
+        JSON.stringify(
+          await request(`${path}/state`, { enabled: subcommand === 'enable' }),
+          null,
+          2,
+        ),
+      );
+    }
+  } else if (command === 'artifact' && subcommand === 'import') {
+    console.log(
+      JSON.stringify(
+        await request(`/integrations/${encodeURIComponent(required('connection'))}/imports`, {
+          run_id: required('run'),
+          run_attempt: Number(values.attempt ?? 1),
+        }),
+        null,
+        2,
+      ),
+    );
+  } else if (command === 'import' && subcommand === 'retry') {
+    if (!file) {
+      throw new Error('Provide an import UUID.');
+    }
+
+    console.log(
+      JSON.stringify(await request(`/imports/${encodeURIComponent(file)}/retry`, {}), null, 2),
+    );
   } else if (command === 'artifact' && subcommand === 'publish') {
     if (!file) {
       throw new Error('Provide an artifact file.');

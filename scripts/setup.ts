@@ -24,6 +24,13 @@ try {
 
 const env = parse(source);
 
+if (!env.KEEL_CREDENTIAL_KEY) {
+  env.KEEL_CREDENTIAL_KEY = randomBytes(32).toString('base64');
+  source = source.replace(/^KEEL_CREDENTIAL_KEY=.*$/m, '');
+  source += `\nKEEL_CREDENTIAL_KEY=${env.KEEL_CREDENTIAL_KEY}\n`;
+  await writeFile('.env', source, { mode: 0o600 });
+}
+
 if (
   !env.KEEL_OPERATOR_TOKEN ||
   !env.KEEL_APPROVER_TOKEN ||

@@ -16,6 +16,9 @@ import {
   deploymentInput,
 } from './control-plane.js';
 import { sha256 } from './artifact-store.js';
+import { IntegrationService } from './integration-service.js';
+import { registerIntegrationRoutes } from './integration-routes.js';
+import { registerGitHubWebhook } from './github-webhook.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -23,7 +26,11 @@ declare module 'fastify' {
   }
 }
 
-export async function createApp(service: ControlPlane, logger = false) {
+export async function createApp(
+  service: ControlPlane,
+  logger = false,
+  integrations = new IntegrationService(service),
+) {
   const app = Fastify({
     logger: logger ? { redact: ['req.headers.authorization'] } : false,
     bodyLimit: 25 * 1024 * 1024,
@@ -82,6 +89,8 @@ export async function createApp(service: ControlPlane, logger = false) {
       },
     });
   });
+
+  await registerGitHubWebhook(app, integrations);
 
   app.get('/health', async (_req, reply) => {
     try {
@@ -197,6 +206,8 @@ export async function createApp(service: ControlPlane, logger = false) {
           client.release();
         }
       });
+
+      await registerIntegrationRoutes(api, integrations);
 
       api.get('/providers', async () => ({ providers }));
 

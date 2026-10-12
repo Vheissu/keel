@@ -7,7 +7,10 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
-    proxy: { '/api': process.env.KEEL_API_URL || 'http://127.0.0.1:4040' },
+    proxy: {
+      '/api': process.env.KEEL_API_URL || 'http://127.0.0.1:4040',
+      '/webhooks': process.env.KEEL_API_URL || 'http://127.0.0.1:4040',
+    },
   },
   build: { target: 'es2022' },
 });

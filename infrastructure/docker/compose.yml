@@ -13,5 +13,20 @@ services:
       interval: 2s
       timeout: 3s
       retries: 20
+  s3:
+    image: rustfs/rustfs:1.0.1
+    profiles: [storage]
+    command: /data
+    environment:
+      RUSTFS_ACCESS_KEY: keel-local
+      RUSTFS_SECRET_KEY: keel-local-storage-only
+    ports: ['127.0.0.1:59000:9000', '127.0.0.1:59001:9001']
+    volumes: ['artifacts:/data']
+    healthcheck:
+      test: ['CMD', 'curl', '--fail', 'http://localhost:9000/health']
+      interval: 2s
+      timeout: 3s
+      retries: 30
 volumes:
+  artifacts:
   postgres:
