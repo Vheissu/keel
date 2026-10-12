@@ -1,3 +1,5 @@
+import { auditEvent } from './audit.js';
+import { authenticateToken, lockPrincipal } from './identity-policy.js';
 import { enqueueNotifications } from './notifications.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -53,29 +55,7 @@ export class ControlPlane {
   }
 
   async authenticate(token: string): Promise<Principal> {
-    const result = await this.db.query(
-      `
-        SELECT
-          t.organisation_id,
-          t.actor_id,
-          a.name,
-          t.permissions
-        FROM
-          api_tokens t
-          JOIN actors a ON a.id = t.actor_id
-          AND a.organisation_id = t.organisation_id
-        WHERE
-          token_hash = $1
-          AND revoked_at IS NULL
-      `,
-      [sha256(token)],
-    );
-
-    if (!result.rowCount) {
-      throw new DomainError('UNAUTHENTICATED', 'Enter a valid API token to connect.', 401);
-    }
-
-    return result.rows[0];
+    return authenticateToken(this.db, sha256(token));
   }
 
   async mutate<T>(
@@ -92,6 +72,8 @@ export class ControlPlane {
     }
 
     return transaction(this.db, async (tx) => {
+      await lockPrincipal(tx, principal);
+
       await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
         `${principal.organisation_id}:${principal.actor_id}:${key}`,
       ]);
@@ -151,22 +133,7 @@ export class ControlPlane {
     resource: string,
     details: object = {},
   ) {
-    await tx.query(
-      `
-        INSERT INTO
-          audit_events (
-            id,
-            organisation_id,
-            actor_id,
-            action,
-            resource_id,
-            details
-          )
-        VALUES
-          ($1, $2, $3, $4, $5, $6)
-      `,
-      [randomUUID(), p.organisation_id, p.actor_id, action, resource, details],
-    );
+    return auditEvent(tx, p, action, resource, details);
   }
 
   async project(tx: Transaction, p: Principal, input: z.infer<typeof projectInput>) {

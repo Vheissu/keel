@@ -3,6 +3,7 @@ import { randomUUID, randomBytes, X509Certificate } from 'node:crypto';
 import { mkdir, readFile, writeFile, rm, cp } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { request } from 'node:https';
+import type { IncomingHttpHeaders } from 'node:http';
 import { createServer } from 'node:net';
 import { initialize, compose, type Installation } from './installation.js';
 import { up, stop, status } from './lifecycle.js';
@@ -30,7 +31,13 @@ async function port() {
   return value;
 }
 
-async function http(path: string, body?: unknown, credential = token, gateway = false) {
+async function http(
+  path: string,
+  body?: unknown,
+  credential = token,
+  gateway = false,
+  headers: Record<string, string> = {},
+) {
   let bytes: Buffer | undefined;
 
   if (body !== undefined) {
@@ -44,7 +51,12 @@ async function http(path: string, body?: unknown, credential = token, gateway = 
       }
     : {};
 
-  return new Promise<{ status: number; bytes: Buffer; json: () => any }>((resolve, reject) => {
+  return new Promise<{
+    status: number;
+    bytes: Buffer;
+    headers: IncomingHttpHeaders;
+    json: () => any;
+  }>((resolve, reject) => {
     const req = request(
       `https://localhost:${gateway ? installation.agentPort : installation.httpsPort}${path}`,
       {
@@ -52,7 +64,8 @@ async function http(path: string, body?: unknown, credential = token, gateway = 
         ...identity,
         method: bytes ? 'POST' : 'GET',
         headers: {
-          authorization: `Bearer ${credential}`,
+          ...(credential ? { authorization: `Bearer ${credential}` } : {}),
+          ...headers,
           'idempotency-key': randomUUID(),
           ...(bytes
             ? {
@@ -73,7 +86,12 @@ async function http(path: string, body?: unknown, credential = token, gateway = 
         res.on('end', () => {
           const bytes = Buffer.concat(chunks);
 
-          resolve({ status: res.statusCode!, bytes, json: () => JSON.parse(bytes.toString()) });
+          resolve({
+            status: res.statusCode!,
+            bytes,
+            headers: res.headers,
+            json: () => JSON.parse(bytes.toString()),
+          });
         });
       },
     );
@@ -293,6 +311,97 @@ try {
   assert.equal(verified.artifacts, 1);
   assert.equal(verified.secret_versions, 1);
   assert.equal(verified.notification_endpoints, 1);
+
+  console.log(
+    'Enabling hosted identity and provisioning a workspace owner through packaged operations.',
+  );
+
+  installation.publicUrl = `https://localhost:${installation.httpsPort}`;
+
+  await writeFile(join(original, 'installation.json'), JSON.stringify(installation, null, 2), {
+    mode: 0o600,
+  });
+
+  await compose(original, installation, ['up', '-d', '--wait', 'api']);
+  assert.equal((await http('/api/v1/snapshot')).status, 401);
+  const ownerEmail = 'owner@example.com';
+  const ownerPassword = randomBytes(32).toString('base64url');
+
+  const ownerInvite = JSON.parse(
+    await compose(original, installation, [
+      'run',
+      '--rm',
+      '--no-deps',
+      'operations',
+      'identity',
+      'invite-owner',
+      snapshot.organisation.id,
+      ownerEmail,
+    ]),
+  );
+
+  const accepted = await http(
+    '/api/auth/accept',
+    {
+      token: new URL(ownerInvite.link).hash.split('token=')[1],
+      name: 'Recovery owner',
+      password: ownerPassword,
+    },
+    '',
+    false,
+    { origin: installation.publicUrl },
+  );
+
+  assert.equal(accepted.status, 200);
+  const cookie = accepted.headers['set-cookie']![0].split(';')[0];
+
+  assert.ok(accepted.headers['set-cookie']![0].includes('Secure'));
+  const session = await http('/api/auth/session', undefined, '', false, { cookie });
+
+  const sessionHeaders = {
+    cookie,
+    origin: installation.publicUrl,
+    'x-csrf-token': session.json().csrf,
+    'x-workspace-id': snapshot.organisation.id,
+  };
+
+  const managed = await http(
+    '/api/v1/identity/tokens',
+    { name: 'Recovery drill', permissions: ['read', 'write'], expires_in_days: 1 },
+    '',
+    false,
+    sessionHeaders,
+  );
+
+  assert.equal(managed.status, 200);
+  token = managed.json().token;
+  assert.equal((await api('/snapshot')).organisation.id, snapshot.organisation.id);
+
+  const pending = await http(
+    '/api/v1/identity/invitations',
+    { email: 'pending@example.com', role: 'reader' },
+    '',
+    false,
+    sessionHeaders,
+  );
+
+  assert.equal(pending.status, 200);
+  const pendingToken = new URL(pending.json().link).hash.split('token=')[1];
+
+  const recovery = JSON.parse(
+    await compose(original, installation, [
+      'run',
+      '--rm',
+      '--no-deps',
+      'operations',
+      'identity',
+      'reset-password',
+      ownerEmail,
+    ]),
+  );
+
+  const recoveryToken = new URL(recovery.link).hash.split('token=')[1];
+
   console.log('Backing up and testing wrong-key and corruption rejection.');
   await stop(original, installation);
   const key = randomBytes(32);
@@ -318,6 +427,64 @@ try {
 
   await up(recovered, restored);
   await status(recovered, restored);
+
+  assert.equal(restored.publicUrl, installation.publicUrl);
+  assert.equal((await http('/api/v1/snapshot')).status, 401);
+
+  assert.equal(
+    (await http('/api/auth/session', undefined, '', false, { cookie })).json().user,
+    null,
+  );
+
+  assert.equal(
+    (
+      await http('/api/auth/invitation', { token: pendingToken }, '', false, {
+        origin: installation.publicUrl,
+      })
+    ).status,
+    400,
+  );
+
+  assert.equal(
+    (
+      await http(
+        '/api/auth/reset-password',
+        { token: recoveryToken, password: ownerPassword },
+        '',
+        false,
+        { origin: installation.publicUrl },
+      )
+    ).status,
+    400,
+  );
+
+  const login = await http(
+    '/api/auth/login',
+    { email: ownerEmail, password: ownerPassword },
+    '',
+    false,
+    { origin: installation.publicUrl },
+  );
+
+  assert.equal(login.status, 200);
+  const nextCookie = login.headers['set-cookie']![0].split(';')[0];
+  const nextSession = await http('/api/auth/session', undefined, '', false, { cookie: nextCookie });
+
+  const replacement = await http(
+    '/api/v1/identity/tokens',
+    { name: 'After restore', permissions: ['read', 'write'], expires_in_days: 1 },
+    '',
+    false,
+    {
+      cookie: nextCookie,
+      origin: installation.publicUrl,
+      'x-csrf-token': nextSession.json().csrf,
+      'x-workspace-id': snapshot.organisation.id,
+    },
+  );
+
+  assert.equal(replacement.status, 200);
+  token = replacement.json().token;
 
   const history = JSON.parse(
     await compose(recovered, restored, [
@@ -378,7 +545,7 @@ try {
   );
 
   console.log(
-    'PASS: TLS, least-privilege runtime, stop barrier, durable restart, encrypted backup, corruption rejection, fresh-volume restore, retained bytes and keys, agent quarantine.',
+    'PASS: TLS, least-privilege runtime, stop barrier, durable restart, encrypted backup, corruption rejection, fresh-volume restore, retained bytes and keys, agent and identity quarantine.',
   );
 } finally {
   for (const [directory, project] of [

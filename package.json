@@ -39,7 +39,8 @@
     "test:execution": "npm run agent:build && tsx scripts/build-workflows.ts && vitest run --config vitest.execution.config.ts",
     "self-host": "tsx scripts/self-host/main.ts",
     "test:self-host": "tsx scripts/self-host/drill.ts",
-    "worker:notifications": "node --env-file=.env apps/notification-worker/dist/main.js"
+    "worker:notifications": "node --env-file=.env apps/notification-worker/dist/main.js",
+    "identity": "tsx --env-file=.env scripts/identity-admin.ts"
   },
   "devDependencies": {
     "@aurelia/vite-plugin": "^2.0.0-rc.2",

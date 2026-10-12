@@ -20,7 +20,11 @@ const help = `Keel self-hosted operations
   npm run self-host -- verify-backup --backup <backup-directory> --key-file <key-file>
   npm run self-host -- restore --backup <backup-directory> --directory <new-directory> --project keel-restored --key-file <key-file>
 
-Init options: --https-port 8443 --agent-port 8444 --bind 127.0.0.1 --image-tag 0.1.0
+  npm run self-host -- identity-owner --directory <directory> --workspace <uuid> --email <email>
+  npm run self-host -- identity-create --directory <directory> --name <name> --email <email>
+  npm run self-host -- identity-reset --directory <directory> --email <email>
+
+Init options: --public-url https://keel.example:8443 --https-port 8443 --agent-port 8444 --bind 127.0.0.1 --image-tag 0.1.0
 Stop requires completed deployments and reconciliation. Backups require all services stopped.
 Restore uses fresh volumes, checks retained bytes and keys, and revokes agent access before startup.
 Keep the backup key outside the installation and retain the exact container images.
@@ -34,6 +38,10 @@ try {
       directory: { type: 'string' },
       project: { type: 'string' },
       hostname: { type: 'string' },
+      'public-url': { type: 'string' },
+      email: { type: 'string' },
+      workspace: { type: 'string' },
+      name: { type: 'string' },
       'https-port': { type: 'string' },
       'agent-port': { type: 'string' },
       bind: { type: 'string' },
@@ -95,6 +103,7 @@ try {
         httpsPort: Number(values['https-port'] || 8443),
         agentPort: Number(values['agent-port'] || 8444),
         imageTag: values['image-tag'] || '0.1.0',
+        ...(values['public-url'] ? { publicUrl: values['public-url'] } : {}),
       });
 
       console.log(
@@ -151,6 +160,38 @@ try {
             );
 
             break;
+          case 'identity-owner':
+          case 'identity-create':
+
+          case 'identity-reset': {
+            if (!installation.publicUrl) {
+              throw new Error('Set publicUrl in installation.json to enable hosted identity.');
+            }
+
+            let args: string[];
+
+            if (command === 'identity-owner') {
+              args = ['invite-owner', required('workspace'), required('email')];
+            } else if (command === 'identity-create') {
+              args = ['create-workspace', required('name'), required('email')];
+            } else {
+              args = ['reset-password', required('email')];
+            }
+
+            console.log(
+              await compose(directory, installation, [
+                'run',
+                '--rm',
+                '--no-deps',
+                'operations',
+                'identity',
+                ...args,
+              ]),
+            );
+
+            break;
+          }
+
           case 'stop':
             await stop(directory, installation);
             console.log('Installation stopped cleanly. It is ready for backup.');

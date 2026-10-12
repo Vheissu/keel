@@ -1,8 +1,8 @@
 # API foundation
 
-The API prefix is `/api/v1`. Every resource route requires `Authorization: Bearer <token>`. Organisation and actor IDs come from the token, never from a caller-supplied organisation header or body. Public `GET /health` checks database connectivity and reports `agent-protocol-available`; this does not confirm that a worker or agent is running.
+The API prefix is `/api/v1`. Resource routes accept `Authorization: Bearer <token>`. Hosted identity also supports browser sessions with an active `X-Workspace-ID` membership and CSRF protection. Bearer scope always comes from the token; a conflicting workspace header is rejected. See [identity endpoints](identity.md#api). Public `GET /health` checks database connectivity and reports `agent-protocol-available`; this does not confirm that a worker or agent is running.
 
-Resource mutations require an `Idempotency-Key` header: 8–128 letters, numbers, dots, colons, underscores, or hyphens. Keys are scoped to organisation and actor. The request method, URL, and body are fingerprinted. Retrying the same request returns its saved response; reusing a key for a different request returns `409`. Keys currently have no expiry.
+Resource mutations require an `Idempotency-Key` header: 8–128 letters, numbers, dots, colons, underscores, or hyphens. Keys are scoped to organisation and actor. The request method, URL, and body are fingerprinted. Retrying the same request returns its saved response (one-time token values and invitation links are omitted on replay); reusing a key for a different request returns `409`. Keys currently have no expiry.
 
 | Method and path                 | Permission | Input / result                                                                     |
 | ------------------------------- | ---------- | ---------------------------------------------------------------------------------- |

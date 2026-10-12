@@ -1,6 +1,6 @@
 # Implementation status
 
-The control-plane foundation, GitHub ingestion, Bitbucket publishing and Docker execution, agent recovery, promotion policy, rollback planning, scoped deployment secrets, self-hosted packaging, operational recovery, paginated resource navigation and durable webhook notifications are implemented. PLAN.md remains the product roadmap.
+The control-plane foundation, GitHub ingestion, Bitbucket publishing and Docker execution, agent recovery, promotion policy, rollback planning, scoped deployment secrets, self-hosted packaging, operational recovery, paginated resource navigation durable webhook notifications, invitation-only accounts, workspace membership and managed token lifecycle are implemented. PLAN.md remains the product roadmap.
 
 ## Implemented
 
@@ -40,9 +40,13 @@ The control-plane foundation, GitHub ingestion, Bitbucket publishing and Docker 
 - Signed deployment webhooks with scoped event rules, encrypted destinations, durable delivery jobs, leased attempts, bounded retries and visible UI/CLI delivery history.
 - A separate notification worker in local development and self-hosted Compose, with restore quarantine for unfinished deliveries.
 
+- Invitation-only email/password accounts, expiring browser sessions, workspace roles, member removal and last-owner protection.
+- Managed API tokens with explicit permissions, expiry, one-time reveal, atomic rotation and revocation; current membership limits every request.
+- Server provisioning and password recovery commands, workspace switching, access-management screens and restore quarantine for identity credentials.
+
 ## Next increment
 
-Add hosted identity and workspace membership with managed token lifecycle. SSO, SSH, additional deployment strategies and automated rollback remain later work.
+Add stronger hosted authentication with MFA and session management. SSO, custom roles, project-scoped tokens, SSH, additional deployment strategies and automated rollback remain later work.
 
 ## Decisions and constraints
 
@@ -52,11 +56,11 @@ Artifact storage uses the local filesystem by default, or S3 through the same `A
 
 SQL queries scope every organisation-owned API read, and composite foreign keys prevent cross-organisation and cross-project references. PostgreSQL RLS is not enabled. The development database role can administer its evaluation database. The self-hosted package uses separate migration and runtime roles; its runtime role has no DDL or Temporal database access. Immutable triggers prevent ordinary updates and deletes, not changes by a database administrator.
 
-The local bootstrap is not a hosted identity system. There is no invitation flow, token-management UI, token expiry, SSO, session cookie, or custom-role editor. Tokens are permission-scoped, but not yet project- or environment-scoped. Keep the development services bound to loopback. The browser does not persist credentials.
+The optional hosted identity mode uses invitation-only accounts and HttpOnly session cookies. Enabling it rejects legacy bootstrap tokens; the local bootstrap remains available when it is disabled. Managed tokens are workspace- and permission-scoped, but not project- or environment-scoped. SSO, MFA, custom roles and email delivery remain unimplemented. See [account setup and recovery](identity.md).
 
 Deployment outbox entries are delivered by the Temporal worker. Artifact ingestion retains its separate PostgreSQL-backed worker. Redis, runbooks, tenants, scheduled releases, and high-availability packaging remain unimplemented. See [Docker agent setup and limits](deployment-agents.md), including the 25 MiB archive cap and same-host certificate recovery and the absence of force-unlock or host reassignment. Production defaults to requiring verified staging of the exact release before admission. Approvers can edit prerequisites; accepted requests retain their admission snapshot. See [promotion and rollback](promotion-and-rollback.md) and [deployment secrets](deployment-secrets.md) for policy, key management and recovery boundaries.
 
-The dashboard shows the newest request per environment, including its pending/cancelled state. It does not claim that this is the currently deployed version. The overview and legacy snapshot endpoints retain a 200-record window. Resource screens and selectors use cursor pagination over the full collection. The overview resolves the newest request for each displayed project and environment independently of that window. Search and exact counts run in PostgreSQL; this stage does not add a search index or distributed rate limiting.
+The dashboard shows the newest request per environment, including its pending/cancelled state. It does not claim that this is the currently deployed version. The overview and legacy snapshot endpoints retain a 200-record window. Resource screens and selectors use cursor pagination over the full collection. The overview resolves the newest request for each displayed project and environment independently of that window. Search and exact counts run in PostgreSQL; there is no search index or distributed general-purpose rate limiter. Hosted login attempts have a shared per-account budget in PostgreSQL.
 
 ## Ingestion boundaries
 

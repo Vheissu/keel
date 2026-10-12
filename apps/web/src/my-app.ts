@@ -23,6 +23,7 @@ const pages = [
   'Integrations',
   'Notifications',
   'Audit log',
+  'Workspace access',
 ] as const;
 
 type Named = {
@@ -60,6 +61,18 @@ export class MyApp {
   page: Page = 'Overview';
   data: Dashboard | null = null;
   token = '';
+  hosted = false;
+  account: { id: string; name: string; email: string } | null = null;
+  memberships: { id: string; name: string; role: string }[] = [];
+  selectedWorkspace = '';
+  email = '';
+  password = '';
+  accountName = '';
+  inviteToken = '';
+  resetToken = '';
+  invitation: { email: string; workspace: string; role: string; existing_account: boolean } | null =
+    null;
+
   busy = false;
   loading = false;
   error = '';
@@ -88,7 +101,16 @@ export class MyApp {
   secretInspection: SecretBinding[] | null = null;
   private returnFocus: HTMLElement | null = null;
   private refreshRevision = 0;
-  private hashChange = () => this.readHash();
+  private hashChange = () => {
+    this.readHash();
+
+    if (/^#(?:accept-invite|reset-password)\?/.test(window.location.hash)) {
+      this.data = null;
+      this.list?.dispose();
+      this.list = null;
+      void this.loadAccount();
+    }
+  };
 
   binding() {
     this.api.onUnauthorized = (error) => {
@@ -98,6 +120,7 @@ export class MyApp {
 
     this.readHash();
     window.addEventListener('hashchange', this.hashChange);
+    void this.loadAccount();
   }
 
   unbinding() {
@@ -179,6 +202,7 @@ export class MyApp {
       Notifications: 'Delivery history and webhook destinations for deployment events.',
       Integrations: 'Connect existing CI workflows and retain their build artifacts.',
       'Audit log': 'A record of changes and the people behind them.',
+      'Workspace access': 'Workspace members, invitations and API tokens.',
     }[this.page];
   }
 
@@ -266,7 +290,145 @@ export class MyApp {
     return d ? `${d.release_version} · ${this.statusLabel(d.status)}` : 'No deployment';
   }
 
+  async loadAccount() {
+    const hash = window.location.hash;
+    const secret = new URLSearchParams(hash.split('?')[1] || '').get('token') || '';
+
+    if (hash.startsWith('#accept-invite?')) {
+      this.inviteToken = secret;
+    }
+
+    if (hash.startsWith('#reset-password?')) {
+      this.resetToken = secret;
+    }
+
+    if (this.inviteToken || this.resetToken) {
+      window.history.replaceState(null, '', '#overview');
+    }
+
+    try {
+      await this.restoreAccount();
+
+      if (this.inviteToken) {
+        this.invitation = await this.api.auth('/invitation', { token: this.inviteToken });
+      }
+
+      if (this.account && !this.inviteToken && !this.resetToken) {
+        await this.switchWorkspace();
+      }
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
+
+  async restoreAccount() {
+    const result = await this.api.auth<{
+      enabled: boolean;
+      user: { id: string; name: string; email: string } | null;
+      csrf?: string;
+      memberships: { id: string; name: string; role: string }[];
+    }>('/session');
+
+    this.hosted = result.enabled;
+    this.account = result.user;
+    this.memberships = result.memberships;
+    this.api.csrf = result.csrf || '';
+
+    if (!this.memberships.some((member) => member.id === this.selectedWorkspace)) {
+      this.selectedWorkspace = this.memberships[0]?.id || '';
+    }
+  }
+
+  async signIn() {
+    this.busy = true;
+    this.error = '';
+
+    try {
+      await this.api.auth('/login', { email: this.email, password: this.password });
+      this.password = '';
+      await this.restoreAccount();
+
+      if (!this.inviteToken) {
+        await this.switchWorkspace();
+      }
+    } catch (error) {
+      this.handleError(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async acceptInvitation() {
+    this.busy = true;
+    this.error = '';
+
+    try {
+      await this.api.auth('/accept', {
+        token: this.inviteToken,
+        ...(this.invitation?.existing_account
+          ? {}
+          : { name: this.accountName, password: this.password }),
+      });
+
+      this.password = '';
+      this.inviteToken = '';
+      this.invitation = null;
+      await this.restoreAccount();
+      await this.switchWorkspace();
+    } catch (error) {
+      this.handleError(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async resetPassword() {
+    this.busy = true;
+    this.error = '';
+
+    try {
+      await this.api.auth('/reset-password', { token: this.resetToken, password: this.password });
+      this.password = '';
+      this.resetToken = '';
+      this.disconnect();
+      this.notice = 'Password changed. Sign in with your new password.';
+    } catch (error) {
+      this.handleError(error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async switchWorkspace() {
+    this.data = null;
+    this.list?.dispose();
+    this.list = null;
+    this.close();
+    this.rollbackSource = null;
+    this.error = '';
+    this.notice = '';
+    this.api.token = '';
+    this.api.workspaceId = this.selectedWorkspace;
+
+    if (this.selectedWorkspace) {
+      await this.refresh();
+    }
+  }
+
+  async signOut() {
+    try {
+      if (this.account && !this.api.token) {
+        await this.api.auth('/logout', {});
+      }
+
+      this.disconnect();
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
+
   async connect() {
+    this.api.workspaceId = '';
     this.api.token = this.token.trim();
     this.token = '';
     await this.refresh();
@@ -276,6 +438,10 @@ export class MyApp {
     this.refreshRevision++;
     this.loading = false;
     this.api.token = '';
+    this.api.workspaceId = '';
+    this.api.csrf = '';
+    this.account = null;
+    this.memberships = [];
     this.close();
     this.data = null;
     this.error = '';

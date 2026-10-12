@@ -20,6 +20,15 @@ export const installationSchema = z
     bind: z.enum(['127.0.0.1', '0.0.0.0']),
     httpsPort: z.number().int().min(1024).max(65535),
     agentPort: z.number().int().min(1024).max(65535),
+    publicUrl: z
+      .string()
+      .url()
+      .refine((value) => {
+        const url = new URL(value);
+
+        return url.protocol === 'https:' && url.origin === value;
+      }, 'Use an HTTPS origin without a path.')
+      .optional(),
     imageTag: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,80}$/),
   })
   .strict()
@@ -51,6 +60,7 @@ export function environment(directory: string, installation: Installation) {
   return {
     ...process.env,
     KEEL_INSTANCE_DIR: resolve(directory),
+    KEEL_PUBLIC_URL: installation.publicUrl || '',
     KEEL_BIND_ADDRESS: installation.bind,
     KEEL_HOSTNAME: installation.hostname,
     KEEL_HTTPS_PORT: String(installation.httpsPort),

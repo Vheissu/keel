@@ -5,6 +5,10 @@ export interface Principal {
   actor_id: string;
   name: string;
   permissions: Permission[];
+  user_id?: string;
+  session_id?: string;
+  token_id?: string;
+  role?: string;
 }
 
 export interface Project {

@@ -26,6 +26,40 @@ export class ApiError extends Error {
 export class Api {
   // Intentionally memory-only: an API token is never persisted to browser storage.
   token = '';
+  workspaceId = '';
+  csrf = '';
+
+  identity() {
+    return `${this.token}:${this.workspaceId}:${this.csrf}`;
+  }
+
+  headers() {
+    return {
+      ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
+      ...(this.workspaceId ? { 'X-Workspace-ID': this.workspaceId } : {}),
+      ...(this.csrf ? { 'X-CSRF-Token': this.csrf } : {}),
+    };
+  }
+
+  async auth<T>(path: string, body?: unknown): Promise<T> {
+    const response = await fetch(`/api/auth${path}`, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(this.csrf ? { 'X-CSRF-Token': this.csrf } : {}),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new ApiError(result.error?.message || 'Account request failed.', response.status);
+    }
+
+    return result;
+  }
+
   // Called when the current token is rejected, so every caller ends the session the same way.
   onUnauthorized: ((error: ApiError) => void) | null = null;
   // Idempotency keys for in-flight writes. A request retried after a network error or 5xx reuses its key.
@@ -33,7 +67,8 @@ export class Api {
 
   /** `bodyDigest` is the SHA-256 hex of a binary body, when the caller has already computed it. */
   async request<T>(path: string, method = 'GET', body?: unknown, bodyDigest?: string): Promise<T> {
-    const token = this.token;
+    const identity = this.identity();
+    const headers = this.headers();
     const binary = body instanceof ArrayBuffer;
     let fingerprint = '';
     let key = '';
@@ -45,7 +80,7 @@ export class Api {
 
       // Hash the fingerprint so request bodies such as secret values are not kept in memory.
       fingerprint = await sha256Hex(
-        new TextEncoder().encode(`${token}:${method}:${path}:${content}`),
+        new TextEncoder().encode(`${identity}:${method}:${path}:${content}`),
       );
 
       key = this.pending.get(fingerprint) ?? crypto.randomUUID();
@@ -61,7 +96,7 @@ export class Api {
     const response = await fetch(`/api/v1${path}`, {
       method,
       headers: {
-        Authorization: `Bearer ${token}`,
+        ...headers,
         ...(method !== 'GET'
           ? {
               'Content-Type': binary ? 'application/octet-stream' : 'application/json',
@@ -77,7 +112,7 @@ export class Api {
         this.pending.delete(fingerprint);
       }
 
-      throw await this.failure(response, token);
+      throw await this.failure(response, identity);
     }
 
     const result = await response.json();
@@ -94,20 +129,21 @@ export class Api {
   }
 
   async download(id: string): Promise<Blob> {
-    const token = this.token;
+    const identity = this.identity();
+    const headers = this.headers();
 
     const response = await fetch(`/api/v1/artifacts/${id}/download`, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers,
     });
 
     if (!response.ok) {
-      throw await this.failure(response, token);
+      throw await this.failure(response, identity);
     }
 
     return response.blob();
   }
 
-  private async failure(response: Response, token: string) {
+  private async failure(response: Response, identity: string) {
     const data = await response.json().catch(() => null);
 
     const error = new ApiError(
@@ -115,8 +151,8 @@ export class Api {
       response.status,
     );
 
-    // Ignore a late rejection for a token the user has already replaced.
-    if (response.status === 401 && token === this.token) {
+    // Ignore a late rejection after the user changes credentials or workspace.
+    if (response.status === 401 && identity === this.identity()) {
       this.onUnauthorized?.(error);
     }
 

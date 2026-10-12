@@ -21,6 +21,7 @@ x-runtime: &runtime
   DB_PASSWORD_FILE: /run/secrets/keel_runtime_password
   ARTIFACT_PATH: /data/artifacts
   KEEL_HEALTH_FILE: /tmp/keel-ready
+  KEEL_PUBLIC_URL: ${KEEL_PUBLIC_URL:-}
 
 x-health: &health
   interval: 15s

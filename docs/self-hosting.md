@@ -29,7 +29,7 @@ Trust `tls/ca.crt` on operator machines and agents. The certificate covers the c
 curl --cacert /srv/keel/main/tls/ca.crt https://keel.example.com:8443/health
 ```
 
-Open the same HTTPS address in your browser. Read `secrets/operator_token` to sign in as an operator. Give `secrets/approver_token` to the approver and `secrets/secret_manager_token` to the secret manager through your secure credential channel. They are distinct identities and permissions. Do not paste them into shell command arguments, logs or tickets. This remains a token-based, single-workspace installation; invitations, SSO, expiring tokens and a token-management screen are not implemented.
+Open the same HTTPS address in your browser. Read `secrets/operator_token` to sign in as an operator. Give `secrets/approver_token` to the approver and `secrets/secret_manager_token` to the secret manager through your secure credential channel. They are distinct identities and permissions. Do not paste them into shell command arguments, logs or tickets. This is the default local-token mode. For invitation-only accounts, multiple workspace memberships and expiring managed tokens, enable [hosted identity](identity.md). It replaces these bootstrap credentials for API access.
 
 The generated `tls/agent.crt` and `tls/agent.key` are for one initial deployment host. Register that certificate's fingerprint, copy its identity and the CA to that host, and configure the gateway address. Issue a separate client certificate for each additional agent; never share an agent key between hosts. Follow [agent setup](deployment-agents.md) for registration, host targets and certificate replacement.
 

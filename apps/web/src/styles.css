@@ -143,6 +143,7 @@ strong {
   position: sticky;
   top: 0;
   height: 100vh;
+  overflow-y: auto;
 }
 .brand {
   display: flex;
@@ -1303,4 +1304,48 @@ secrets-panel > .button {
 .resource-picker .pagination {
   gap: 0.5rem;
   padding: 0.5rem 0;
+}
+
+.workspace-switch {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0 1rem 1rem;
+  color: #fff;
+  font-size: 0.8rem;
+}
+.workspace-switch select {
+  min-width: 0;
+  width: 100%;
+  color: #152d3c;
+}
+workspace-access {
+  display: block;
+}
+workspace-access section {
+  margin-bottom: 2rem;
+}
+workspace-access .muted {
+  display: block;
+}
+workspace-access fieldset {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+}
+workspace-access fieldset label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+workspace-access fieldset input {
+  width: auto;
+}
+
+@media (max-width: 740px) {
+  .workspace-switch {
+    margin: 1rem 0 0.6rem;
+  }
 }

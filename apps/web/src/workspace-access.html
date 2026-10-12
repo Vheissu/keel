@@ -1,0 +1,244 @@
+<p if.bind="!principal.session_id" class="help">
+  Sign in with your account to manage workspace access and API tokens.
+</p>
+<template if.bind="principal.session_id">
+  <div class="alert error" role="alert" if.bind="error">${error}</div>
+  <div class="alert success" role="status" if.bind="notice">${notice}</div>
+  <section if.bind="revealed" class="target-form">
+    <label for="revealed-credential">${revealedLabel}</label>
+    <input
+      id="revealed-credential"
+      readonly
+      value.bind="revealed"
+      autocomplete="off"
+      spellcheck="false"
+    />
+    <button class="button secondary" click.trigger="revealed = ''">Hide value</button>
+  </section>
+  <template if.bind="admin">
+    <section>
+      <h2>Members</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Person</th>
+              <th>Role</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr repeat.for="member of members.items">
+              <td>
+                ${member.name}
+                <small class="muted">${member.email}</small>
+              </td>
+              <td>
+                <select
+                  if.bind="editable(member)"
+                  aria-label.bind="'Role for ' + member.email"
+                  value.bind="member.role"
+                  disabled.bind="busy"
+                >
+                  <option repeat.for="choice of roles" value.bind="choice">${choice}</option>
+                </select>
+                <span else>${member.role}</span>
+              </td>
+              <td>
+                <template if.bind="editable(member)">
+                  <button
+                    class="button secondary"
+                    disabled.bind="busy"
+                    click.trigger="saveMember(member)"
+                  >
+                    Save role
+                  </button>
+                  <button
+                    class="button danger"
+                    disabled.bind="busy"
+                    click.trigger="saveMember(member, true)"
+                  >
+                    Remove
+                  </button>
+                </template>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="pagination">
+        <button disabled.bind="!memberOffset || busy" click.trigger="page('member', -1)">
+          Previous members
+        </button>
+        <button disabled.bind="!members.more || busy" click.trigger="page('member', 1)">
+          Next members
+        </button>
+      </div>
+    </section>
+    <section>
+      <h2>Invite someone</h2>
+      <form class="target-form" submit.trigger:prevent="invite()">
+        <label for="invite-email">Invitation email</label>
+        <input id="invite-email" type="email" required maxlength="254" value.bind="email" />
+        <label for="invite-role">Invitation role</label>
+        <select id="invite-role" value.bind="role">
+          <option repeat.for="choice of roles" value.bind="choice">${choice}</option>
+        </select>
+        <p class="help">
+          Owners manage administrators and other owners. Administrators manage delivery and other
+          members. Operators deploy; approvers review; secret managers manage credentials; readers
+          can view delivery activity.
+        </p>
+        <button class="button primary" type="submit" disabled.bind="busy">Create invitation</button>
+      </form>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Email</th>
+              <th>Role</th>
+              <th>Expires</th>
+              <th>Status</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr repeat.for="invite of invitations.items">
+              <td>${invite.email}</td>
+              <td>${invite.role}</td>
+              <td>${formatDate(invite.expires_at)}</td>
+              <td>
+                ${invite.accepted_at ? 'Accepted' : invite.revoked_at ? 'Revoked' : 'Pending until
+                expiry'}
+              </td>
+              <td>
+                <button
+                  if.bind="!invite.accepted_at && !invite.revoked_at"
+                  class="button secondary"
+                  disabled.bind="busy"
+                  click.trigger="revokeInvitation(invite.id)"
+                >
+                  Revoke invitation
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="pagination">
+        <button disabled.bind="!invitationOffset || busy" click.trigger="page('invitation', -1)">
+          Previous invitations
+        </button>
+        <button disabled.bind="!invitations.more || busy" click.trigger="page('invitation', 1)">
+          Next invitations
+        </button>
+      </div>
+    </section>
+  </template>
+  <section>
+    <h2>API tokens</h2>
+    <p>
+      Tokens belong to this workspace and cannot exceed your current role. Rotation revokes the
+      previous token immediately.
+    </p>
+    <form class="target-form" submit.trigger:prevent="issue()">
+      <label for="token-name">Token name</label>
+      <input id="token-name" required maxlength="100" value.bind="name" />
+      <label for="token-days">Token lifetime (days)</label>
+      <input id="token-days" type="number" required min="1" max="90" value.bind="days" />
+      <fieldset>
+        <legend>Token permissions</legend>
+        <label class="check-label" repeat.for="permission of principal.permissions">
+          <input
+            type="checkbox"
+            model.bind="permission"
+            checked.bind="permissions"
+            disabled.bind="permission === 'read'"
+          />
+          ${permission}
+        </label>
+      </fieldset>
+      <button class="button primary" type="submit" disabled.bind="busy">Create API token</button>
+    </form>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Owner</th>
+            <th>Permissions</th>
+            <th>Expires</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr repeat.for="token of tokens.items">
+            <td>${token.name}</td>
+            <td>${token.email}</td>
+            <td>${token.permissions.join(', ')}</td>
+            <td>${formatDate(token.expires_at)}</td>
+            <td>${token.revoked_at ? 'Revoked' : tokenActive(token) ? 'Active' : 'Expired'}</td>
+            <td>
+              <template if.bind="tokenActive(token)">
+                <button
+                  class="button secondary"
+                  disabled.bind="busy"
+                  if.bind="token.user_id === principal.user_id"
+                  click.trigger="issue(token)"
+                >
+                  Rotate token
+                </button>
+                <button
+                  class="button danger"
+                  disabled.bind="busy"
+                  click.trigger="revokeToken(token.id)"
+                >
+                  Revoke token
+                </button>
+              </template>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="pagination">
+      <button disabled.bind="!tokenOffset || busy" click.trigger="page('token', -1)">
+        Previous tokens
+      </button>
+      <button disabled.bind="!tokens.more || busy" click.trigger="page('token', 1)">
+        Next tokens
+      </button>
+    </div>
+  </section>
+  <section>
+    <h2>Change password</h2>
+    <p>
+      Changing your password signs out every session and revokes your API tokens in every workspace.
+    </p>
+    <form class="target-form" submit.trigger:prevent="changePassword()">
+      <label for="current-password">Current password</label>
+      <input
+        id="current-password"
+        type="password"
+        autocomplete="current-password"
+        required
+        maxlength="128"
+        value.bind="currentPassword"
+      />
+      <label for="new-password">New password (at least 15 characters)</label>
+      <input
+        id="new-password"
+        type="password"
+        autocomplete="new-password"
+        required
+        minlength="15"
+        maxlength="128"
+        value.bind="password"
+      />
+      <button class="button primary" type="submit" disabled.bind="busy">
+        Change password and sign out
+      </button>
+    </form>
+  </section>
+</template>

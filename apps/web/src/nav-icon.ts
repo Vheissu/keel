@@ -12,6 +12,8 @@ const paths: Record<string, string> = {
   Targets: 'M3 4h18v12H3V4Zm4 16h10M12 16v4M6 8h.01M6 12h.01',
   Integrations:
     'M9 7 7 5a4 4 0 0 0-6 6l4 4a4 4 0 0 0 6 0m4-6 2-2a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0M8 16l8-8',
+  'Workspace access':
+    'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2m20 0v-2a4 4 0 0 0-3-4M9 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm8 0a4 4 0 0 1 0 8',
   'Audit log': 'M6 3h9l4 4v14H6V3Zm9 0v5h4M9 12h7M9 16h7',
 };
 

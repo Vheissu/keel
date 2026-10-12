@@ -1,3 +1,4 @@
+import { identityAdmin } from './identity-admin.js';
 import { readFile } from 'node:fs/promises';
 import { database } from '../../../packages/database/src/index.js';
 import { migrate } from '../../../packages/database/src/migrate.js';
@@ -15,7 +16,7 @@ const services = [
   'agent-gateway',
 ];
 
-const tasks = ['provision', 'migrate', 'verify', 'quiescent', 'quarantine', 'health'];
+const tasks = ['provision', 'migrate', 'verify', 'quiescent', 'quarantine', 'health', 'identity'];
 const command = process.argv[2];
 
 try {
@@ -80,6 +81,18 @@ try {
             db,
             process.env,
             process.env.KEEL_WORKSPACE_NAME || 'Self-hosted workspace',
+          );
+
+          break;
+        case 'identity':
+          if (!process.env.KEEL_PUBLIC_URL) {
+            throw new OperationError('KEEL_PUBLIC_URL is required.');
+          }
+
+          console.log(
+            JSON.stringify(
+              await identityAdmin(db, process.argv.slice(3), process.env.KEEL_PUBLIC_URL),
+            ),
           );
 
           break;

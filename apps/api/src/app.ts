@@ -1,3 +1,5 @@
+import { Identity } from './identity.js';
+import { registerAuthRoutes, registerIdentityRoutes } from './identity-routes.js';
 import { registerNotificationRoutes } from './notifications.js';
 import { registerResourceReads } from './resource-reads.js';
 import Fastify, { type FastifyRequest, type FastifyServerOptions } from 'fastify';
@@ -45,11 +47,17 @@ export async function createApp(
   logger: FastifyServerOptions['logger'] = false,
   integrations = new IntegrationService(service),
   https?: ServerOptions,
+  publicOrigin = process.env.KEEL_PUBLIC_URL,
 ) {
+  const identity = publicOrigin ? new Identity(service, publicOrigin) : undefined;
+
   const app = Fastify({
     ...(https ? { https } : {}),
     logger: logger
-      ? { ...(typeof logger === 'object' ? logger : {}), redact: ['req.headers.authorization'] }
+      ? {
+          ...(typeof logger === 'object' ? logger : {}),
+          redact: ['req.headers.authorization', 'req.headers.cookie', 'res.headers["set-cookie"]'],
+        }
       : false,
     bodyLimit: 25 * 1024 * 1024,
     requestTimeout: 30000,
@@ -65,7 +73,9 @@ export async function createApp(
   app.setErrorHandler((error: Error & { code?: string; statusCode?: number }, req, reply) => {
     const secretRequest =
       req.routeOptions.url?.startsWith('/api/v1/secrets') ||
-      req.routeOptions.url?.startsWith('/api/v1/notifications');
+      req.routeOptions.url?.startsWith('/api/v1/notifications') ||
+      req.routeOptions.url?.startsWith('/api/auth') ||
+      req.routeOptions.url?.startsWith('/api/v1/identity');
 
     if (error instanceof DomainError) {
       return reply
@@ -116,6 +126,7 @@ export async function createApp(
     });
   });
 
+  await registerAuthRoutes(app, identity);
   await registerGitHubWebhook(app, integrations);
   await registerBitbucketPublishing(app, integrations);
 
@@ -134,11 +145,33 @@ export async function createApp(
       api.addHook('onRequest', async (req) => {
         const token = req.headers.authorization?.match(/^Bearer (\S{16,256})$/)?.[1];
 
-        if (!token) {
+        if (req.headers.authorization) {
+          if (!token) {
+            throw new DomainError('UNAUTHENTICATED', 'Invalid API token.', 401);
+          }
+
+          req.principal = await service.authenticate(token);
+
+          if (identity && !req.principal.user_id) {
+            throw new DomainError(
+              'UNAUTHENTICATED',
+              'Use a managed API token for this workspace.',
+              401,
+            );
+          }
+
+          if (
+            req.headers['x-workspace-id'] &&
+            req.headers['x-workspace-id'] !== req.principal.organisation_id
+          ) {
+            throw new DomainError('FORBIDDEN', 'This token belongs to another workspace.', 403);
+          }
+        } else if (identity) {
+          req.principal = await identity.principal(req);
+        } else {
           throw new DomainError('UNAUTHENTICATED', 'Enter a valid API token to connect.', 401);
         }
 
-        req.principal = await service.authenticate(token);
         requirePermission(req.principal, 'read');
       });
 
@@ -270,6 +303,11 @@ export async function createApp(
         );
       });
 
+      api.addHook('onSend', async (_req, reply) => {
+        reply.header('Cache-Control', 'no-store');
+      });
+
+      await registerIdentityRoutes(api, identity);
       await registerResourceReads(api, service.db);
       await registerIntegrationRoutes(api, integrations);
       await registerExecutionRoutes(api, new ExecutionService(service));

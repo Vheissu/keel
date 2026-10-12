@@ -1,3 +1,4 @@
+import { WorkspaceAccess } from './workspace-access';
 import { NotificationsPanel } from './notifications-panel';
 import { PageControls } from './page-controls';
 import { ResourcePicker } from './resource-picker';
@@ -14,6 +15,7 @@ import { SVGAnalyzer } from '@aurelia/runtime-html';
 import './styles.css';
 
 Aurelia.register(
+  WorkspaceAccess,
   NotificationsPanel,
   PageControls,
   ResourcePicker,

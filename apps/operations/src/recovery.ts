@@ -139,6 +139,32 @@ export async function quarantine(db: Database) {
   return transaction(db, async (tx) => {
     const organisations = (await tx.query('SELECT id FROM organisations')).rows;
 
+    await tx.query('UPDATE browser_sessions SET revoked_at=now() WHERE revoked_at IS NULL');
+
+    await tx.query(
+      `
+        UPDATE api_tokens
+        SET
+          revoked_at = now()
+        WHERE
+          user_id IS NOT NULL
+          AND revoked_at IS NULL
+      `,
+    );
+
+    await tx.query(
+      `
+        UPDATE workspace_invitations
+        SET
+          revoked_at = now()
+        WHERE
+          accepted_at IS NULL
+          AND revoked_at IS NULL
+      `,
+    );
+
+    await tx.query('UPDATE password_resets SET used_at=now() WHERE used_at IS NULL');
+
     // Restored deliveries may already have reached receivers after the backup was taken.
     await tx.query(
       'UPDATE notification_endpoints SET enabled=false, revision=revision+1 WHERE enabled',

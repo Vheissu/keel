@@ -12,6 +12,17 @@
         <small>Continuous delivery</small>
       </span>
     </div>
+    <label if.bind="account" class="workspace-switch">
+      Workspace
+      <select
+        aria-label="Workspace"
+        value.bind="selectedWorkspace"
+        change.trigger="switchWorkspace()"
+        disabled.bind="loading || busy"
+      >
+        <option repeat.for="member of memberships" value.bind="member.id">${member.name}</option>
+      </select>
+    </label>
     <nav aria-label="Main navigation">
       <a
         repeat.for="item of pages"
@@ -36,7 +47,7 @@
         <br />
         Deploy everywhere.
       </p>
-      <button if.bind="data" class="disconnect" click.trigger="disconnect()">
+      <button if.bind="data" class="disconnect" click.trigger="signOut()">
         Disconnect ${data.principal.name}
       </button>
     </div>
@@ -97,11 +108,89 @@
       </div>
     </header>
     <div class="alert error" role="alert" if.bind="error && !form">${error}</div>
-    <div class="alert success" role="status" if.bind="notice && data">
+    <div class="alert success" role="status" if.bind="notice">
       ${notice}
       <button aria-label="Dismiss notification" click.trigger="notice = ''">×</button>
     </div>
-    <section class="connect-panel" if.bind="!data">
+    <section class="connect-panel" if.bind="hosted && !data">
+      <h2>
+        ${resetToken ? 'Reset your password' : invitation ? 'Join ' + invitation.workspace : 'Sign
+        in to Keel'}
+      </h2>
+      <p if.bind="invitation">Invitation for ${invitation.email} · ${invitation.role}</p>
+      <form if.bind="resetToken" submit.trigger:prevent="resetPassword()">
+        <label for="reset-password">New password</label>
+        <input
+          id="reset-password"
+          type="password"
+          minlength="15"
+          maxlength="128"
+          required
+          autocomplete="new-password"
+          value.bind="password"
+        />
+        <button class="button primary" type="submit" disabled.bind="busy">Reset password</button>
+      </form>
+      <form
+        if.bind="invitation && !invitation.existing_account && !resetToken"
+        submit.trigger:prevent="acceptInvitation()"
+      >
+        <label for="account-name">Your name</label>
+        <input
+          id="account-name"
+          required
+          maxlength="100"
+          autocomplete="name"
+          value.bind="accountName"
+        />
+        <label for="invite-password">Password (at least 15 characters)</label>
+        <input
+          id="invite-password"
+          type="password"
+          minlength="15"
+          maxlength="128"
+          required
+          autocomplete="new-password"
+          value.bind="password"
+        />
+        <button class="button primary" type="submit" disabled.bind="busy">
+          Create account and join
+        </button>
+      </form>
+      <form
+        if.bind="!account && !resetToken && (!invitation || invitation.existing_account)"
+        submit.trigger:prevent="signIn()"
+      >
+        <label for="email">Email</label>
+        <input id="email" type="email" required autocomplete="username" value.bind="email" />
+        <label for="password">Password</label>
+        <input
+          id="password"
+          type="password"
+          required
+          maxlength="128"
+          autocomplete="current-password"
+          value.bind="password"
+        />
+        <button class="button primary" type="submit" disabled.bind="busy">Sign in</button>
+        <p class="help">
+          Accounts are invitation-only. For password recovery, contact your server operator.
+        </p>
+      </form>
+      <button
+        if.bind="account && invitation && invitation.existing_account"
+        class="button primary"
+        click.trigger="acceptInvitation()"
+        disabled.bind="busy"
+      >
+        Accept invitation as ${account.email}
+      </button>
+      <p if.bind="account && !memberships.length && !invitation">
+        You have no active workspace memberships. Ask a workspace owner for an invitation.
+      </p>
+      <button if.bind="account" class="button secondary" click.trigger="signOut()">Sign out</button>
+    </section>
+    <section class="connect-panel" if.bind="!data && !resetToken && !inviteToken">
       <boat-mark animated.bind="loading"></boat-mark>
       <h2>Connect to your workspace</h2>
       <p>Use your Keel API token to manage artifacts and releases.</p>
@@ -120,7 +209,10 @@
           ${loading ? 'Connecting…' : 'Connect workspace'}
         </button>
       </form>
-      <p class="help">
+      <p if.bind="hosted" class="help">
+        Use a managed token created from Workspace access. Tokens stay in memory for this session.
+      </p>
+      <p if.bind="!hosted" class="help">
         For local development, run
         <code>npm run setup</code>
         and use
@@ -135,6 +227,12 @@
       <span>Loading workspace…</span>
     </div>
     <template if.bind="data">
+      <workspace-access
+        if.bind="page === 'Workspace access'"
+        api.bind="api"
+        principal.bind="data.principal"
+        signed-out.bind="() => disconnect()"
+      ></workspace-access>
       <template if.bind="page === 'Overview'">
         <section class="metrics" aria-label="Workspace summary">
           <div>
