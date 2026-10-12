@@ -1,17 +1,15 @@
-import { resolve } from 'node:path';
 import { database } from '../packages/database/src/index.js';
-import { LocalArtifactStore } from '../apps/api/src/artifact-store.js';
-import { artifactStore } from '../apps/api/src/storage-config.js';
+import { artifactStore, localArtifactStore } from '../apps/api/src/storage-config.js';
 
 if (!process.env.DATABASE_URL || process.env.ARTIFACT_STORE !== 's3') {
   throw new Error('Set DATABASE_URL, ARTIFACT_STORE=s3, and the destination S3 configuration.');
 }
 
-const root = process.cwd();
 const db = database(process.env.DATABASE_URL);
-const local = new LocalArtifactStore(resolve(root, process.env.ARTIFACT_PATH || '.data/artifacts'));
-const destination = artifactStore(root);
+const local = localArtifactStore();
+const destination = artifactStore();
 let copied = 0;
+let current: { organisation_id: string; digest: string } | undefined;
 
 try {
   const artifacts = await db.query<{ organisation_id: string; digest: string }>(
@@ -36,6 +34,7 @@ try {
   );
 
   for (const artifact of artifacts.rows) {
+    current = artifact;
     const bytes = await local.get(artifact.organisation_id, artifact.digest);
 
     await destination.put(artifact.organisation_id, artifact.digest, bytes);
@@ -45,9 +44,11 @@ try {
   console.log(
     `Verified ${copied} retained blobs in S3. Local files and database records are unchanged.`,
   );
-} catch {
+} catch (error) {
+  const blob = current ? ` at ${current.organisation_id}/${current.digest}` : '';
+
   console.error(
-    `Copy stopped after ${copied} verified blobs. Check storage configuration and source integrity before retrying.`,
+    `Copy stopped after ${copied} verified blobs${blob}: ${(error as Error).message} Check storage configuration and source integrity before retrying.`,
   );
 
   process.exitCode = 1;

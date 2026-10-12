@@ -1,13 +1,24 @@
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { S3Client } from '@aws-sdk/client-s3';
 import { LocalArtifactStore, type ArtifactStore } from './artifact-store.js';
 import { S3ArtifactStore } from './s3-artifact-store.js';
 
-export function artifactStore(root: string): ArtifactStore {
+// Sources (apps/*/src) and bundles (apps/*/dist) sit at the same depth, so every process
+// resolves relative paths against the same checkout regardless of its working directory.
+export const repositoryRoot = fileURLToPath(new URL('../../../', import.meta.url));
+
+export function localArtifactStore() {
+  return new LocalArtifactStore(
+    resolve(repositoryRoot, process.env.ARTIFACT_PATH || '.data/artifacts'),
+  );
+}
+
+export function artifactStore(): ArtifactStore {
   const driver = process.env.ARTIFACT_STORE || 'local';
 
   if (driver === 'local') {
-    return new LocalArtifactStore(resolve(root, process.env.ARTIFACT_PATH || '.data/artifacts'));
+    return localArtifactStore();
   }
 
   if (driver !== 's3' || !process.env.S3_BUCKET) {

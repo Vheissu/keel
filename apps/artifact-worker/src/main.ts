@@ -10,9 +10,8 @@ if (!process.env.DATABASE_URL || !process.env.KEEL_CREDENTIAL_KEY) {
   throw new Error('DATABASE_URL and KEEL_CREDENTIAL_KEY are required. Run npm run setup first.');
 }
 
-const root = process.env.INIT_CWD || process.cwd();
 const db = database(process.env.DATABASE_URL);
-const control = new ControlPlane(db, artifactStore(root));
+const control = new ControlPlane(db, artifactStore());
 
 const integrations = new IntegrationService(
   control,

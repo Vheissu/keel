@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import fastifyStatic from '@fastify/static';
 import { database } from '../../../packages/database/src/index.js';
-import { artifactStore } from './storage-config.js';
+import { artifactStore, repositoryRoot } from './storage-config.js';
 import { CredentialVault } from './credential-vault.js';
 import { IntegrationService } from './integration-service.js';
 import { ControlPlane } from './control-plane.js';
@@ -13,9 +13,7 @@ if (!process.env.DATABASE_URL) {
 
 const db = database(process.env.DATABASE_URL);
 
-// Resolve from the repository root in both workspace dev and compiled startup.
-const root = process.env.INIT_CWD || process.cwd();
-const control = new ControlPlane(db, artifactStore(root));
+const control = new ControlPlane(db, artifactStore());
 
 const vault = process.env.KEEL_CREDENTIAL_KEY
   ? new CredentialVault(process.env.KEEL_CREDENTIAL_KEY)
@@ -25,7 +23,10 @@ const integrations = new IntegrationService(control, vault);
 const app = await createApp(control, true, integrations);
 
 if (process.env.NODE_ENV === 'production') {
-  await app.register(fastifyStatic, { root: resolve(root, 'apps/web/dist'), wildcard: false });
+  await app.register(fastifyStatic, {
+    root: resolve(repositoryRoot, 'apps/web/dist'),
+    wildcard: false,
+  });
 
   app.setNotFoundHandler((req, reply) => {
     if (req.url.startsWith('/api/') || req.method !== 'GET') {

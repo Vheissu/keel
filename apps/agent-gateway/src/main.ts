@@ -12,7 +12,7 @@ for (const name of ['DATABASE_URL', 'AGENT_TLS_CERT', 'AGENT_TLS_KEY', 'AGENT_TL
 }
 
 const db = database(process.env.DATABASE_URL!);
-const execution = new ExecutionService(new ControlPlane(db, artifactStore(process.cwd())));
+const execution = new ExecutionService(new ControlPlane(db, artifactStore()));
 
 const app = await createGateway(execution, {
   cert: await readFile(process.env.AGENT_TLS_CERT!),
