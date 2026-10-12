@@ -28,14 +28,9 @@ const worker = await Worker.create({
   activities: { tick: execution.tick.bind(execution) },
 });
 
+// Temporal's Runtime already shuts the worker down on SIGINT, SIGTERM, SIGQUIT and SIGUSR2,
+// guarding against repeated signals. Outbox delivery stops once the worker has stopped.
 let stopping = false;
-
-for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.once(signal, () => {
-    stopping = true;
-    worker.shutdown();
-  });
-}
 
 const dispatch = async () => {
   while (!stopping) {
@@ -49,10 +44,13 @@ const dispatch = async () => {
   }
 };
 
+const dispatching = dispatch();
+
 try {
-  await Promise.all([worker.run(), dispatch()]);
+  await worker.run();
 } finally {
   stopping = true;
+  await dispatching;
   await native.close();
   await connection.close();
   await db.end();
