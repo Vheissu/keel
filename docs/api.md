@@ -106,3 +106,13 @@ The separate HTTPS gateway provides `POST /agent/v1/poll`, `/heartbeat`, `/artif
 `POST /api/v1/agents/:id/certificate` takes `certificate_fingerprint` and `same_host_agent_stopped: true`, with write permission and an idempotency key. The agent must be drained or revoked and have no running/reconciling lease. Replacement retains the agent ID and target locks, permanently retires the old fingerprint and leaves the agent draining. Resume is blocked until outstanding reconciliation completes.
 
 The private mTLS gateway accepts `POST /agent/v1/progress` with the current lease fields and a fixed `phase`: `downloading`, `loading_image`, `replacing_container`, `verifying_http` or `cleaning_up`. Recovery/cancellation permits only `cleaning_up`. No free-text output is accepted. `/api/v1/execution` exposes `phase` and `phase_updated_at` per attempt. See [same-host recovery](deployment-agents.md#replace-or-recover-an-agent-certificate).
+
+## Promotion policy and rollback plans
+
+- `GET /api/v1/releases/:id/promotion?environment_id=<uuid>` reports promotion eligibility, prerequisite evidence, approval requirement and digest. It does not reserve a target.
+- `POST /api/v1/environments/:id/promotion-policy` requires **approve** permission and `{ "promotion_from_environment_id": "<uuid-or-null>", "expected_revision": 1 }`. Use JSON `null`, not the string `"null"`, to remove a prerequisite. The referenced environment must be in the same workspace; cycles are rejected.
+- `GET /api/v1/deployments/:id/rollback-candidates` lists at most 50 distinct releases previously verified on the source deployment's target and environment. The source must be the target's latest finished attempt with no outstanding deployment lock.
+- `POST /api/v1/rollback-plans` requires **write** permission and `{ "source_deployment_id": "<uuid>", "candidate_deployment_id": "<uuid>" }`. It verifies the retained bytes and current execution/promotion contract, then returns a 15-minute immutable plan and review details.
+- `POST /api/v1/rollback-plans/:id/request` requires **write** permission and `{ "acknowledge_data_not_restored": true }`. It rechecks the plan and creates one ordinary deployment with `kind: "rollback"`; approval is not bypassed.
+
+All writes require an idempotency key. Deployments expose `kind`, `policy_snapshot`, `promotion_source_deployment_id` and `rollback_plan_id`. These admission fields cannot be edited. Policy changes apply to new requests. Normal `/deployments` requests cannot supply rollback or promotion evidence fields. See [policy and rollback semantics](promotion-and-rollback.md).

@@ -14,6 +14,11 @@ const { values, positionals } = parseArgs({
     name: { type: 'string' },
     version: { type: 'string' },
     artifact: { type: 'string' },
+    release: { type: 'string' },
+    environment: { type: 'string' },
+    from: { type: 'string' },
+    candidate: { type: 'string' },
+    'acknowledge-data-not-restored': { type: 'boolean' },
     connection: { type: 'string' },
     run: { type: 'string' },
     attempt: { type: 'string' },
@@ -38,6 +43,11 @@ const help = `Keel · publish existing build outputs and create immutable releas
   npm run keel -- integration enable|disable|pipelines <connection-uuid>
   npm run keel -- artifact import --connection <uuid> --run <run-id> --attempt 1
   npm run keel -- import retry <import-uuid>
+  npm run keel -- deployment promotion --release <uuid> --environment <uuid>
+  npm run keel -- deployment request --release <uuid> --environment <uuid>
+  npm run keel -- deployment rollback-candidates <deployment-uuid>
+  npm run keel -- rollback plan --from <deployment-uuid> --candidate <prior-deployment-uuid>
+  npm run keel -- rollback request <plan-uuid> --acknowledge-data-not-restored
   npm run keel -- validate <process.yaml>
   npm run keel -- status --json
 
@@ -45,7 +55,7 @@ Set KEEL_URL (default http://127.0.0.1:4040) and KEEL_TOKEN.
 Connection creation and rotation use KEEL_GITHUB_TOKEN and KEEL_GITHUB_WEBHOOK_SECRET.
 Bitbucket uses KEEL_BITBUCKET_TOKEN and KEEL_PUBLISH_SECRET; publishing needs only KEEL_PUBLISH_SECRET.
 For retryable CI steps, pass a stable --idempotency-key (8–128 characters).
-Results are JSON. Deployment requests and approvals are available in the UI and API.
+Results are JSON. Review a rollback plan before requesting it. Approvals remain available in the UI and API.
 `;
 
 function required(key: keyof typeof values): string {
@@ -127,6 +137,54 @@ try {
     );
   } else if (command === 'status') {
     console.log(JSON.stringify(await request('/snapshot'), null, 2));
+  } else if (command === 'deployment' && ['promotion', 'request'].includes(subcommand)) {
+    const input = { release_id: required('release'), environment_id: required('environment') };
+
+    const result =
+      subcommand === 'request'
+        ? await request('/deployments', input)
+        : await request(
+            `/releases/${encodeURIComponent(input.release_id)}/promotion?${new URLSearchParams({ environment_id: input.environment_id })}`,
+          );
+
+    console.log(JSON.stringify(result, null, 2));
+  } else if (command === 'deployment' && subcommand === 'rollback-candidates') {
+    if (!file) {
+      throw new Error('Provide a deployment UUID.');
+    }
+
+    console.log(
+      JSON.stringify(
+        await request(`/deployments/${encodeURIComponent(file)}/rollback-candidates`),
+        null,
+        2,
+      ),
+    );
+  } else if (command === 'rollback' && subcommand === 'plan') {
+    console.log(
+      JSON.stringify(
+        await request('/rollback-plans', {
+          source_deployment_id: required('from'),
+          candidate_deployment_id: required('candidate'),
+        }),
+        null,
+        2,
+      ),
+    );
+  } else if (command === 'rollback' && subcommand === 'request') {
+    if (!file || !values['acknowledge-data-not-restored']) {
+      throw new Error('Provide the reviewed plan UUID and --acknowledge-data-not-restored.');
+    }
+
+    console.log(
+      JSON.stringify(
+        await request(`/rollback-plans/${encodeURIComponent(file)}/request`, {
+          acknowledge_data_not_restored: true,
+        }),
+        null,
+        2,
+      ),
+    );
   } else if (command === 'integration' && subcommand === 'list') {
     console.log(JSON.stringify(await request('/integrations'), null, 2));
   } else if (command === 'integration' && (subcommand === 'connect' || subcommand === 'rotate')) {

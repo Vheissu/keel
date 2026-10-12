@@ -2,11 +2,11 @@
 
 Build anywhere. Deploy everywhere.
 
-Keel is a continuous delivery application for artifacts built by your existing CI. This repository contains the control-plane foundation, GitHub Actions ingestion, Bitbucket Pipelines publishing and initial Docker execution stages from [PLAN.md](PLAN.md).
+Keel is a continuous delivery application for artifacts built by your existing CI. This repository contains the control-plane foundation, GitHub Actions ingestion, Bitbucket Pipelines publishing Docker execution, promotion policy and rollback planning stages from [PLAN.md](PLAN.md).
 
 You can create projects, publish files with SHA-256 verification, create immutable releases, request deployments to staging or production, approve them from a separate identity, and inspect the audit trail. The Aurelia interface uses navy, sea teal, off-white, and small animated boats for loading states. Motion follows the operating system’s reduced-motion preference.
 
-Retained Docker image archives can now deploy through Temporal and an outbound-only Go agent, with mutual TLS, fenced leases, cancellation cleanup and HTTP verification. Follow the [agent setup](docs/deployment-agents.md) to enable execution. SSH, rolling deployments, registry artifacts and automatic rollback are later stages. The API never launches customer commands.
+Retained Docker image archives can now deploy through Temporal and an outbound-only Go agent, with mutual TLS, fenced leases, cancellation cleanup and HTTP verification. Follow the [agent setup](docs/deployment-agents.md) to enable execution. Production requires a verified staging deployment of the same release by default. [Promotion and rollback planning](docs/promotion-and-rollback.md) provide policy checks and reviewed recovery to an earlier retained release. SSH, rolling deployments, registry artifacts and automatic rollback are later stages. The API never launches customer commands.
 
 ## Run locally
 
@@ -20,7 +20,7 @@ npm run dev
 
 Open **http://127.0.0.1:5173**. Copy `KEEL_OPERATOR_TOKEN` from the generated `.env` file into the connection form. Setup creates a local workspace, staging and production environments, and two identities. It does not add sample projects or deployments.
 
-Use `KEEL_APPROVER_TOKEN` from `.env` in another browser session to approve or reject a production request. The operator can publish and request deployments but cannot approve. The approver cannot publish or request deployments. Even an identity with both permissions cannot approve its own request.
+Use `KEEL_APPROVER_TOKEN` from `.env` in another browser session to approve or reject a production request. The operator can publish and request deployments but cannot approve. The approver can configure promotion prerequisites but cannot publish or request deployments. Even an identity with both permissions cannot approve its own request.
 
 Tokens are stored as SHA-256 hashes in PostgreSQL. The browser keeps its token in memory; reloading the page requires reconnecting. `npm run setup` preserves your data and can be rerun. Changing a bootstrap token in `.env` and rerunning setup revokes the previous token for that local identity.
 

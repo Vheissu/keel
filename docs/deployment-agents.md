@@ -70,7 +70,7 @@ Copy `examples/docker-process.yaml` and replace `dockerImageId` with the full `s
 
 The application must run as UID/GID 65532, listen on the configured unprivileged port, and work with a read-only root filesystem. Keel fixes memory at 256 MiB, CPU at one core and the process limit at 64. It drops Linux capabilities, enables `no-new-privileges`, supplies no secrets or host mounts, and does not override the image's entrypoint or command. Docker-declared image volumes may still create anonymous volumes; cleanup removes them. There are no migration hooks or shell steps.
 
-The agent verifies archive bytes, checks that its single image configuration matches the release, loads the image, replaces the owned target container and checks HTTP status plus container identity. Redirects are not followed. Recreate causes downtime; a failed deployment can leave the target empty. The same retained release can be redeployed through the normal request and approval path.
+The agent verifies archive bytes, checks that its single image configuration matches the release, loads the image, replaces the owned target container and checks HTTP status plus container identity. Redirects are not followed. Recreate causes downtime; a failed deployment can leave the target empty. The same retained release can be redeployed through the normal request and approval path. [Promotion prerequisites and reviewed rollback plans](promotion-and-rollback.md) also apply to agent deployments.
 
 ## Cancellation and recovery
 

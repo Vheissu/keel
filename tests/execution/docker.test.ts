@@ -12,6 +12,7 @@ import { Client, Connection } from '@temporalio/client';
 import { NativeConnection, Worker } from '@temporalio/worker';
 import { migrate } from '../../packages/database/src/migrate.js';
 import { ControlPlane } from '../../apps/api/src/control-plane.js';
+import { RollbackService } from '../../apps/api/src/rollback-service.js';
 import { ExecutionService } from '../../apps/api/src/execution-service.js';
 import { LocalArtifactStore, sha256 } from '../../apps/api/src/artifact-store.js';
 import { createGateway } from '../../apps/agent-gateway/src/gateway.js';
@@ -42,6 +43,7 @@ let worker: Worker | undefined;
 let workerRun: Promise<void> | undefined;
 let agent: ChildProcess | undefined;
 let targetID: string | undefined;
+let productionTargetID: string | undefined;
 let imageID: string | undefined;
 let workflowID: string | undefined;
 
@@ -156,13 +158,13 @@ afterAll(async () => {
   await connection?.close();
   await gateway?.close();
 
-  if (targetID) {
+  for (const cleanupTarget of [targetID, productionTargetID].filter(Boolean)) {
     await run('docker', [
       'container',
       'rm',
       '--force',
       '--volumes',
-      `keel-target-${targetID}`,
+      `keel-target-${cleanupTarget}`,
     ]).catch(() => {});
   }
 
@@ -286,10 +288,9 @@ it('deploys a retained GitHub ZIP after provider expiry and recovers a crashed a
     dockerArchivePath: 'application.tar',
   });
 
-  Object.assign(processDefinition.spec.environments.staging, {
-    strategy: 'recreate',
-    verify: { http: { path: '/' } },
-  });
+  for (const environment of Object.values(processDefinition.spec.environments)) {
+    Object.assign(environment, { strategy: 'recreate', verify: { http: { path: '/' } } });
+  }
 
   const release = await mutate<{ id: string }>((tx) =>
     control.release(tx, p, {
@@ -540,5 +541,98 @@ it('deploys a retained GitHub ZIP after provider expiry and recovers a crashed a
 
   expect(progress.phase).toBe('cleaning_up');
   await mutate((tx) => execution.agentState(tx, p, registered.id, 'active'));
+  const rollback = new RollbackService(control);
+
+  const reviewed = await mutate<{ id: string }>((tx) =>
+    rollback.create(tx, p, {
+      source_deployment_id: interrupted.id,
+      candidate_deployment_id: again.id,
+    }),
+  );
+
+  const rollbackDeployment = await mutate<{ id: string; release_id: string; kind: string }>((tx) =>
+    rollback.request(tx, p, reviewed.id),
+  );
+
+  expect(rollbackDeployment).toMatchObject({ release_id: release.id, kind: 'rollback' });
+  workflowID = `deployment-${rollbackDeployment.id}`;
+  await dispatchOutbox(db, client, queue);
+  await until(() => completed(rollbackDeployment.id));
+  await client.workflow.getHandle(workflowID).result();
+  expect(await (await fetch(`http://127.0.0.1:${hostPort}`)).text()).toBe(content);
+
+  // Promote the exact retained release to a second target, preserving the approval gate.
+  const approver = await control.authenticate(f.approver.token);
+
+  await control.mutate(approver, randomUUID(), randomUUID(), (tx) =>
+    control.delivery.update(tx, approver, f.environments.production, {
+      expected_revision: 1,
+      promotion_from_environment_id: f.environments.staging,
+    }),
+  );
+
+  const productionTarget = await mutate<{ id: string }>((tx) =>
+    execution.registerTarget(tx, p, {
+      name: 'Production target',
+      project_id: project.id,
+      environment_id: f.environments.production,
+      agent_id: registered.id,
+      labels: { tier: 'production' },
+    }),
+  );
+
+  productionTargetID = productionTarget.id;
+  const productionPort = await port();
+  const stopped = new Promise<void>((resolve) => agent!.once('exit', () => resolve()));
+
+  agent!.kill('SIGTERM');
+  await stopped;
+
+  recoveredConfig.targets[productionTarget.id] = {
+    host_port: productionPort,
+    container_port: 8080,
+  };
+
+  await writeFile(config, JSON.stringify(recoveredConfig));
+  startAgent();
+
+  const promoted = await mutate<{
+    id: string;
+    status: string;
+    promotion_source_deployment_id: string;
+  }>((tx) =>
+    control.deploy(tx, p, {
+      release_id: release.id,
+      environment_id: f.environments.production,
+    }),
+  );
+
+  expect(promoted.status).toBe('awaiting_approval');
+  expect(promoted.promotion_source_deployment_id).toBe(rollbackDeployment.id);
+  await execution.tick(f.org, promoted.id);
+
+  expect(
+    (await db.query('SELECT id FROM deployment_attempts WHERE deployment_id=$1', [promoted.id]))
+      .rowCount,
+  ).toBe(0);
+
+  await control.mutate(approver, randomUUID(), randomUUID(), (tx) =>
+    control.transition(tx, approver, promoted.id, 'approve'),
+  );
+
+  workflowID = `deployment-${promoted.id}`;
+  await dispatchOutbox(db, client, queue);
+  await until(() => completed(promoted.id));
+  await client.workflow.getHandle(workflowID).result();
+  expect(await (await fetch(`http://127.0.0.1:${productionPort}`)).text()).toBe(content);
+
+  expect(
+    (
+      await db.query('SELECT current_release_id FROM deployment_targets WHERE id=$1', [
+        productionTarget.id,
+      ])
+    ).rows[0].current_release_id,
+  ).toBe(release.id);
+
   expect(agentOutput).not.toContain('token');
 }, 150000);

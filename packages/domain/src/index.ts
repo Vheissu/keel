@@ -22,6 +22,8 @@ export interface Environment {
   name: string;
   slug: string;
   requires_approval: boolean;
+  promotion_from_environment_id: string | null;
+  policy_revision: number;
   created_at: string;
 }
 
@@ -72,6 +74,14 @@ export interface Deployment {
   release_id: string;
   environment_id: string;
   status: DeploymentStatus;
+  kind: 'deploy' | 'rollback';
+  promotion_source_deployment_id: string | null;
+  policy_snapshot: {
+    revision?: number;
+    promotion_from_environment_id?: string | null;
+    requires_approval?: boolean;
+  };
+  rollback_plan_id: string | null;
   result_code: string | null;
   requested_by: string;
   approved_by: string | null;

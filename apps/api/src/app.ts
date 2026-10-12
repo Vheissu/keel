@@ -17,6 +17,7 @@ import {
 } from './control-plane.js';
 import { ExecutionService } from './execution-service.js';
 import { registerExecutionRoutes } from './execution-routes.js';
+import { registerDeliveryRoutes } from './delivery-routes.js';
 import { sha256 } from './artifact-store.js';
 import { IntegrationService } from './integration-service.js';
 import { registerIntegrationRoutes } from './integration-routes.js';
@@ -213,6 +214,7 @@ export async function createApp(
 
       await registerIntegrationRoutes(api, integrations);
       await registerExecutionRoutes(api, new ExecutionService(service));
+      await registerDeliveryRoutes(api, service);
 
       api.get('/providers', async () => ({ providers }));
 

@@ -6,9 +6,10 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import pg from 'pg';
 import type { FastifyInstance } from 'fastify';
-import { fixture, testDatabaseUrl } from '../fixtures.js';
+import { fixture, deploymentProcess, testDatabaseUrl } from '../fixtures.js';
 import { migrate } from '../../packages/database/src/migrate.js';
 import { createApp } from '../../apps/api/src/app.js';
+import { ExecutionService } from '../../apps/api/src/execution-service.js';
 import { ControlPlane } from '../../apps/api/src/control-plane.js';
 import { LocalArtifactStore } from '../../apps/api/src/artifact-store.js';
 import { CredentialVault } from '../../apps/api/src/credential-vault.js';
@@ -28,12 +29,13 @@ let errors: string[] = [];
 let github = githubFixture();
 let bitbucket = bitbucketFixture();
 let importWorker: ArtifactImportWorker;
+let control: ControlPlane;
 
 test.beforeAll(async () => {
   await admin.query(`CREATE SCHEMA ${schema}`);
   await migrate(db);
   root = await mkdtemp(join(tmpdir(), 'keel-e2e-'));
-  const control = new ControlPlane(db, new LocalArtifactStore(root));
+  control = new ControlPlane(db, new LocalArtifactStore(root));
 
   const integrations = new IntegrationService(
     control,
@@ -450,4 +452,194 @@ test('registers and drains private agents, maps Docker targets and remains acces
 
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await page.screenshot({ path: 'output/playwright/targets-mobile.png', fullPage: true });
+});
+
+test('enforces promotion policy and reviews a retained-release rollback with a separate approver', async ({
+  page,
+  browser,
+}) => {
+  const post = async (path: string, body: unknown, token = f.operator.token) => {
+    const result = await app.inject({
+      method: 'POST',
+      url: `/api/v1${path}`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        'idempotency-key': randomUUID(),
+        'content-type': Buffer.isBuffer(body) ? 'application/octet-stream' : 'application/json',
+      },
+      payload: body as never,
+    });
+
+    expect(result.statusCode, result.body).toBe(200);
+
+    return result.json();
+  };
+
+  const project = await post('/projects', { name: 'Rollback service', slug: 'rollback-service' });
+  const releases: { id: string }[] = [];
+  const definition = deploymentProcess();
+
+  Object.assign(definition.spec.artifact, { dockerImageId: `sha256:${'a'.repeat(64)}` });
+
+  for (const environment of Object.values(definition.spec.environments)) {
+    Object.assign(environment, { strategy: 'recreate', verify: { http: { path: '/' } } });
+  }
+
+  for (const version of ['1.0.0', '2.0.0', '3.0.0']) {
+    const bytes = Buffer.from(`retained Docker image ${version}`);
+
+    const artifact = await post(
+      `/artifacts?${new URLSearchParams({ project_id: project.id, name: 'application', version, digest: sha256(bytes) })}`,
+      bytes,
+    );
+
+    releases.push(
+      await post('/releases', {
+        project_id: project.id,
+        artifact_id: artifact.id,
+        version,
+        process: definition,
+      }),
+    );
+  }
+
+  const fingerprint = randomBytes(32).toString('hex');
+
+  const registered = await post('/agents', {
+    name: 'Private delivery host',
+    certificate_fingerprint: fingerprint,
+  });
+
+  for (const [slug, environment] of Object.entries(f.environments)) {
+    await post('/targets', {
+      name: `${slug} web`,
+      project_id: project.id,
+      environment_id: environment,
+      agent_id: registered.id,
+      labels: { tier: slug },
+    });
+  }
+
+  const context = await browser.newContext();
+  const approver = await context.newPage();
+
+  await connect(approver, f.approver.token);
+  await approver.getByRole('link', { name: 'Environments', exact: true }).click();
+  await approver.getByRole('button', { name: 'Edit Production promotion policy' }).click();
+  await approver.getByLabel('Required prior environment').selectOption({ label: 'Staging' });
+  await approver.getByRole('button', { name: 'Save promotion policy' }).click();
+
+  await expect(
+    approver.getByRole('status').filter({ hasText: 'Promotion policy saved' }),
+  ).toBeVisible();
+
+  await expect(approver.getByText('Loading workspace…', { exact: true })).not.toBeVisible();
+
+  await expect(
+    approver.getByRole('button', { name: 'Edit Production promotion policy' }),
+  ).toBeFocused();
+
+  expect((await new AxeBuilder({ page: approver }).analyze()).violations).toEqual([]);
+  const execution = new ExecutionService(control);
+  const identity = await execution.authenticate(fingerprint);
+
+  for (const release of releases.slice(0, 2)) {
+    for (const environment of [f.environments.staging, f.environments.production]) {
+      const deployment = await post('/deployments', {
+        release_id: release.id,
+        environment_id: environment,
+      });
+
+      if (deployment.status === 'awaiting_approval') {
+        await post(`/deployments/${deployment.id}/approve`, {}, f.approver.token);
+      }
+
+      await execution.tick(f.org, deployment.id);
+      const job = (await execution.claim(identity))!;
+
+      await execution.complete(identity, {
+        attempt_id: job.attempt_id,
+        fence: job.fence,
+        token: job.token,
+        outcome: 'succeeded',
+        code: 'HTTP_VERIFIED',
+      });
+    }
+  }
+
+  await connect(page);
+  await page.getByRole('link', { name: 'Environments', exact: true }).click();
+  await expect(page.getByRole('button', { name: /Edit .* promotion policy/ })).toHaveCount(0);
+  await page.getByRole('link', { name: 'Releases', exact: true }).click();
+
+  await page
+    .getByRole('row')
+    .filter({ has: page.getByRole('button', { name: '3.0.0', exact: true }) })
+    .getByRole('button', { name: 'Deploy', exact: true })
+    .click();
+
+  await page
+    .getByLabel('Environment', { exact: true })
+    .selectOption({ label: 'Production · approval required' });
+
+  await expect(page.getByRole('dialog')).toContainText(
+    'This exact release needs a verified deployment',
+  );
+
+  await expect(
+    page.getByRole('dialog').getByRole('button', { name: 'Request deployment', exact: true }),
+  ).toBeDisabled();
+
+  await page.getByRole('button', { name: 'Close dialog' }).click();
+  await page.getByRole('link', { name: 'Deployments', exact: true }).click();
+
+  const current = page
+    .getByRole('row')
+    .filter({ hasText: '2.0.0' })
+    .filter({ hasText: 'Production' });
+
+  await current.getByRole('button', { name: 'Plan rollback', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Plan an application rollback' })).toBeFocused();
+  await page.getByRole('button', { name: 'Close rollback planner' }).click();
+  await expect(current.getByRole('button', { name: 'Plan rollback', exact: true })).toBeFocused();
+  await current.getByRole('button', { name: 'Plan rollback', exact: true }).click();
+  await page.getByRole('button', { name: 'Review rollback plan' }).click();
+  await expect(page.getByRole('heading', { name: 'Release 1.0.0 → Production' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Request rollback', exact: true })).toBeDisabled();
+  await expect(page.getByText('A different person must approve', { exact: true })).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.screenshot({ path: 'output/playwright/rollback-desktop.png', fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.screenshot({ path: 'output/playwright/rollback-mobile.png', fullPage: true });
+  await page.getByLabel('I checked compatibility').check();
+  await page.getByRole('button', { name: 'Request rollback', exact: true }).click();
+
+  await expect(
+    page.getByRole('heading', { name: 'Plan an application rollback' }),
+  ).not.toBeVisible();
+
+  await expect(page.getByRole('row').filter({ hasText: 'Application rollback' })).toContainText(
+    'Awaiting approval',
+  );
+
+  await approver.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await approver.getByRole('link', { name: 'Deployments', exact: true }).click();
+
+  await approver
+    .getByRole('row')
+    .filter({ hasText: 'Application rollback' })
+    .getByRole('button', { name: 'Approve', exact: true })
+    .click();
+
+  await expect(approver.getByRole('row').filter({ hasText: 'Application rollback' })).toContainText(
+    'Waiting for agent',
+  );
+
+  await context.close();
 });

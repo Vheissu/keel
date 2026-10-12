@@ -375,6 +375,13 @@
         </div>
       </template>
       <template if.bind="page === 'Deployments'">
+        <rollback-planner
+          if.bind="rollbackSource"
+          api.bind="api"
+          source.bind="rollbackSource"
+          close-planner.bind="() => closeRollback()"
+          requested.bind="() => rollbackRequested()"
+        ></rollback-planner>
         <div class="execution-note">
           <span class="brass-dot"></span>
           <p>
@@ -382,7 +389,7 @@
             target. A release is verified only after its container passes the HTTP health check.
           </p>
         </div>
-        <div class="table-wrap">
+        <div class="table-wrap" role="region" aria-label="Deployments" tabindex="0">
           <table>
             <thead>
               <tr>
@@ -398,8 +405,14 @@
                 <td>
                   <strong>${releaseVersion(deployment.release_id)}</strong>
                   <small>${projectName(deployment.project_id)}</small>
+                  <small if.bind="deployment.kind === 'rollback'">Application rollback</small>
                 </td>
-                <td>${environmentName(deployment.environment_id)}</td>
+                <td>
+                  ${environmentName(deployment.environment_id)}
+                  <small if.bind="deployment.promotion_source_deployment_id">
+                    Verified prerequisite recorded
+                  </small>
+                </td>
                 <td>
                   <span class="status ${deployment.status}">${statusLabel(deployment.status)}</span>
                   <small if.bind="deployment.result_code">
@@ -408,6 +421,14 @@
                 </td>
                 <td>${date(deployment.created_at)}</td>
                 <td class="row-actions">
+                  <button
+                    class="text-button"
+                    if.bind="canWrite && (deployment.status === 'succeeded' || deployment.status === 'failed' || deployment.status === 'cancelled')"
+                    disabled.bind="busy || !!rollbackSource"
+                    click.trigger="openRollback(deployment)"
+                  >
+                    Plan rollback
+                  </button>
                   <template
                     if.bind="canApprove && deployment.status === 'awaiting_approval' && deployment.requested_by !== data.principal.actor_id"
                   >
@@ -462,36 +483,13 @@
         releases.bind="data.releases"
         can-write.bind="canWrite"
       ></targets-panel>
-      <template if.bind="page === 'Environments'">
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Environment</th>
-                <th>Approval policy</th>
-                <th>Execution</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr repeat.for="environment of data.environments">
-                <td>
-                  <strong>${environment.name}</strong>
-                  <small>${environment.slug}</small>
-                </td>
-                <td>
-                  ${environment.requires_approval ? 'Required · separate approver' : 'No environment
-                  approval required'}
-                </td>
-                <td class="muted">Agent integration pending</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <p class="help">
-          A release process can add approval requirements. It cannot remove an environment’s
-          protection.
-        </p>
-      </template>
+      <environment-policies
+        if.bind="page === 'Environments'"
+        api.bind="api"
+        environments.bind="data.environments"
+        can-approve.bind="canApprove"
+        refresh-workspace.bind="() => refresh()"
+      ></environment-policies>
       <integrations-panel
         if.bind="page === 'Integrations'"
         api.bind="api"
@@ -562,7 +560,7 @@
     </button>
   </div>
   <pre class="manifest" if.bind="inspected">${manifestText}</pre>
-  <form if.bind="form" submit.trigger="submit()">
+  <form if.bind="form" submit.trigger:prevent="submit()">
     <div class="alert error" role="alert" if.bind="error">${error}</div>
     <fieldset disabled.bind="busy">
       <template if.bind="form === 'project'">
@@ -652,23 +650,43 @@
       </template>
       <template if.bind="form === 'deploy'">
         <label for="release">Release</label>
-        <select id="release" value.bind="releaseId" required>
+        <select id="release" value.bind="releaseId" change.trigger="loadPromotion()" required>
           <option value="">Choose a release</option>
           <option repeat.for="release of projectReleases" model.bind="release.id">
             ${release.version}
           </option>
         </select>
         <label for="environment">Environment</label>
-        <select id="environment" value.bind="environmentId" required>
+        <select
+          id="environment"
+          value.bind="environmentId"
+          change.trigger="loadPromotion()"
+          required
+        >
           <option repeat.for="environment of data.environments" model.bind="environment.id">
             ${environment.name}${environment.requires_approval ? ' · approval required' : ''}
           </option>
         </select>
         <div class="execution-note">
-          <p>
-            This creates a deployment request for a matching target and private agent. Production
-            requires a separate approver.
-          </p>
+          <p if.bind="checkingPromotion" role="status">Checking promotion policy…</p>
+          <p if.bind="promotionError" role="alert">${promotionError}</p>
+          <template if.bind="promotion">
+            <p if.bind="promotion.promotion_from_environment_id">
+              Prerequisite: verified deployment of this exact release in
+              ${environmentName(promotion.promotion_from_environment_id)}.
+            </p>
+            <p role="status">
+              ${promotion.eligible ? 'Promotion policy satisfied.' : promotion.reason}
+            </p>
+            <p>
+              ${promotion.requires_approval ? 'A different person must approve this request.' :
+              'This request can queue without a separate approval.'}
+            </p>
+            <p class="help">
+              Target availability and artifact bytes are checked again during admission and
+              execution.
+            </p>
+          </template>
         </div>
       </template>
     </fieldset>
@@ -680,7 +698,11 @@
       <button type="button" class="button secondary" click.trigger="close()" disabled.bind="busy">
         Cancel
       </button>
-      <button type="submit" class="button primary" disabled.bind="busy">
+      <button
+        type="submit"
+        class="button primary"
+        disabled.bind="busy || (form === 'deploy' && (!promotion || !promotion.eligible || checkingPromotion))"
+      >
         ${form === 'project' ? 'Create project' : form === 'artifact' ? 'Publish artifact' : form
         === 'release' ? 'Create release' : 'Request deployment'}
       </button>

@@ -592,6 +592,30 @@ export class ExecutionService {
 
       const target = targets.rows[0];
 
+      if (d.rollback_plan_id) {
+        const plan = (
+          await tx.query(
+            `
+              SELECT
+                target_id,
+                expected_fence
+              FROM
+                rollback_plans
+              WHERE
+                organisation_id = $1
+                AND id = $2
+            `,
+            [org, d.rollback_plan_id],
+          )
+        ).rows[0];
+
+        if (!plan || plan.target_id !== target.id || plan.expected_fence !== target.fence) {
+          await this.event(tx, d, 'failed', 'ROLLBACK_TARGET_CHANGED');
+
+          return true;
+        }
+      }
+
       await tx.query(
         `
           INSERT INTO

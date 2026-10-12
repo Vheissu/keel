@@ -80,12 +80,12 @@ try {
     ] as const) {
       await tx.query(
         `
-        INSERT INTO
-          actors (id, organisation_id, name)
-        VALUES
-          ($1, $2, $3)
-        ON CONFLICT DO NOTHING
-      `,
+          INSERT INTO
+            actors (id, organisation_id, name)
+          VALUES
+            ($1, $2, $3)
+          ON CONFLICT DO NOTHING
+        `,
         [id, org, label],
       );
 
@@ -133,10 +133,29 @@ try {
               organisation_id,
               name,
               slug,
-              requires_approval
+              requires_approval,
+              promotion_from_environment_id
             )
           VALUES
-            ($1, $2, $3, $4, $5)
+            (
+              $1,
+              $2,
+              $3,
+              $4,
+              $5,
+              CASE
+                WHEN $4 = 'production' THEN (
+                  SELECT
+                    id
+                  FROM
+                    environments
+                  WHERE
+                    organisation_id = $2
+                    AND slug = 'staging'
+                )
+                ELSE NULL
+              END
+            )
           ON CONFLICT (organisation_id, slug) DO NOTHING
         `,
         [randomUUID(), org, label, slug, approval],

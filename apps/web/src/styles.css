@@ -1237,3 +1237,31 @@ targets-panel > .section-title:first-child {
 targets-panel > p {
   margin: 0.5rem 0 1rem;
 }
+
+rollback-planner,
+environment-policies {
+  display: block;
+}
+.rollback-plan form {
+  display: grid;
+  gap: 1rem;
+}
+.rollback-plan .execution-note {
+  color: #6d5c39;
+}
+.plan-details {
+  margin: 0;
+  display: grid;
+  gap: 1rem;
+}
+.plan-details dt {
+  color: #58717e;
+  font-size: 12px;
+}
+.plan-details dd {
+  margin: 0.25rem 0 0;
+  overflow-wrap: anywhere;
+}
+.plan-details code {
+  white-space: normal;
+}

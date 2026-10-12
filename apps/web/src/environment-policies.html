@@ -1,0 +1,71 @@
+<p class="help">
+  Promotion requires a verified deployment of the exact release in the prerequisite environment. A
+  release process can add approval requirements; it cannot remove environment protection.
+</p>
+<p class="alert error" role="alert" if.bind="error">${error}</p>
+<p class="alert success" role="status" if.bind="notice">${notice}</p>
+<form class="target-form" if.bind="selected" submit.trigger:prevent="save()">
+  <h2>Promotion policy · ${selected.name}</h2>
+  <label for="promotion-prerequisite">Required prior environment</label>
+  <select
+    id="promotion-prerequisite"
+    ref="prerequisiteInput"
+    value.bind="prerequisite"
+    disabled.bind="busy"
+  >
+    <option value="">No prerequisite</option>
+    <option
+      repeat.for="environment of environments"
+      if.bind="environment.id !== selected.id"
+      model.bind="environment.id"
+    >
+      ${environment.name}
+    </option>
+  </select>
+  <p class="help">
+    This affects new requests across all projects. Existing requests keep the policy recorded when
+    they were created. Approval requirements remain in place.
+  </p>
+  <div class="header-actions">
+    <button type="submit" class="button primary" disabled.bind="busy">Save promotion policy</button>
+    <button type="button" class="button secondary" disabled.bind="busy" click.trigger="close()">
+      Cancel
+    </button>
+  </div>
+</form>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Environment policies">
+  <table>
+    <thead>
+      <tr>
+        <th>Environment</th>
+        <th>Approval</th>
+        <th>Promotion prerequisite</th>
+        <th if.bind="canApprove">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr repeat.for="environment of environments; key: id">
+        <td>
+          <strong>${environment.name}</strong>
+          <small>Policy revision ${environment.policy_revision}</small>
+        </td>
+        <td>
+          ${environment.requires_approval ? 'Required · separate approver' : 'No environment
+          approval required'}
+        </td>
+        <td>${name(environment.promotion_from_environment_id)}</td>
+        <td if.bind="canApprove">
+          <button
+            class="text-button"
+            disabled.bind="busy"
+            click.trigger="edit(environment)"
+            aria-label.bind="'Edit ' + environment.name + ' promotion policy'"
+          >
+            Edit policy
+          </button>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+<p class="help" if.bind="!canApprove">An approver can change promotion prerequisites.</p>

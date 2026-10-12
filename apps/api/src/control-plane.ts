@@ -12,6 +12,7 @@ import {
 } from '../../../packages/domain/src/index.js';
 import { parseProcess } from '../../../packages/deployment-schema/src/index.js';
 import { sha256, type ArtifactStore } from './artifact-store.js';
+import { DeliveryPolicy } from './delivery-policy.js';
 
 const uuid = z.string().uuid();
 const name = z.string().trim().min(1).max(100);
@@ -33,6 +34,8 @@ export const releaseInput = z
 export const deploymentInput = z.object({ release_id: uuid, environment_id: uuid }).strict();
 
 export class ControlPlane {
+  readonly delivery = new DeliveryPolicy(this);
+
   constructor(
     public db: Database,
     public store: ArtifactStore,
@@ -353,11 +356,20 @@ export class ControlPlane {
     await this.audit(tx, p, `deployment.${deployment.status}`, deployment.id, {
       release_id: deployment.release_id,
       environment_id: deployment.environment_id,
+      kind: deployment.kind,
+      promotion_source_deployment_id: deployment.promotion_source_deployment_id,
+      policy_snapshot: deployment.policy_snapshot,
+      rollback_plan_id: deployment.rollback_plan_id,
       ...context,
     });
   }
 
-  async deploy(tx: Transaction, p: Principal, input: z.infer<typeof deploymentInput>) {
+  async deploy(
+    tx: Transaction,
+    p: Principal,
+    input: z.infer<typeof deploymentInput>,
+    rollbackPlanId: string | null = null,
+  ) {
     const release = (
       await tx.query<Release>('SELECT * FROM releases WHERE organisation_id=$1 AND id=$2', [
         p.organisation_id,
@@ -366,10 +378,10 @@ export class ControlPlane {
     ).rows[0];
 
     const environment = (
-      await tx.query<Environment>('SELECT * FROM environments WHERE organisation_id=$1 AND id=$2', [
-        p.organisation_id,
-        input.environment_id,
-      ])
+      await tx.query<Environment>(
+        'SELECT * FROM environments WHERE organisation_id=$1 AND id=$2 FOR SHARE',
+        [p.organisation_id, input.environment_id],
+      )
     ).rows[0];
 
     if (!release || !environment) {
@@ -388,8 +400,15 @@ export class ControlPlane {
 
     await this.store.get(p.organisation_id, release.manifest.artifact.digest);
 
-    const status =
-      environment.requires_approval || config.requiresApproval ? 'awaiting_approval' : 'queued';
+    const evidence = await this.delivery.evidence(tx, p.organisation_id, release, environment);
+
+    const policy = {
+      revision: environment.policy_revision,
+      promotion_from_environment_id: environment.promotion_from_environment_id,
+      requires_approval: environment.requires_approval || !!config.requiresApproval,
+    };
+
+    const status = policy.requires_approval ? 'awaiting_approval' : 'queued';
 
     const result = await tx.query<Deployment>(
       `
@@ -401,10 +420,14 @@ export class ControlPlane {
             release_id,
             environment_id,
             status,
-            requested_by
+            requested_by,
+            kind,
+            promotion_source_deployment_id,
+            policy_snapshot,
+            rollback_plan_id
           )
         VALUES
-          ($1, $2, $3, $4, $5, $6, $7)
+          ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         RETURNING
           *
       `,
@@ -416,6 +439,10 @@ export class ControlPlane {
         environment.id,
         status,
         p.actor_id,
+        rollbackPlanId ? 'rollback' : 'deploy',
+        evidence,
+        policy,
+        rollbackPlanId,
       ],
     );
 

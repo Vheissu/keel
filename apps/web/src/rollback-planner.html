@@ -1,0 +1,70 @@
+<section class="target-form rollback-plan" aria-labelledby="rollback-heading">
+  <h2 id="rollback-heading" ref="heading" tabindex="-1">Plan an application rollback</h2>
+  <p class="help">
+    Choose a different release previously verified on this target. Planning checks retained bytes
+    and current policy without starting deployment.
+  </p>
+  <p class="alert error" role="alert" if.bind="error">${error}</p>
+  <p role="status" if.bind="busy">Checking rollback…</p>
+  <form if.bind="candidates.length" submit.trigger:prevent="review()">
+    <label for="rollback-candidate">Previously verified release</label>
+    <select
+      id="rollback-candidate"
+      value.bind="candidateId"
+      change.trigger="changeCandidate()"
+      disabled.bind="busy"
+    >
+      <option repeat.for="candidate of candidates" model.bind="candidate.deployment_id">
+        ${candidate.version} · verified ${date(candidate.verified_at)}
+      </option>
+    </select>
+    <button type="submit" class="button secondary" disabled.bind="busy">
+      Review rollback plan
+    </button>
+  </form>
+  <p if.bind="!busy && !error && !candidates.length">
+    No earlier release was verified on this target. A normal deployment request can still use a
+    retained release that meets the environment policy.
+  </p>
+  <template if.bind="plan">
+    <h3>Release ${plan.release_version} → ${plan.environment_name}</h3>
+    <dl class="plan-details">
+      <div>
+        <dt>Target</dt>
+        <dd>${plan.target_name} · ${plan.agent_name}</dd>
+      </div>
+      <div>
+        <dt>Retained SHA-256</dt>
+        <dd><code>${plan.digest}</code></dd>
+      </div>
+      <div>
+        <dt>Verification</dt>
+        <dd>Docker recreate · HTTP 200 at ${plan.health_path}</dd>
+      </div>
+      <div>
+        <dt>Approval</dt>
+        <dd>
+          ${plan.requires_approval ? 'A different person must approve' : 'Queues after your
+          request'}
+        </dd>
+      </div>
+      <div>
+        <dt>Request by</dt>
+        <dd>${date(plan.expires_at)}</dd>
+      </div>
+    </dl>
+    <p class="execution-note">${plan.warning}</p>
+    <form submit.trigger:prevent="request()">
+      <label class="check-label">
+        <input type="checkbox" checked.bind="acknowledged" disabled.bind="busy" required />
+        I checked compatibility and understand that application rollback does not restore data.
+      </label>
+      <button type="submit" class="button primary" disabled.bind="busy || !acknowledged">
+        Request rollback
+      </button>
+    </form>
+  </template>
+  <button type="button" class="text-button" disabled.bind="busy" click.trigger="closePlanner()">
+    Close rollback planner
+  </button>
+</section>

@@ -16,6 +16,15 @@ const pages = [
 
 type Page = (typeof pages)[number];
 
+interface Promotion {
+  eligible: boolean;
+  reason: string | null;
+  promotion_from_environment_id: string | null;
+  source_deployment_id: string | null;
+  requires_approval: boolean;
+  digest: string;
+}
+
 export class MyApp {
   api = new Api();
   pages = pages;
@@ -37,6 +46,12 @@ export class MyApp {
   version = '';
   releaseId = '';
   environmentId = '';
+  promotion: Promotion | null = null;
+  checkingPromotion = false;
+  promotionError = '';
+  rollbackSource: Deployment | null = null;
+  private promotionRevision = 0;
+  private rollbackFocus: HTMLElement | null = null;
   files: FileList | null = null;
   process = '';
   inspected: Release | null = null;
@@ -58,6 +73,7 @@ export class MyApp {
 
     this.page = pages.find((p) => this.path(p) === path) || 'Overview';
     this.query = '';
+    this.rollbackSource = null;
     document.title = `Keel · ${this.page}`;
   }
 
@@ -280,11 +296,61 @@ export class MyApp {
     queueTask(() => {
       if (form === 'deploy') {
         this.releaseId = release?.id ?? '';
+        void this.loadPromotion();
       }
 
       this.dialog.showModal();
       this.dialog.querySelector<HTMLElement>('form input,form select,form textarea')?.focus();
     });
+  }
+
+  async loadPromotion() {
+    const revision = ++this.promotionRevision;
+
+    this.promotion = null;
+    this.promotionError = '';
+    this.checkingPromotion = false;
+
+    if (this.form !== 'deploy' || !this.releaseId || !this.environmentId) {
+      return;
+    }
+
+    this.checkingPromotion = true;
+
+    try {
+      const promotion = await this.api.request<Promotion>(
+        `/releases/${this.releaseId}/promotion?environment_id=${this.environmentId}`,
+      );
+
+      if (revision === this.promotionRevision) {
+        this.promotion = promotion;
+      }
+    } catch (error) {
+      if (revision === this.promotionRevision) {
+        this.promotionError =
+          error instanceof Error ? error.message : 'Could not check promotion policy.';
+      }
+    } finally {
+      if (revision === this.promotionRevision) {
+        this.checkingPromotion = false;
+      }
+    }
+  }
+
+  openRollback(deployment: Deployment) {
+    this.rollbackFocus = document.activeElement as HTMLElement;
+    this.rollbackSource = deployment;
+  }
+
+  closeRollback() {
+    this.rollbackSource = null;
+    queueTask(() => this.rollbackFocus?.focus());
+  }
+
+  async rollbackRequested() {
+    this.closeRollback();
+    this.notice = 'Rollback requested through the environment’s deployment and approval policy.';
+    await this.refresh();
   }
 
   inspect(release: Release) {
@@ -296,6 +362,9 @@ export class MyApp {
 
   close() {
     this.dialog?.close();
+    this.promotionRevision++;
+    this.promotion = null;
+    this.promotionError = '';
     this.form = '';
     this.inspected = null;
     this.returnFocus?.focus();
@@ -311,6 +380,7 @@ export class MyApp {
     this.resetArtifact();
     this.resetProcess();
     this.releaseId = '';
+    void this.loadPromotion();
   }
 
   nameChanged() {
@@ -414,7 +484,9 @@ spec:
           environment_id: this.environmentId,
         });
 
-        this.notice = 'Deployment requested. Execution is waiting for an agent integration.';
+        this.notice =
+          'Deployment requested. Approval and target execution will follow the recorded policy.';
+
         this.go('Deployments');
       }
 
