@@ -14,7 +14,27 @@ Publish the named artifact with a current `actions/upload-artifact` action that 
 
 The worker accepts `push`, `workflow_dispatch`, `schedule` and `release` events when all configured repository, workflow and branch checks match. Pull-request events, fork sources, failed runs, expired artifacts and missing provider digests are rejected. Re-running a workflow increments its attempt number. If another attempt starts before import completes, import the new successful attempt.
 
-Keel retains the original ZIP archive, verifies its digest, and records the source commit/run. It does not extract the archive. Maximum size is 25 MiB. After an import reaches **Retained**, open Artifacts or Releases to create an immutable release. GitHub artifact expiry cannot remove the retained copy.
+Keel retains the original ZIP archive, verifies its digest, and records the source commit/run. The import worker does not extract the archive. Maximum size is 25 MiB. After an import reaches **Retained**, open Artifacts or Releases to create an immutable release. GitHub artifact expiry cannot remove the retained copy.
+
+## Package a Docker image for deployment
+
+After your existing build creates the image, save it as a single-image Docker archive and publish that file in the configured GitHub artifact:
+
+```yaml
+- name: Export deployment image
+  run: |
+    docker image inspect --format '{{.Id}}' your-image:1.0.0
+    docker image save --output application.tar your-image:1.0.0
+- uses: actions/upload-artifact@v4
+  with:
+    name: application
+    path: application.tar
+    if-no-files-found: error
+```
+
+Copy the full image ID from the build into the release process's `dockerImageId`. Set `dockerArchivePath: application.tar` beside it; the path must match the entry in the GitHub ZIP. See [the ZIP process example](../examples/github-docker-process.yaml). The immutable release keeps the outer ZIP digest and provider provenance. The agent verifies those bytes, reads the named TAR entry, checks the image ID, then deploys it through the usual target selection and approval flow.
+
+The ZIP and its total uncompressed contents must each fit within 25 MiB. This first executor suits small images; larger images need a future registry or larger-artifact execution path. GitHub's artifact can expire after import without preventing retained-release deployment. See [agent setup and recovery](deployment-agents.md).
 
 ## CLI
 
@@ -52,6 +72,8 @@ The API and import worker need the same database, credential key and artifact st
 
 Keep `KEEL_CREDENTIAL_KEY` secure and recoverable. Losing it makes stored connection credentials unusable. Changing it without re-encrypting connections is not a supported key rotation procedure. The browser clears credential form values when dialogs close and does not persist them in browser storage.
 
-The test suite exercises the GitHub HTTP contract with fixtures. A real repository connection still requires your token, workflow and webhook configuration. GitHub App installation, OAuth, automatic releases, pipeline triggering, CI cancellation and deployments are outside this stage.
+The test suite exercises the GitHub HTTP contract with fixtures. A real repository connection still requires your token, workflow and webhook configuration. GitHub App installation, OAuth, automatic releases, pipeline triggering, and CI cancellation are outside this stage.
 
 References: [GitHub artifact API](https://docs.github.com/en/rest/actions/artifacts), [workflow runs API](https://docs.github.com/en/rest/actions/workflow-runs), and [webhook signature verification](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries).
+
+ZIP packaging reference: [GitHub upload-artifact](https://github.com/actions/upload-artifact); bounded entry reads use Go’s [archive/zip](https://pkg.go.dev/archive/zip).

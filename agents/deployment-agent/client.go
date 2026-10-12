@@ -61,3 +61,11 @@ func (a *Agent) heartbeat(ctx context.Context, j Job) (string, error) {
 
 	return reply.Action, nil
 }
+
+func (a *Agent) progress(ctx context.Context, j Job, phase string) {
+	// Progress is advisory. Lease heartbeats and result validation remain authoritative.
+	_, _ = a.request(ctx, "progress", struct {
+		Lease
+		Phase string `json:"phase"`
+	}{j.Lease, phase})
+}

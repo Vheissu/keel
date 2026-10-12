@@ -423,12 +423,25 @@ test('registers and drains private agents, maps Docker targets and remains acces
   await expect(page.getByRole('cell', { name: 'Unknown', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Drain', exact: true }).click();
   await expect(page.getByRole('cell', { name: 'draining', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Replace certificate', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Replace agent certificate' })).toBeVisible();
+  await page.getByLabel('Certificate SHA-256 fingerprint').fill(randomBytes(32).toString('hex'));
+  await page.getByLabel('I stopped the old agent').check();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+
+  await page
+    .locator('form')
+    .getByRole('button', { name: 'Replace certificate', exact: true })
+    .click();
+
+  await expect(page.getByRole('status').filter({ hasText: 'Certificate replaced.' })).toBeVisible();
   await page.getByRole('button', { name: 'Resume', exact: true }).click();
   await expect(page.getByRole('cell', { name: 'active', exact: true })).toBeVisible();
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await page.screenshot({ path: 'output/playwright/targets-desktop.png', fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole('button', { name: 'Register agent', exact: true }).click();
+  await page.getByRole('button', { name: 'Drain', exact: true }).click();
+  await page.getByRole('button', { name: 'Replace certificate', exact: true }).click();
   await expect(page.getByLabel('Certificate SHA-256 fingerprint')).toBeVisible();
 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(

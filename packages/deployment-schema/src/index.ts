@@ -38,6 +38,11 @@ export const processSchema = z
           .object({
             source: z.literal('release'),
             name: z.string().min(1).max(100),
+            dockerArchivePath: z
+              .string()
+              .max(200)
+              .regex(/^[a-zA-Z0-9_-][a-zA-Z0-9._-]*(\/[a-zA-Z0-9_-][a-zA-Z0-9._-]*)*$/)
+              .optional(),
             dockerImageId: z
               .string()
               .regex(/^sha256:[a-f0-9]{64}$/)

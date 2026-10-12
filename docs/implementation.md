@@ -1,6 +1,6 @@
 # Implementation status
 
-The control-plane foundation, GitHub ingestion, Bitbucket publishing and initial Docker execution stages are implemented. PLAN.md remains the product roadmap.
+The control-plane foundation, GitHub ingestion, Bitbucket publishing and Docker execution and agent recovery stages are implemented. PLAN.md remains the product roadmap.
 
 ## Implemented
 
@@ -22,10 +22,13 @@ The control-plane foundation, GitHub ingestion, Bitbucket publishing and initial
 - A separate mutual-TLS gateway and outbound Go agent with scoped downloads, heartbeats, monotonic target fences, draining and revocation.
 - Controlled Docker recreate execution of a retained image archive, HTTP verification, cancellation cleanup and expiry reconciliation.
 - Target registration, agent state and verified-release projections in the UI.
+- Explicit Docker archive entry selection inside retained GitHub ZIPs, with bounded reads and archive validation.
+- Same-host agent certificate replacement, permanently retired fingerprints, cleanup before resume and an audit trail.
+- Lease-scoped deployment progress, timestamps and target-specific failure/recovery guidance.
 
 ## Next increment
 
-Add deployable GitHub ZIP packaging, certificate recovery and richer target diagnostics before expanding execution to SSH or additional strategies. Promotion policy, secrets and rollback planning still need their own implementation. The current Docker path can redeploy a retained release through the ordinary approval flow.
+Add promotion policy and retained-release rollback planning before expanding execution to SSH or additional strategies. Secrets and production packaging still need their own implementation. The current Docker path can redeploy a retained release through the ordinary approval flow.
 
 ## Decisions and constraints
 
@@ -37,7 +40,7 @@ SQL queries scope every organisation-owned API read, and composite foreign keys 
 
 The local bootstrap is not a hosted identity system. There is no invitation flow, token-management UI, token expiry, SSO, session cookie, or custom-role editor. Tokens are permission-scoped, but not yet project- or environment-scoped. Keep the development services bound to loopback. The browser does not persist credentials.
 
-Deployment outbox entries are delivered by the Temporal worker. Artifact ingestion retains its separate PostgreSQL-backed worker. Redis, deployment secrets management, staging-before-production promotion, rollback planning, runbooks, tenants, scheduled releases, and production packaging remain unimplemented. See [Docker agent setup and limits](deployment-agents.md), including the 25 MiB archive cap and the lack of forced recovery for unfinished revoked agents. Successful staging is not required before requesting production in this increment; production approval still applies.
+Deployment outbox entries are delivered by the Temporal worker. Artifact ingestion retains its separate PostgreSQL-backed worker. Redis, deployment secrets management, staging-before-production promotion, rollback planning, runbooks, tenants, scheduled releases, and production packaging remain unimplemented. See [Docker agent setup and limits](deployment-agents.md), including the 25 MiB archive cap and same-host certificate recovery and the absence of force-unlock or host reassignment. Successful staging is not required before requesting production in this increment; production approval still applies.
 
 The dashboard shows the newest request per environment, including its pending/cancelled state. It does not claim that this is the currently deployed version. The latest 200 records per resource are loaded; pagination is a follow-up before supporting larger installations.
 
@@ -45,7 +48,7 @@ The dashboard shows the newest request per environment, including its pending/ca
 
 GitHub connections use a repository-scoped token with Actions read permission. Bitbucket connections use repository access tokens with Repository read and Pipelines read permissions, plus a separate secret for publishing submissions. There is no GitHub App installation, OAuth flow or automatic token renewal. The encryption key stays in server configuration and must be backed up separately from PostgreSQL; automatic master-key rotation is not implemented. Provider tokens, webhook secrets and publishing secrets can be rotated through the UI, API or CLI.
 
-Imports are limited to 25 MiB, current successful run attempts, one configured artifact name, and 1,000 artifacts/workflows per discovery operation. The downloaded ZIP remains opaque; no extraction occurs. Keel requires GitHub's SHA-256 metadata rather than accepting unverified legacy artifacts. Webhooks queue imports only. Operators create releases from retained artifacts through the existing release flow.
+Imports are limited to 25 MiB, current successful run attempts, one configured artifact name, and 1,000 artifacts/workflows per discovery operation. The import worker retains the original ZIP unchanged. For Docker deployment, the release selects one archive entry for a bounded in-memory read by the agent. Keel requires GitHub's SHA-256 metadata rather than accepting unverified legacy artifacts. Webhooks queue imports only. Operators create releases from retained artifacts through the existing release flow.
 
 Bitbucket does not expose native artifact discovery or download through this adapter. A dependency-free publishing script submits up to 25 MiB while its pipeline step is running. Keel verifies the run, step, repository, exact branch, selector and commit, polls for whole-pipeline success, then publishes immutable artifact metadata. Submitted blobs have no release-visible artifact record until verification succeeds. The checksum is publisher-supplied, not a provider attestation; protect the connection-scoped publishing secret and pipeline code. Identical submissions are deduplicated; replacements require a new pipeline UUID. Polling waits at most 24 hours without consuming transient-failure retries. See [Bitbucket setup](bitbucket-pipelines.md).
 

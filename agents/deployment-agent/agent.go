@@ -72,6 +72,7 @@ func (a *Agent) execute(parent context.Context, j Job) {
 
 	if code != "HTTP_VERIFIED" {
 		cleanupContext, stop := context.WithTimeout(context.Background(), 30*time.Second)
+		a.progress(cleanupContext, j, "cleaning_up")
 		err := a.cleanup(cleanupContext, j)
 		stop()
 		if err != nil {

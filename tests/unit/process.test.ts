@@ -32,6 +32,28 @@ describe('deployment process contract', () => {
     },
   );
 
+  it.each([
+    '../app.tar',
+    '/app.tar',
+    'dir/../app.tar',
+    'dir/./app.tar',
+    'dir\\app.tar',
+    '',
+    'app.tar\n',
+  ])('rejects unsafe ZIP archive path %j', (path) => {
+    const process = deploymentProcess();
+
+    Object.assign(process.spec.artifact, { dockerArchivePath: path });
+    expect(() => parseProcess(process)).toThrow();
+  });
+
+  it('preserves a declared ZIP entry in the canonical process', () => {
+    const process = deploymentProcess();
+
+    Object.assign(process.spec.artifact, { dockerArchivePath: 'dist/application.tar' });
+    expect(parseProcess(process).spec.artifact.dockerArchivePath).toBe('dist/application.tar');
+  });
+
   it('rejects duplicate YAML keys, aliases, oversized documents and missing environments', () => {
     expect(() => parseProcess('kind: DeploymentProcess\nkind: DeploymentProcess')).toThrow(
       'Invalid YAML',

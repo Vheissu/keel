@@ -34,12 +34,13 @@ type Lease struct {
 
 type Job struct {
 	Lease
-	Mode       string `json:"mode"`
-	TargetID   string `json:"target_id"`
-	Digest     string `json:"digest"`
-	Size       int64  `json:"size"`
-	ImageID    string `json:"image_id"`
-	HealthPath string `json:"health_path"`
+	Mode        string `json:"mode"`
+	TargetID    string `json:"target_id"`
+	Digest      string `json:"digest"`
+	Size        int64  `json:"size"`
+	ImageID     string `json:"image_id"`
+	HealthPath  string `json:"health_path"`
+	ArchivePath string `json:"archive_path"`
 }
 
 type Result struct {
@@ -96,6 +97,10 @@ func validateJob(j Job) error {
 
 	if j.Mode != "deploy" || !digestPattern.MatchString(j.Digest) || !imagePattern.MatchString(j.ImageID) || j.Size < 1 || j.Size > 25*1024*1024 {
 		return errors.New("invalid artifact contract")
+	}
+
+	if j.ArchivePath != "" && !validArchivePath(j.ArchivePath) {
+		return errors.New("invalid archive path")
 	}
 
 	u, err := url.Parse(j.HealthPath)

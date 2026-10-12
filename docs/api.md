@@ -100,3 +100,9 @@ Provider capability responses include `artifactIngestion`: `provider-download` f
 These mutations require idempotency keys. Target bindings are immutable in this increment. A target's `current_release_id` is present only when `current_state` is `verified`. `reconciliation_required` and `cancel_requested` deployments continue holding their environment and target locks. Result codes contain no agent-provided text.
 
 The separate HTTPS gateway provides `POST /agent/v1/poll`, `/heartbeat`, `/artifact` and `/result`. All require a registered trusted client certificate. Poll returns one assigned job or `null`. Other requests include `{attempt_id, fence, token}`; result also includes an allowed outcome/code pair. Artifact access is limited to that active deployment's retained blob. Revocation, cancellation, expiry and superseded fences are checked server-side. [Protocol, setup and recovery limits](deployment-agents.md).
+
+### Agent certificate recovery and progress
+
+`POST /api/v1/agents/:id/certificate` takes `certificate_fingerprint` and `same_host_agent_stopped: true`, with write permission and an idempotency key. The agent must be drained or revoked and have no running/reconciling lease. Replacement retains the agent ID and target locks, permanently retires the old fingerprint and leaves the agent draining. Resume is blocked until outstanding reconciliation completes.
+
+The private mTLS gateway accepts `POST /agent/v1/progress` with the current lease fields and a fixed `phase`: `downloading`, `loading_image`, `replacing_container`, `verifying_http` or `cleaning_up`. Recovery/cancellation permits only `cleaning_up`. No free-text output is accepted. `/api/v1/execution` exposes `phase` and `phase_updated_at` per attempt. See [same-host recovery](deployment-agents.md#replace-or-recover-an-agent-certificate).

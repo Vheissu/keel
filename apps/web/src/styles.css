@@ -1196,6 +1196,20 @@ nav-icon svg {
   display: grid;
   gap: 0.5rem;
 }
+.target-form .check-label {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  cursor: pointer;
+}
+.check-label input[type='checkbox'] {
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  min-height: 18px;
+  padding: 0;
+  accent-color: #226d75;
+}
 .status.running {
   background: #e5f2f3;
   color: #174f56;

@@ -1,7 +1,12 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requirePermission } from '../../../packages/domain/src/index.js';
-import { ExecutionService, agentInput, targetInput } from './execution-service.js';
+import {
+  ExecutionService,
+  agentInput,
+  targetInput,
+  certificateInput,
+} from './execution-service.js';
 import { sha256 } from './artifact-store.js';
 
 export async function registerExecutionRoutes(api: FastifyInstance, execution: ExecutionService) {
@@ -50,6 +55,8 @@ export async function registerExecutionRoutes(api: FastifyInstance, execution: E
           state,
           fence,
           result_code,
+          phase,
+          phase_updated_at,
           lease_expires_at,
           created_at,
           updated_at
@@ -93,6 +100,18 @@ export async function registerExecutionRoutes(api: FastifyInstance, execution: E
       String(req.headers['idempotency-key'] ?? ''),
       sha256(`agent:${req.params.id}:${input.state}`),
       (tx) => execution.agentState(tx, req.principal, req.params.id, input.state),
+    );
+  });
+
+  api.post<{ Params: { id: string } }>('/agents/:id/certificate', async (req) => {
+    requirePermission(req.principal, 'write');
+    const input = certificateInput.parse(req.body);
+
+    return execution.control.mutate(
+      req.principal,
+      String(req.headers['idempotency-key'] ?? ''),
+      sha256(`agent-certificate:${req.params.id}:${JSON.stringify(input)}`),
+      (tx) => execution.replaceCertificate(tx, req.principal, req.params.id, input),
     );
   });
 

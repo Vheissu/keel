@@ -54,10 +54,30 @@ export const resultInput = leaseInput
   })
   .strict();
 
+export const certificateInput = z
+  .object({
+    certificate_fingerprint: agentInput.shape.certificate_fingerprint,
+    same_host_agent_stopped: z.literal(true),
+  })
+  .strict();
+
+export const progressInput = leaseInput
+  .extend({
+    phase: z.enum([
+      'downloading',
+      'loading_image',
+      'replacing_container',
+      'verifying_http',
+      'cleaning_up',
+    ]),
+  })
+  .strict();
+
 export interface AgentIdentity {
   id: string;
   organisation_id: string;
   state: string;
+  certificate_fingerprint: string;
 }
 
 export type Lease = z.infer<typeof leaseInput>;
@@ -103,12 +123,138 @@ export class ExecutionService {
       [randomUUID(), p.organisation_id, input.name, input.certificate_fingerprint],
     );
 
+    await tx.query(
+      `
+        INSERT INTO
+          agent_certificates (fingerprint, organisation_id, agent_id)
+        VALUES
+          ($1, $2, $3)
+      `,
+      [input.certificate_fingerprint, p.organisation_id, result.rows[0].id],
+    );
+
     await this.control.audit(tx, p, 'agent.registered', result.rows[0].id);
 
     return result.rows[0];
   }
 
+  async replaceCertificate(
+    tx: Transaction,
+    p: Principal,
+    id: string,
+    input: z.infer<typeof certificateInput>,
+  ) {
+    const current = (
+      await tx.query(
+        'SELECT * FROM deployment_agents WHERE organisation_id=$1 AND id=$2 FOR UPDATE',
+        [p.organisation_id, uuid.parse(id)],
+      )
+    ).rows[0];
+
+    if (!current) {
+      throw new DomainError('NOT_FOUND', 'Agent not found.', 404);
+    }
+
+    if (current.state === 'active') {
+      throw new DomainError(
+        'AGENT_BUSY',
+        'Drain or revoke the agent before replacing its certificate.',
+        409,
+      );
+    }
+
+    const running = await tx.query(
+      `
+        SELECT
+          1
+        FROM
+          deployment_attempts
+        WHERE
+          organisation_id = $1
+          AND agent_id = $2
+          AND state IN ('running', 'reconciling')
+        LIMIT
+          1
+      `,
+      [p.organisation_id, id],
+    );
+
+    if (running.rowCount) {
+      throw new DomainError(
+        'AGENT_BUSY',
+        'Wait for active work to finish or enter reconciliation before replacing the certificate.',
+        409,
+      );
+    }
+
+    // Retain every fingerprint permanently so a retired certificate cannot be re-enrolled.
+    await tx.query(
+      `
+        INSERT INTO
+          agent_certificates (fingerprint, organisation_id, agent_id)
+        VALUES
+          ($1, $2, $3)
+      `,
+      [input.certificate_fingerprint, p.organisation_id, id],
+    );
+
+    const updated = await tx.query(
+      `
+        UPDATE deployment_agents
+        SET
+          certificate_fingerprint = $3,
+          state = 'draining',
+          last_seen_at = NULL
+        WHERE
+          organisation_id = $1
+          AND id = $2
+        RETURNING
+          *
+      `,
+      [p.organisation_id, id, input.certificate_fingerprint],
+    );
+
+    await this.control.audit(tx, p, 'agent.certificate_replaced', id, {
+      previous_fingerprint: current.certificate_fingerprint,
+      certificate_fingerprint: input.certificate_fingerprint,
+      same_host_agent_stopped: input.same_host_agent_stopped,
+    });
+
+    return updated.rows[0];
+  }
+
   async agentState(tx: Transaction, p: Principal, id: string, state: string) {
+    await tx.query(
+      'SELECT id FROM deployment_agents WHERE organisation_id=$1 AND id=$2 FOR UPDATE',
+      [p.organisation_id, uuid.parse(id)],
+    );
+
+    if (state === 'active') {
+      const pending = await tx.query(
+        `
+          SELECT
+            1
+          FROM
+            deployment_attempts
+          WHERE
+            organisation_id = $1
+            AND agent_id = $2
+            AND state IN ('reconciliation_required', 'reconciling')
+          LIMIT
+            1
+        `,
+        [p.organisation_id, id],
+      );
+
+      if (pending.rowCount) {
+        throw new DomainError(
+          'RECOVERY_PENDING',
+          'The agent must confirm target cleanup before resuming deployments.',
+          409,
+        );
+      }
+    }
+
     const result = await tx.query(
       `
         UPDATE deployment_agents
@@ -203,7 +349,8 @@ export class ExecutionService {
         RETURNING
           id,
           organisation_id,
-          state
+          state,
+          certificate_fingerprint
       `,
       [fingerprint],
     );
@@ -605,6 +752,7 @@ export class ExecutionService {
         digest: release.manifest.artifact.digest,
         size: release.manifest.artifact.size,
         image_id: process.spec.artifact.dockerImageId,
+        archive_path: process.spec.artifact.dockerArchivePath ?? '',
         health_path: process.spec.environments[env.slug].verify?.http.path,
       };
     });
@@ -613,13 +761,31 @@ export class ExecutionService {
   async lockAgent(tx: Transaction, agent: AgentIdentity) {
     const current = (
       await tx.query(
-        'SELECT state FROM deployment_agents WHERE organisation_id=$1 AND id=$2 FOR UPDATE',
+        `
+          SELECT
+            state,
+            certificate_fingerprint
+          FROM
+            deployment_agents
+          WHERE
+            organisation_id = $1
+            AND id = $2
+          FOR UPDATE
+        `,
         [agent.organisation_id, agent.id],
       )
     ).rows[0];
 
-    if (!current || current.state === 'revoked') {
-      throw new DomainError('AGENT_UNAUTHENTICATED', 'Agent is revoked.', 401);
+    if (
+      !current ||
+      current.state === 'revoked' ||
+      current.certificate_fingerprint !== agent.certificate_fingerprint
+    ) {
+      throw new DomainError(
+        'AGENT_UNAUTHENTICATED',
+        'Agent certificate is revoked or has been replaced.',
+        401,
+      );
     }
 
     agent.state = current.state;
@@ -675,6 +841,38 @@ export class ExecutionService {
     }
 
     return { d, a };
+  }
+
+  async progress(agent: AgentIdentity, input: z.infer<typeof progressInput>) {
+    return this.transaction(async (tx) => {
+      const { d, a } = await this.lockedLease(tx, agent, input);
+
+      if (
+        (a.state === 'reconciling' || d.status === 'cancel_requested') &&
+        input.phase !== 'cleaning_up'
+      ) {
+        throw new DomainError(
+          'INVALID_PROGRESS',
+          'Only cleanup progress is accepted during recovery.',
+          409,
+        );
+      }
+
+      await tx.query(
+        `
+          UPDATE deployment_attempts
+          SET
+            phase = $2,
+            phase_updated_at = clock_timestamp()
+          WHERE
+            id = $1
+            AND phase <> $2
+        `,
+        [a.id, input.phase],
+      );
+
+      return { accepted: true };
+    });
   }
 
   async heartbeat(agent: AgentIdentity, input: Lease) {

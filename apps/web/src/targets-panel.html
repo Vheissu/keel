@@ -23,16 +23,34 @@
 </p>
 <p class="alert error" role="alert" if.bind="error">${error}</p>
 <p class="alert success" role="status" if.bind="notice">${notice}</p>
-<form class="target-form" if.bind="form" submit.trigger="save()">
-  <h3>${form === 'agent' ? 'Register a certificate' : 'Register a Docker target'}</h3>
+<form class="target-form" if.bind="form" submit.trigger:prevent="save()">
+  <h3>${formTitle}</h3>
   <label>
     Name
-    <input ref="nameInput" value.bind="name" required maxlength="100" autocomplete="off" />
+    <input
+      ref="nameInput"
+      value.bind="name"
+      readonly.bind="form === 'certificate'"
+      required
+      maxlength="100"
+      autocomplete="off"
+    />
   </label>
-  <label if.bind="form === 'agent'">
+  <label if.bind="form !== 'target'">
     Certificate SHA-256 fingerprint
     <input value.bind="fingerprint" required autocomplete="off" spellcheck="false" />
   </label>
+  <template if.bind="form === 'certificate'">
+    <p>
+      Stop the old agent process first. Install the replacement certificate on the same Docker host,
+      keeping the target allowlist and state directory. Existing deployment locks remain until
+      cleanup succeeds.
+    </p>
+    <label class="check-label">
+      <input type="checkbox" checked.bind="stopped" required />
+      I stopped the old agent and will restart it on the same Docker host.
+    </label>
+  </template>
   <template if.bind="form === 'target'">
     <label>
       <span id="target-project-label">Project</span>
@@ -66,7 +84,9 @@
     </label>
   </template>
   <div class="header-actions">
-    <button class="button primary" type="submit" disabled.bind="busy">Save registration</button>
+    <button class="button primary" type="submit" disabled.bind="busy">
+      ${form === 'certificate' ? 'Replace certificate' : 'Save registration'}
+    </button>
     <button class="button secondary" type="button" click.trigger="closeForm()">Cancel</button>
   </div>
 </form>
@@ -89,6 +109,14 @@
         <td>${label(agent.state)}</td>
         <td>${date(agent.last_seen_at)}</td>
         <td class="row-actions">
+          <button
+            class="text-button"
+            if.bind="canWrite && agent.state !== 'active'"
+            disabled.bind="busy"
+            click.trigger="replaceCertificate(agent)"
+          >
+            Replace certificate
+          </button>
           <button
             class="text-button"
             if.bind="canWrite && agent.state === 'active'"
@@ -166,7 +194,8 @@
         <th>Target</th>
         <th>State</th>
         <th>Fence</th>
-        <th>Result</th>
+        <th>Last reported step</th>
+        <th>Result / next action</th>
       </tr>
     </thead>
     <tbody>
@@ -175,7 +204,14 @@
         <td>${targetName(attempt.target_id)}</td>
         <td>${label(attempt.state)}</td>
         <td>${attempt.fence}</td>
-        <td>${attempt.result_code ? label(attempt.result_code.toLowerCase()) : 'Pending'}</td>
+        <td>
+          ${label(attempt.phase)}
+          <small>${date(attempt.phase_updated_at)}</small>
+        </td>
+        <td>
+          ${attempt.result_code ? label(attempt.result_code.toLowerCase()) : 'Pending'}
+          <small>${guidance(attempt)}</small>
+        </td>
       </tr>
     </tbody>
   </table>

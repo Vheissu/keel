@@ -62,7 +62,9 @@ npm run keel -- artifact publish application.tar \
   --project <project-uuid> --name application --version 1.0.0
 ```
 
-The existing 25 MiB artifact limit applies. Publish the raw, uncompressed Docker archive through the API, CLI or Bitbucket publishing step. GitHub's retained native artifact is a ZIP; this executor does not unwrap it. GitHub CI can publish the raw Docker archive through the CLI, but native GitHub ZIP ingestion is not yet directly deployable by this executor.
+The existing 25 MiB artifact limit applies. Publish the raw, uncompressed Docker archive through the API, CLI or Bitbucket publishing step. For a GitHub Actions artifact ZIP, set `spec.artifact.dockerArchivePath` to its exact entry name, such as `application.tar`. Omit this field for raw archives. See [GitHub Docker packaging](github-actions.md#package-a-docker-image-for-deployment).
+
+Keel retains and verifies the original ZIP digest. The agent reads the selected entry into memory and verifies its pinned image configuration before loading Docker. It never extracts ZIP paths to disk. Both the retained ZIP and the total declared uncompressed contents must fit within 25 MiB; the selected entry is also bounded while reading and checked for CRC errors. Archives with more than 1,000 entries, unsafe or duplicate names, links or encrypted entries are rejected. Paths use slash-separated letters, digits, underscores, hyphens and dots, with no leading dot in a segment.
 
 Copy `examples/docker-process.yaml` and replace `dockerImageId` with the full `sha256:...` image ID. Create an immutable release using that process and the retained artifact. Request a deployment in the UI. Production still requires a different person's approval; YAML cannot lower the environment's policy.
 
@@ -74,11 +76,27 @@ The agent verifies archive bytes, checks that its single image configuration mat
 
 Temporal retries scheduling transactions and tracks a workflow per deployment. Transactional outbox delivery uses a stable workflow ID; a crash between workflow creation and delivery acknowledgement does not create another execution.
 
-The agent receives a 45-second lease, renewed every ten seconds, with a ten-minute execution deadline. Credentials are random, hashed in PostgreSQL, and scoped to the agent, attempt and target fence. Every new assignment increments the target's fence. Download and result endpoints reject stale credentials. Agent output is reduced to fixed result codes; Docker output and application logs are not sent to the control plane.
+The agent receives a 45-second lease, renewed every ten seconds, with a ten-minute execution deadline. Credentials are random, hashed in PostgreSQL, and scoped to the agent, attempt and target fence. Every new assignment increments the target's fence. Download and result endpoints reject stale credentials. Agent progress uses fixed step names and results use fixed codes; Docker output and application logs are not sent to the control plane.
 
 Cancellation of an active deployment becomes **Cancelling · cleanup pending**. The environment stays locked until the agent confirms cleanup. Success cannot override cancellation. If the lease expires, the state becomes **Reconciliation required** and the target stays locked. When the same agent returns, it receives a new cleanup-only lease, removes the owned container and records the interrupted deployment as failed or cancelled. It cannot resume the old attempt as a success. Create a new deployment to retry after cleanup.
 
-Drain prevents new assignments while allowing active work and cleanup. Resume allows new work. Revocation immediately denies further gateway requests, including existing leases, and is irreversible for that certificate. An unfinished revoked agent remains locked; this increment deliberately has no force-unlock or reassignment endpoint. Restore and reconcile an unrevoked agent before retiring its identity. Certificate replacement for unfinished revoked work needs an operator recovery procedure in a later increment.
+Drain prevents new assignments while allowing active work and cleanup. Revocation immediately denies further gateway requests, including existing leases, and permanently retires that certificate. There is no force-unlock or target reassignment endpoint.
+
+### Replace or recover an agent certificate
+
+1. Drain the agent for routine renewal, or revoke it if the certificate should no longer authenticate. Stop the old process on the Docker host. For active work, wait for completion or for the workflow worker to move the expired lease into reconciliation; replacement is blocked while an attempt is running or reconciling.
+2. Issue a new client certificate from a CA trusted by the gateway. Keep the existing agent identity, Docker host, OS account, daemon, state directory and target allowlist. This procedure does not support moving a target to another host.
+3. Open **Targets → Replace certificate** on the drained or revoked agent. Enter the new SHA-256 fingerprint and confirm that the old process is stopped and the host is unchanged. The old fingerprint can never be registered again, including under another agent.
+4. Install the new certificate and key in the local agent configuration, then start the agent. Replacement leaves it **draining**. Interrupted attempts receive cleanup-only leases with higher fences; their environment and target locks stay in place until cleanup is confirmed.
+5. Refresh Targets. Once cleanup finishes, select **Resume**. Resume is rejected while reconciliation remains outstanding. Request a new deployment to retry the release.
+
+The operator confirmation records the host requirement in the audit trail; the control plane cannot remotely prove that a certificate was installed on the original host. If that host or daemon is lost, leave the target locked and investigate manually. Registering a replacement host does not reconcile the original one.
+
+For automation, `POST /api/v1/agents/:id/certificate` requires write permission, an idempotency key and `{ "certificate_fingerprint": "<64 lowercase hex characters>", "same_host_agent_stopped": true }`. Certificate issuance stays with your CA; Keel registers fingerprints and does not hold agent private keys.
+
+### Read deployment diagnostics
+
+Targets shows the last reported step and its timestamp: downloading, loading image, replacing container, verifying HTTP or cleaning up. These reports are advisory and require the current fenced lease. The result remains authoritative. Failure guidance points to the artifact contract, local Docker setup or HTTP verification as appropriate; reconciliation includes the same-host recovery instructions. Raw Docker output, application logs and arbitrary agent messages are not accepted.
 
 **Verified release** records the last successful deployment verification. Starting another attempt clears that projection to **Unknown**. It is not continuous uptime monitoring. The overview environment matrix remains the latest deployment request, with its status. Targets and attempts show the latest 200 records and refresh on demand.
 
@@ -90,6 +108,6 @@ npm run infra:execution
 npm run test:execution
 ```
 
-The execution suite uses real PostgreSQL, Temporal, mutual TLS, the compiled Go agent and Docker. It rejects unauthenticated certificates, restarts the workflow worker, retries outbox delivery and deploys an image after removing the original image and archive. It then redeploys the retained release and checks the target's increased fence and container restrictions. A forced agent crash during health verification leaves the deployment locked; restarting the agent obtains a cleanup lease, removes the interrupted container and records failure. Test containers, certificates and database schemas are isolated and removed afterward.
+The execution suite uses real PostgreSQL, Temporal, mutual TLS, the compiled Go agent and Docker. It rejects unauthenticated certificates, restarts the workflow worker, retries outbox delivery and imports a GitHub-format ZIP through the provider fixture and deploys it after provider expiry and removal of the original image and archive. It then redeploys the retained release and checks the target's increased fence and container restrictions. A forced agent crash during health verification leaves the deployment locked; replacing its revoked certificate and restarting on the same host obtains a cleanup lease, removes the interrupted container and records failure. Test containers, certificates and database schemas are isolated and removed afterward.
 
 See the [Temporal TypeScript guide](https://docs.temporal.io/develop/typescript) and [Docker resource controls](https://docs.docker.com/engine/containers/resource_constraints/) for the underlying worker and runtime APIs.

@@ -8,6 +8,7 @@ import {
   ExecutionService,
   leaseInput,
   resultInput,
+  progressInput,
   type AgentIdentity,
 } from '../../api/src/execution-service.js';
 
@@ -61,6 +62,10 @@ export async function createGateway(execution: ExecutionService, tls: ServerOpti
 
   app.post('/agent/v1/heartbeat', async (req) =>
     execution.heartbeat(identities.get(req)!, leaseInput.parse(req.body)),
+  );
+
+  app.post('/agent/v1/progress', async (req) =>
+    execution.progress(identities.get(req)!, progressInput.parse(req.body)),
   );
 
   app.post('/agent/v1/result', async (req) =>

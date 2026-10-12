@@ -26,6 +26,8 @@ interface Attempt {
   state: string;
   fence: number;
   result_code: string | null;
+  phase: string;
+  phase_updated_at: string;
 }
 
 interface Fleet {
@@ -44,11 +46,13 @@ export class TargetsPanel {
   busy = false;
   error = '';
   notice = '';
-  form: 'agent' | 'target' | '' = '';
+  form: 'agent' | 'target' | 'certificate' | '' = '';
   name = '';
   nameInput!: HTMLInputElement;
   private returnFocus: HTMLElement | null = null;
   fingerprint = '';
+  replacementAgentId = '';
+  stopped = false;
   projectId = '';
   environmentId = '';
   agentId = '';
@@ -97,6 +101,24 @@ export class TargetsPanel {
     this.agentId = this.data?.agents.find((a) => a.state === 'active')?.id ?? '';
   }
 
+  get formTitle() {
+    const titles = {
+      agent: 'Register a certificate',
+      target: 'Register a Docker target',
+      certificate: 'Replace agent certificate',
+    };
+
+    return this.form ? titles[this.form] : '';
+  }
+
+  replaceCertificate(agent: Agent) {
+    this.open('agent');
+    this.form = 'certificate';
+    this.replacementAgentId = agent.id;
+    this.stopped = false;
+    this.name = agent.name;
+  }
+
   closeForm() {
     this.form = '';
     this.returnFocus?.focus();
@@ -107,7 +129,15 @@ export class TargetsPanel {
     this.error = '';
 
     try {
-      if (this.form === 'agent') {
+      if (this.form === 'certificate') {
+        await this.api.request(`/agents/${this.replacementAgentId}/certificate`, 'POST', {
+          certificate_fingerprint: this.fingerprint.replaceAll(':', '').toLowerCase().trim(),
+          same_host_agent_stopped: this.stopped,
+        });
+
+        this.notice =
+          'Certificate replaced. Start the agent on the same host to finish cleanup, then resume deployments.';
+      } else if (this.form === 'agent') {
         await this.api.request('/agents', 'POST', {
           name: this.name,
           certificate_fingerprint: this.fingerprint.replaceAll(':', '').toLowerCase().trim(),
@@ -153,6 +183,31 @@ export class TargetsPanel {
     } finally {
       this.busy = false;
     }
+  }
+
+  guidance(attempt: Attempt) {
+    if (['reconciliation_required', 'reconciling'].includes(attempt.state)) {
+      return 'Keep the agent on its original Docker host. It must confirm cleanup before this target can deploy again.';
+    }
+
+    const messages: Record<string, string> = {
+      HTTP_VERIFIED: 'The container matched this attempt and returned HTTP 200.',
+      ARTIFACT_INVALID:
+        'Check the retained artifact, ZIP entry path and pinned Docker image ID. Create a corrected release before retrying.',
+      DOCKER_FAILED:
+        'Check the local Docker socket, available resources and target port before retrying.',
+      HEALTH_FAILED: 'Check the application’s HTTP path and container port before retrying.',
+      RECONCILED:
+        'Cleanup confirmed. The interrupted release did not succeed; request a new deployment when ready.',
+      CANCELLED: 'Cancellation cleanup confirmed.',
+      AGENT_UNAVAILABLE:
+        'The agent did not claim this deployment. Check its connection, certificate and draining state.',
+    };
+
+    return (
+      messages[attempt.result_code ?? ''] ??
+      'Progress is reported by the agent. It does not confirm deployment success.'
+    );
   }
 
   label(value: string) {

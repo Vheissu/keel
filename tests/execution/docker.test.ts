@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, it } from 'vitest';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, randomBytes, X509Certificate } from 'node:crypto';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -17,6 +17,11 @@ import { LocalArtifactStore, sha256 } from '../../apps/api/src/artifact-store.js
 import { createGateway } from '../../apps/agent-gateway/src/gateway.js';
 import { dispatchOutbox } from '../../apps/workflow-worker/src/dispatcher.js';
 import { fixture, deploymentProcess, testDatabaseUrl } from '../fixtures.js';
+import { CredentialVault } from '../../apps/api/src/credential-vault.js';
+import { IntegrationService } from '../../apps/api/src/integration-service.js';
+import { ArtifactImportWorker } from '../../apps/api/src/artifact-import-worker.js';
+import { GitHubActionsAdapter } from '../../packages/integrations/src/github-actions.js';
+import { githubFixture } from '../github-fixture.js';
 import { certificates } from './tls.js';
 
 const run = promisify(execFile);
@@ -179,7 +184,7 @@ it('rejects missing, unregistered and spoofed client identities at the real TLS 
   ).toBe(401);
 });
 
-it('runs a retained Docker image through Temporal, survives worker restart and redeploys without the source image', async () => {
+it('deploys a retained GitHub ZIP after provider expiry and recovers a crashed agent with a replacement certificate', async () => {
   const f = await fixture(db);
   const p = await control.authenticate(f.operator.token);
 
@@ -224,20 +229,62 @@ it('runs a retained Docker image through Temporal, survives worker restart and r
   const archive = join(root, 'application.tar');
 
   await run('docker', ['image', 'save', '--output', archive, imageID]);
-  const bytes = await readFile(archive);
+  const zipPath = join(root, 'application.zip');
 
-  const artifact = await mutate<{ id: string }>((tx) =>
-    control.artifact(
-      tx,
-      p,
-      { project_id: project.id, name: 'application', version: '1', digest: sha256(bytes) },
-      bytes,
-    ),
+  await run('python3', [
+    '-c',
+    'import sys, zipfile; z=zipfile.ZipFile(sys.argv[2], "w", zipfile.ZIP_DEFLATED); z.write(sys.argv[1], "application.tar"); z.close()',
+    archive,
+    zipPath,
+  ]);
+
+  const bytes = await readFile(zipPath);
+  const github = githubFixture();
+
+  github.state.bytes = bytes;
+  github.state.artifacts[0].size_in_bytes = bytes.length;
+  github.state.artifacts[0].digest = `sha256:${sha256(bytes)}`;
+
+  const integrations = new IntegrationService(
+    control,
+    new CredentialVault(randomBytes(32).toString('base64')),
+    (credentials) => new GitHubActionsAdapter(async () => credentials, github.transport),
   );
+
+  const provider = await mutate<{ id: string }>((tx) =>
+    integrations.create(tx, p, {
+      name: 'GitHub Docker build',
+      project_id: project.id,
+      repository: 'keel-test/application',
+      workflow_id: '42',
+      branch: 'main',
+      artifact_name: 'application',
+      token: 'test-provider-token',
+      webhook_secret: 'test-provider-webhook-secret-long-enough',
+    }),
+  );
+
+  await mutate((tx) =>
+    integrations.enqueue(tx, p, provider.id, { run_id: '9001', run_attempt: 1 }),
+  );
+
+  expect(await new ArtifactImportWorker(integrations).runOnce()).toBe(true);
+
+  const artifact = (await db.query('SELECT * FROM artifacts WHERE project_id=$1', [project.id]))
+    .rows[0];
+
+  expect(artifact.digest).toBe(sha256(bytes));
+  expect(artifact.provenance.source).toBe('github-actions');
+  github.state.apiStatus = 410;
+  github.state.bytes = Buffer.alloc(0);
+  await rm(zipPath);
 
   const processDefinition = deploymentProcess();
 
-  Object.assign(processDefinition.spec.artifact, { dockerImageId: imageID });
+  Object.assign(processDefinition.spec.artifact, {
+    dockerImageId: imageID,
+    dockerArchivePath: 'application.tar',
+  });
 
   Object.assign(processDefinition.spec.environments.staging, {
     strategy: 'recreate',
@@ -418,7 +465,13 @@ it('runs a retained Docker image through Temporal, survives worker restart and r
   agent = undefined;
 
   await db.query(
-    "UPDATE deployment_attempts SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE deployment_id=$1",
+    `
+      UPDATE deployment_attempts
+      SET
+        lease_expires_at = clock_timestamp() - interval '1 second'
+      WHERE
+        deployment_id = $1
+    `,
     [interrupted.id],
   );
 
@@ -428,6 +481,25 @@ it('runs a retained Docker image through Temporal, survives worker restart and r
     (await db.query('SELECT status FROM deployments WHERE id=$1', [interrupted.id])).rows[0].status,
   ).toBe('reconciliation_required');
 
+  await mutate((tx) => execution.agentState(tx, p, registered.id, 'revoked'));
+
+  const replacementFingerprint = new X509Certificate(tls.unknown.cert).fingerprint256
+    .replaceAll(':', '')
+    .toLowerCase();
+
+  await mutate((tx) =>
+    execution.replaceCertificate(tx, p, registered.id, {
+      certificate_fingerprint: replacementFingerprint,
+      same_host_agent_stopped: true,
+    }),
+  );
+
+  expect(await poll(tls.client)).toBe(401);
+  const recoveredConfig = JSON.parse(await readFile(config, 'utf8'));
+
+  recoveredConfig.certificate = tls.file('unknown.crt');
+  recoveredConfig.key = tls.file('unknown.key');
+  await writeFile(config, JSON.stringify(recoveredConfig));
   startAgent();
 
   await until(
@@ -462,5 +534,11 @@ it('runs a retained Docker image through Temporal, survives worker restart and r
       .rows[0].current_state,
   ).toBe('unknown');
 
+  const progress = (
+    await db.query('SELECT phase FROM deployment_attempts WHERE deployment_id=$1', [interrupted.id])
+  ).rows[0];
+
+  expect(progress.phase).toBe('cleaning_up');
+  await mutate((tx) => execution.agentState(tx, p, registered.id, 'active'));
   expect(agentOutput).not.toContain('token');
 }, 150000);

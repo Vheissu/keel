@@ -120,16 +120,23 @@ func verifyImageArchive(data []byte, imageID string) error {
 }
 
 func (a *Agent) deploy(ctx context.Context, j Job, t Target) string {
+	a.progress(ctx, j, "downloading")
 	artifact, err := a.request(ctx, "artifact", j.Lease)
 	if err != nil {
 		return "ARTIFACT_INVALID"
 	}
 
 	digest := sha256.Sum256(artifact)
-	if int64(len(artifact)) != j.Size || hex.EncodeToString(digest[:]) != j.Digest || verifyImageArchive(artifact, j.ImageID) != nil {
+	if int64(len(artifact)) != j.Size || hex.EncodeToString(digest[:]) != j.Digest {
 		return "ARTIFACT_INVALID"
 	}
 
+	artifact, err = imageArchive(artifact, j.ArchivePath)
+	if err != nil || verifyImageArchive(artifact, j.ImageID) != nil {
+		return "ARTIFACT_INVALID"
+	}
+
+	a.progress(ctx, j, "loading_image")
 	if _, err = a.docker(ctx, bytes.NewReader(artifact), "image", "load", "--quiet"); err != nil {
 		return "DOCKER_FAILED"
 	}
@@ -145,6 +152,7 @@ func (a *Agent) deploy(ctx context.Context, j Job, t Target) string {
 		return "CANCELLED"
 	}
 
+	a.progress(ctx, j, "replacing_container")
 	if a.cleanup(ctx, j) != nil {
 		return "DOCKER_FAILED"
 	}
@@ -175,6 +183,7 @@ func (a *Agent) deploy(ctx context.Context, j Job, t Target) string {
 		return "DOCKER_FAILED"
 	}
 
+	a.progress(ctx, j, "verifying_http")
 	client := &http.Client{
 		Timeout:   2 * time.Second,
 		Transport: &http.Transport{Proxy: nil},

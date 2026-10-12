@@ -167,6 +167,174 @@ describe('Fenced deployment execution', () => {
     ).toBe(1);
   });
 
+  it('replaces a revoked certificate without unlocking interrupted work or accepting stale authentication', async () => {
+    const { d, job } = await assigned();
+    const replacement = randomBytes(32).toString('hex');
+    const input = { certificate_fingerprint: replacement, same_host_agent_stopped: true as const };
+
+    await expect(
+      mutate((tx) => execution.replaceCertificate(tx, p, agent.id, input)),
+    ).rejects.toMatchObject({ code: 'AGENT_BUSY' });
+
+    await mutate((tx) => execution.agentState(tx, p, agent.id, 'revoked'));
+
+    await expect(
+      mutate((tx) => execution.replaceCertificate(tx, p, agent.id, input)),
+    ).rejects.toMatchObject({ code: 'AGENT_BUSY' });
+
+    await db.query(
+      `
+        UPDATE deployment_attempts
+        SET
+          lease_expires_at = clock_timestamp() - interval '1 second'
+        WHERE
+          id = $1
+      `,
+      [job.attempt_id],
+    );
+
+    await execution.tick(f.org, d.id);
+    await mutate((tx) => execution.replaceCertificate(tx, p, agent.id, input));
+
+    await expect(execution.authenticate(agent.certificate_fingerprint)).rejects.toMatchObject({
+      code: 'AGENT_UNAUTHENTICATED',
+    });
+
+    await expect(execution.claim(agent)).rejects.toMatchObject({ code: 'AGENT_UNAUTHENTICATED' });
+
+    await expect(
+      execution.complete(agent, { ...lease(job), outcome: 'succeeded', code: 'HTTP_VERIFIED' }),
+    ).rejects.toMatchObject({ code: 'AGENT_UNAUTHENTICATED' });
+
+    await expect(requestDeployment()).rejects.toMatchObject({ code: '23505' });
+
+    await expect(
+      mutate((tx) => execution.agentState(tx, p, agent.id, 'active')),
+    ).rejects.toMatchObject({ code: 'RECOVERY_PENDING' });
+
+    await expect(
+      mutate((tx) =>
+        execution.registerAgent(tx, p, {
+          name: 'Retired',
+          certificate_fingerprint: agent.certificate_fingerprint,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: '23505' });
+
+    const recovered = await execution.authenticate(replacement);
+
+    expect(recovered.id).toBe(agent.id);
+    expect(recovered.state).toBe('draining');
+    const cleanup = (await execution.claim(recovered))!;
+
+    expect(cleanup.mode).toBe('cleanup');
+    expect(cleanup.fence).toBeGreaterThan(job.fence);
+
+    await execution.complete(recovered, {
+      ...lease(cleanup),
+      outcome: 'failed',
+      code: 'RECONCILED',
+    });
+
+    await mutate((tx) => execution.agentState(tx, p, agent.id, 'active'));
+    expect((await requestDeployment()).status).toBe('queued');
+
+    expect(
+      (
+        await db.query(
+          `
+            SELECT
+              details
+            FROM
+              audit_events
+            WHERE
+              action = 'agent.certificate_replaced'
+              AND resource_id = $1
+          `,
+          [agent.id],
+        )
+      ).rowCount,
+    ).toBe(1);
+  });
+
+  it('authorizes and deduplicates certificate replacement through the API', async () => {
+    await mutate((tx) => execution.agentState(tx, p, agent.id, 'draining'));
+    const app = await createApp(control);
+
+    const input = {
+      certificate_fingerprint: randomBytes(32).toString('hex'),
+      same_host_agent_stopped: true,
+    };
+
+    const key = randomUUID();
+
+    const post = (token: string, payload: object = input) =>
+      app.inject({
+        method: 'POST',
+        url: `/api/v1/agents/${agent.id}/certificate`,
+        headers: { authorization: `Bearer ${token}`, 'idempotency-key': key },
+        payload,
+      });
+
+    try {
+      expect((await post(f.reader.token)).statusCode).toBe(403);
+      const other = await fixture(db);
+
+      expect((await post(other.operator.token)).statusCode).toBe(404);
+
+      expect(
+        (await post(f.operator.token, { ...input, same_host_agent_stopped: false })).statusCode,
+      ).toBe(400);
+
+      const first = await post(f.operator.token);
+
+      expect(first.statusCode).toBe(200);
+      expect((await post(f.operator.token)).json()).toEqual(first.json());
+
+      expect(
+        (
+          await db.query(
+            `
+        SELECT
+          id
+        FROM
+          audit_events
+        WHERE
+          action = 'agent.certificate_replaced'
+          AND resource_id = $1
+      `,
+            [agent.id],
+          )
+        ).rowCount,
+      ).toBe(1);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('records only scoped progress and rejects stale and recovery-incompatible updates', async () => {
+    const { d, job } = await assigned();
+
+    await execution.progress(agent, { ...lease(job), phase: 'verifying_http' });
+
+    expect(
+      (await db.query('SELECT phase FROM deployment_attempts WHERE id=$1', [job.attempt_id]))
+        .rows[0].phase,
+    ).toBe('verifying_http');
+
+    await expect(
+      execution.progress(agent, { ...lease(job), token: 'b'.repeat(64), phase: 'loading_image' }),
+    ).rejects.toMatchObject({ code: 'STALE_LEASE' });
+
+    await mutate((tx) => control.transition(tx, p, d.id, 'cancel'));
+
+    await expect(
+      execution.progress(agent, { ...lease(job), phase: 'loading_image' }),
+    ).rejects.toMatchObject({ code: 'INVALID_PROGRESS' });
+
+    await execution.progress(agent, { ...lease(job), phase: 'cleaning_up' });
+  });
+
   it('keeps production unassigned until a different actor approves', async () => {
     const d = await requestDeployment(f.environments.production);
 
