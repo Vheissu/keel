@@ -66,3 +66,24 @@ The worker retrieves authoritative GitHub metadata, enforces the connection poli
 Imports move from `pending` to `processing`, then `succeeded` or `failed`. Retryable provider/storage errors return to `pending` with persisted backoff. Workers claim rows with `SKIP LOCKED`, renew a two-minute lease, and fence completion with a lease token. Five attempts are allowed before an explicit operator retry is needed. A crashed worker's expired lease can be reclaimed. Import records expose safe error codes/messages, attempts and the next eligible time, never provider response bodies or signed download URLs.
 
 GitHub Actions supports workflow discovery, run reads and artifact ingestion. Other provider adapters remain unavailable. Triggering/cancelling CI, provider deployment, rollback, GitHub App installation/OAuth, automatic release creation and deployment execution are not implemented. See [GitHub setup](github-actions.md).
+
+## Bitbucket publishing
+
+`POST /api/v1/integrations/bitbucket` creates a connection using `name`, `project_id`, `repository`, `workflow_id` (for example `branches:main`), `branch`, `artifact_name`, `token` and `publish_secret`. The operator needs `write` permission and an idempotency key. `token` is a Bitbucket repository access token. `publish_secret` is a random 32–256 character string containing letters, digits, underscores or hyphens.
+
+`POST /api/v1/integrations/:id/bitbucket-credentials` rotates `token` and `publish_secret` together under the same permission/idempotency rules. Existing list, enable/disable and import-retry endpoints work for both providers. Credentials never appear in responses. Bitbucket workflow/artifact discovery and the GitHub manual-import endpoint return `UNSUPPORTED_OPERATION` for Bitbucket connections.
+
+`POST /publish/bitbucket/:id` accepts raw `application/octet-stream` bytes, capped at 25 MiB. It requires the connection's publishing secret as `Authorization: Bearer <secret>` and these headers:
+
+| Header                 | Value                                        |
+| ---------------------- | -------------------------------------------- |
+| `X-Bitbucket-Pipeline` | Pipeline UUID, with or without braces        |
+| `X-Bitbucket-Step`     | Publishing step UUID, with or without braces |
+| `X-Bitbucket-Commit`   | 40-character lowercase commit SHA            |
+| `X-Artifact-Sha256`    | SHA-256 of the exact uploaded bytes          |
+
+The API verifies that the run and step are currently running and match the connection policy. A successful response is `202` with the import ID, status and `duplicate` flag. The tuple of connection and pipeline UUID identifies a submission; identical retries return the same job, while changed content or step metadata returns `PUBLISH_CONFLICT`. No operator API token is required or accepted as a substitute for the publishing secret.
+
+The worker waits for both pipeline and step success, rechecks the run and bytes, and publishes artifact metadata under its current lease and connection revision. Pending blobs cannot be selected for a release. Failed or untrusted runs produce visible failed imports. Normal completion polling waits up to 24 hours and does not consume the five transient-error retries. Artifact provenance explicitly labels the digest as publisher-supplied. [Setup and trust boundaries](bitbucket-pipelines.md).
+
+Provider capability responses include `artifactIngestion`: `provider-download` for GitHub, `publishing-step` for Bitbucket, and `unavailable` for unimplemented adapters. Bitbucket reports run lookup support; workflow/artifact discovery, triggering, cancellation and deployment capabilities remain false.

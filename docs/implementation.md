@@ -1,6 +1,6 @@
 # Implementation status
 
-The control-plane foundation and first GitHub ingestion stage are implemented. PLAN.md remains the product roadmap.
+The control-plane foundation, GitHub ingestion and Bitbucket publishing stages are implemented. PLAN.md remains the product roadmap.
 
 ## Implemented
 
@@ -11,18 +11,17 @@ The control-plane foundation and first GitHub ingestion stage are implemented. P
 - Strict deployment process validation for release artifacts, environment selectors, recreate/rolling strategy declarations, and optional HTTP verification declarations. These describe intent; no target executor exists yet.
 - Environment approval enforcement, separation of duties, environment request locks, cancellation/rejection, append-only audit/deployment events, and transactional outbox writes.
 - Persistent request idempotency, scoped tokens, request validation, bounded uploads, stable errors, and process-local rate limiting.
-- GitHub Actions adapter with workflow discovery, authoritative run checks, paginated artifact discovery, signed download handling and SHA-256 verification. Other providers remain explicitly unavailable.
+- GitHub Actions adapter with workflow discovery, authoritative run checks, paginated artifact discovery, signed download handling and SHA-256 verification. Bitbucket uses a separate publishing flow; other providers remain explicitly unavailable.
 - AES-256-GCM connection credentials, credential rotation, verified/deduplicated webhooks, durable import jobs with leased workers and persisted retries.
 - S3-compatible storage with conditional writes and digest verification, plus a local-to-S3 copy command.
-- Integration management, manual imports and retry controls in the UI and CLI.
+- Bitbucket Cloud publishing with connection-scoped credentials, running-step validation, private candidate blobs and polling until the complete pipeline succeeds.
+- Integration management, manual GitHub imports, Bitbucket publishing and retry controls in the UI and CLI.
 - CLI publishing, release creation, process validation, and status output.
 - Responsive UI, keyboard-accessible dialogs, reduced-motion boat loaders, and empty states backed by actual data.
 
 ## Next increment
 
-Add Bitbucket Pipelines ingestion through the provider adapter contract, keeping the same retained-artifact and release services. Extend provider contracts for Azure Pipelines, GitLab CI/CD and Jenkins as those implementations are built.
-
-Then connect the deployment outbox to Temporal and implement a fenced, outbound-only agent protocol. A queued deployment must never be treated as an executed deployment. The worker needs idempotent dispatch, cancellation reconciliation, heartbeats, lease expiry, log redaction, target validation, and verification results before a successful state can exist. Deploy one retained artifact to a controlled Docker target before adding SSH or additional strategies.
+Connect the deployment outbox to Temporal and implement a fenced, outbound-only agent protocol. A queued deployment must never be treated as an executed deployment. The worker needs idempotent dispatch, cancellation reconciliation, heartbeats, lease expiry, log redaction, target validation, and verification results before a successful state can exist. Deploy one retained artifact to a controlled Docker target before adding SSH or additional strategies.
 
 ## Decisions and constraints
 
@@ -40,11 +39,13 @@ The dashboard shows the newest request per environment, including its pending/ca
 
 ## Ingestion boundaries
 
-Connections use a repository-scoped GitHub token with Actions read permission. There is no GitHub App installation, OAuth flow or automatic token renewal. The encryption key stays in server configuration and must be backed up separately from PostgreSQL; automatic master-key rotation is not implemented. Provider tokens and webhook secrets can be rotated through the UI, API or CLI.
+GitHub connections use a repository-scoped token with Actions read permission. Bitbucket connections use repository access tokens with Repository read and Pipelines read permissions, plus a separate secret for publishing submissions. There is no GitHub App installation, OAuth flow or automatic token renewal. The encryption key stays in server configuration and must be backed up separately from PostgreSQL; automatic master-key rotation is not implemented. Provider tokens, webhook secrets and publishing secrets can be rotated through the UI, API or CLI.
 
 Imports are limited to 25 MiB, current successful run attempts, one configured artifact name, and 1,000 artifacts/workflows per discovery operation. The downloaded ZIP remains opaque; no extraction occurs. Keel requires GitHub's SHA-256 metadata rather than accepting unverified legacy artifacts. Webhooks queue imports only. Operators create releases from retained artifacts through the existing release flow.
 
-Tests use GitHub HTTP fixtures, real PostgreSQL and a real local S3-compatible RustFS service. No live GitHub repository is connected by the test suite. The object store in Compose is for local evaluation, not production packaging.
+Bitbucket does not expose native artifact discovery or download through this adapter. A dependency-free publishing script submits up to 25 MiB while its pipeline step is running. Keel verifies the run, step, repository, exact branch, selector and commit, polls for whole-pipeline success, then publishes immutable artifact metadata. Submitted blobs have no release-visible artifact record until verification succeeds. The checksum is publisher-supplied, not a provider attestation; protect the connection-scoped publishing secret and pipeline code. Identical submissions are deduplicated; replacements require a new pipeline UUID. Polling waits at most 24 hours without consuming transient-failure retries. See [Bitbucket setup](bitbucket-pipelines.md).
+
+Tests use GitHub and Bitbucket HTTP fixtures, real PostgreSQL and a real local S3-compatible RustFS service. No live provider repository is connected by the test suite. The object store in Compose is for local evaluation, not production packaging.
 
 ## Design
 

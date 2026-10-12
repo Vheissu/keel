@@ -9,6 +9,11 @@ import {
   externalId,
   type GitHubCredentials,
 } from '../../../packages/integrations/src/github-actions.js';
+import {
+  BitbucketPipelinesAdapter,
+  type BitbucketCredentials,
+} from '../../../packages/integrations/src/bitbucket-pipelines.js';
+import { bitbucketConnectionInput, bitbucketCredentialsInput } from './bitbucket-input.js';
 import { CredentialVault } from './credential-vault.js';
 import { ControlPlane } from './control-plane.js';
 
@@ -37,12 +42,12 @@ export const importInput = z
   })
   .strict();
 
-export interface GitHubConnection {
+export interface ProviderConnectionRecord {
   id: string;
   organisation_id: string;
   project_id: string;
   created_by: string;
-  provider: 'github-actions';
+  provider: 'github-actions' | 'bitbucket-pipelines';
   name: string;
   repository: string;
   repository_id: string;
@@ -65,6 +70,10 @@ export interface ImportJob {
   run_attempt: number;
   attempts: number;
   lease_token: string;
+  created_at: string;
+  candidate_digest: string | null;
+  candidate_commit: string | null;
+  candidate_step_id: string | null;
 }
 
 export const connectionColumns = `id, organisation_id, project_id, created_by, provider, name,
@@ -73,7 +82,7 @@ export const connectionColumns = `id, organisation_id, project_id, created_by, p
 export const importColumns = `id, project_id, connection_id, run_id, run_attempt, status, attempts,
   available_at, artifact_id, error_code, error_message, created_at, updated_at`;
 
-export function adapterConnection(connection: GitHubConnection): ProviderConnection {
+export function adapterConnection(connection: ProviderConnectionRecord): ProviderConnection {
   return {
     id: connection.id,
     organisationId: connection.organisation_id,
@@ -89,6 +98,8 @@ export class IntegrationService {
     private vault?: CredentialVault,
     private createAdapter = (credentials: GitHubCredentials) =>
       new GitHubActionsAdapter(async () => credentials),
+    private createBitbucketAdapter = (credentials: BitbucketCredentials) =>
+      new BitbucketPipelinesAdapter(credentials),
   ) {}
 
   get configured() {
@@ -107,7 +118,7 @@ export class IntegrationService {
     return this.vault;
   }
 
-  credentials(connection: GitHubConnection) {
+  credentials(connection: ProviderConnectionRecord) {
     return this.requireVault().decrypt<z.infer<typeof credentialsInput>>(
       connection.organisation_id,
       connection.id,
@@ -115,15 +126,171 @@ export class IntegrationService {
     );
   }
 
-  adapter(connection: GitHubConnection) {
+  adapter(connection: ProviderConnectionRecord) {
+    if (connection.provider !== 'github-actions') {
+      throw new DomainError(
+        'UNSUPPORTED_OPERATION',
+        'Bitbucket uses a publishing step; workflow and artifact discovery are unavailable.',
+        422,
+      );
+    }
+
     return this.createAdapter({
       token: this.credentials(connection).token,
       repository: connection.repository,
     });
   }
 
+  bitbucketCredentials(connection: ProviderConnectionRecord) {
+    return this.requireVault().decrypt<z.infer<typeof bitbucketCredentialsInput>>(
+      connection.organisation_id,
+      connection.id,
+      connection.credentials,
+    );
+  }
+
+  bitbucketAdapter(connection: ProviderConnectionRecord) {
+    return this.createBitbucketAdapter({
+      token: this.bitbucketCredentials(connection).token,
+      repository: connection.repository,
+    });
+  }
+
+  async createBitbucket(
+    tx: Transaction,
+    principal: Principal,
+    input: z.infer<typeof bitbucketConnectionInput>,
+  ) {
+    const vault = this.requireVault();
+
+    const project = await tx.query(
+      'SELECT 1 FROM projects WHERE organisation_id = $1 AND id = $2',
+      [principal.organisation_id, input.project_id],
+    );
+
+    if (!project.rowCount) {
+      throw new DomainError('NOT_FOUND', 'Project not found.', 404);
+    }
+
+    const repository = await this.createBitbucketAdapter(input).verifyConnection();
+    const id = randomUUID();
+
+    const credentials = vault.encrypt(principal.organisation_id, id, {
+      token: input.token,
+      publish_secret: input.publish_secret,
+    });
+
+    const result = await tx.query(
+      `
+        INSERT INTO
+          provider_connections (
+            id,
+            organisation_id,
+            project_id,
+            created_by,
+            provider,
+            name,
+            repository,
+            repository_id,
+            workflow_id,
+            branch,
+            artifact_name,
+            credentials
+          )
+        VALUES
+          (
+            $1,
+            $2,
+            $3,
+            $4,
+            'bitbucket-pipelines',
+            $5,
+            $6,
+            $7,
+            $8,
+            $9,
+            $10,
+            $11
+          )
+        RETURNING
+          ${connectionColumns}
+      `,
+      [
+        id,
+        principal.organisation_id,
+        input.project_id,
+        principal.actor_id,
+        input.name,
+        repository.full_name,
+        repository.uuid,
+        input.workflow_id,
+        input.branch,
+        input.artifact_name,
+        credentials,
+      ],
+    );
+
+    await this.control.audit(tx, principal, 'integration.connected', id, {
+      provider: 'bitbucket-pipelines',
+      repository: repository.full_name,
+    });
+
+    return result.rows[0];
+  }
+
+  async rotateBitbucket(
+    tx: Transaction,
+    principal: Principal,
+    id: string,
+    input: z.infer<typeof bitbucketCredentialsInput>,
+  ) {
+    const connection = await this.load(principal.organisation_id, id, tx);
+
+    if (connection.provider !== 'bitbucket-pipelines') {
+      throw new DomainError(
+        'UNSUPPORTED_OPERATION',
+        'This connection is not a Bitbucket connection.',
+        422,
+      );
+    }
+
+    const repository = await this.createBitbucketAdapter({
+      token: input.token,
+      repository: connection.repository,
+    }).verifyConnection();
+
+    if (repository.uuid !== connection.repository_id) {
+      throw new DomainError(
+        'REPOSITORY_CHANGED',
+        'This name now identifies a different repository. Create a new connection.',
+        409,
+      );
+    }
+
+    const credentials = this.requireVault().encrypt(principal.organisation_id, id, input);
+
+    const result = await tx.query(
+      `
+        UPDATE provider_connections
+        SET
+          credentials = $3,
+          credential_revision = credential_revision + 1
+        WHERE
+          organisation_id = $1
+          AND id = $2
+        RETURNING
+          ${connectionColumns}
+      `,
+      [principal.organisation_id, id, credentials],
+    );
+
+    await this.control.audit(tx, principal, 'integration.credentials_rotated', id);
+
+    return result.rows[0];
+  }
+
   async load(organisation: string, id: string, db: Database | Transaction = this.control.db) {
-    const result = await db.query<GitHubConnection>(
+    const result = await db.query<ProviderConnectionRecord>(
       'SELECT * FROM provider_connections WHERE organisation_id = $1 AND id = $2',
       [organisation, z.string().uuid().parse(id)],
     );
@@ -233,6 +400,14 @@ export class IntegrationService {
   ) {
     const connection = await this.load(principal.organisation_id, id, tx);
 
+    if (connection.provider !== 'github-actions') {
+      throw new DomainError(
+        'UNSUPPORTED_OPERATION',
+        'Use the Bitbucket credentials endpoint.',
+        422,
+      );
+    }
+
     const repository = await this.createAdapter({
       token: input.token,
       repository: connection.repository,
@@ -304,6 +479,14 @@ export class IntegrationService {
   ) {
     this.requireVault();
     const connection = await this.load(principal.organisation_id, id, tx);
+
+    if (connection.provider !== 'github-actions') {
+      throw new DomainError(
+        'UNSUPPORTED_OPERATION',
+        'Upload this artifact using the Bitbucket publishing step.',
+        422,
+      );
+    }
 
     if (!connection.enabled) {
       throw new DomainError(

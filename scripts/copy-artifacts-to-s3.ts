@@ -15,7 +15,24 @@ let copied = 0;
 
 try {
   const artifacts = await db.query<{ organisation_id: string; digest: string }>(
-    'SELECT DISTINCT organisation_id, digest FROM artifacts ORDER BY organisation_id, digest',
+    `
+      SELECT
+        organisation_id,
+        digest
+      FROM
+        artifacts
+      UNION
+      SELECT
+        organisation_id,
+        candidate_digest AS digest
+      FROM
+        artifact_imports
+      WHERE
+        candidate_digest IS NOT NULL
+      ORDER BY
+        organisation_id,
+        digest
+    `,
   );
 
   for (const artifact of artifacts.rows) {

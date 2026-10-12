@@ -18,6 +18,7 @@ import {
 import { sha256 } from './artifact-store.js';
 import { IntegrationService } from './integration-service.js';
 import { registerIntegrationRoutes } from './integration-routes.js';
+import { registerBitbucketPublishing } from './bitbucket-publishing.js';
 import { registerGitHubWebhook } from './github-webhook.js';
 
 declare module 'fastify' {
@@ -91,6 +92,7 @@ export async function createApp(
   });
 
   await registerGitHubWebhook(app, integrations);
+  await registerBitbucketPublishing(app, integrations);
 
   app.get('/health', async (_req, reply) => {
     try {

@@ -1,8 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { DomainError, type Principal } from '../../../packages/domain/src/index.js';
-import { ProviderError } from '../../../packages/integrations/src/github-actions.js';
+import { ProviderError } from '../../../packages/integrations/src/provider-http.js';
 import { sha256 } from './artifact-store.js';
-import { adapterConnection, IntegrationService, type ImportJob } from './integration-service.js';
+import {
+  adapterConnection,
+  IntegrationService,
+  type ImportJob,
+  type ProviderConnectionRecord,
+} from './integration-service.js';
+
+import { verifyBitbucketRun } from './bitbucket-publishing.js';
 
 const maximumAttempts = 5;
 const leaseSeconds = 120;
@@ -128,6 +135,10 @@ export class ArtifactImportWorker {
       );
     }
 
+    if (connection.provider === 'bitbucket-pipelines') {
+      return this.importBitbucket(job, connection);
+    }
+
     const adapter = this.integrations.adapter(connection);
     const reference = adapterConnection(connection);
     const run = await adapter.getRun(reference, job.run_id);
@@ -243,7 +254,125 @@ export class ArtifactImportWorker {
       );
     }
 
-    // Write outside the final transaction. A lost lease may leave an unreferenced immutable blob.
+    await this.retain(
+      job,
+      connection,
+      bytes,
+      digest,
+      `gh-${run.id}.${run.attempt}.${artifact.id}`,
+      {
+        source: 'github-actions',
+        connection_id: connection.id,
+        repository: connection.repository,
+        repository_id: connection.repository_id,
+        workflow_id: run.pipelineId,
+        run_id: run.id,
+        run_attempt: run.attempt,
+        run_url: run.url,
+        original_status: run.originalStatus,
+        commit: run.commit,
+        branch: run.branch,
+        artifact_id: artifact.id,
+        provider_digest: artifact.digest,
+        archive_format: 'zip',
+      },
+    );
+  }
+
+  private async importBitbucket(job: ImportJob, connection: ProviderConnectionRecord) {
+    if (!job.candidate_digest || !job.candidate_commit || !job.candidate_step_id) {
+      throw new ProviderError(
+        'PUBLISH_REQUIRED',
+        'Submit an artifact from the Bitbucket publishing step.',
+      );
+    }
+
+    const adapter = this.integrations.bitbucketAdapter(connection);
+    const reference = adapterConnection(connection);
+    const run = await adapter.getRun(reference, job.run_id);
+
+    verifyBitbucketRun(connection, run, job.candidate_commit);
+
+    if (run.status === 'running' || run.status === 'queued') {
+      if (Date.now() - new Date(job.created_at).getTime() >= 24 * 60 * 60 * 1000) {
+        throw new ProviderError(
+          'RUN_WAIT_EXPIRED',
+          'The pipeline did not complete within 24 hours of publishing. Start a new pipeline.',
+        );
+      }
+
+      throw new ProviderError(
+        'RUN_AWAITING_COMPLETION',
+        'Waiting for the full Bitbucket pipeline to succeed.',
+        true,
+        30,
+      );
+    }
+
+    const step = await adapter.getStep(job.run_id, job.candidate_step_id);
+
+    if (
+      run.status !== 'succeeded' ||
+      step.state.name !== 'COMPLETED' ||
+      step.state.result?.name !== 'SUCCESSFUL'
+    ) {
+      throw new ProviderError(
+        'RUN_NOT_SUCCESSFUL',
+        'The pipeline and publishing step must both succeed before this artifact can be released.',
+      );
+    }
+
+    const bytes = await this.integrations.control.store.get(
+      job.organisation_id,
+      job.candidate_digest,
+    );
+
+    const currentRun = await adapter.getRun(reference, job.run_id);
+
+    verifyBitbucketRun(connection, currentRun, job.candidate_commit);
+
+    if (currentRun.status !== 'succeeded') {
+      throw new ProviderError(
+        'RUN_CHANGED',
+        'The pipeline changed during verification. Retry after it completes.',
+        true,
+      );
+    }
+
+    await this.retain(
+      job,
+      connection,
+      bytes,
+      job.candidate_digest,
+      `bb-${run.id.replace(/[{}]/g, '')}`,
+      {
+        source: 'bitbucket-pipelines',
+        connection_id: connection.id,
+        repository: connection.repository,
+        repository_id: connection.repository_id,
+        workflow_id: run.pipelineId,
+        run_id: run.id,
+        run_url: run.url,
+        original_status: run.originalStatus,
+        commit: run.commit,
+        branch: run.branch,
+        step_id: job.candidate_step_id,
+        build_number: run.buildNumber,
+        digest_source: 'authenticated-publisher',
+        verified_digest: job.candidate_digest,
+      },
+    );
+  }
+
+  private async retain(
+    job: ImportJob,
+    connection: ProviderConnectionRecord,
+    bytes: Buffer,
+    digest: string,
+    version: string,
+    provenance: Record<string, unknown>,
+  ) {
+    // A lost lease may leave an unreferenced immutable blob, never a release artifact.
     await this.integrations.control.store.put(job.organisation_id, digest, bytes);
     const tx = await this.db.connect();
 
@@ -309,29 +438,14 @@ export class ArtifactImportWorker {
         {
           project_id: job.project_id,
           name: connection.artifact_name,
-          version: `gh-${run.id}.${run.attempt}.${artifact.id}`,
+          version,
           digest,
         },
         bytes,
-        {
-          source: 'github-actions',
-          connection_id: connection.id,
-          repository: connection.repository,
-          repository_id: connection.repository_id,
-          workflow_id: run.pipelineId,
-          run_id: run.id,
-          run_attempt: run.attempt,
-          run_url: run.url,
-          original_status: run.originalStatus,
-          commit: run.commit,
-          branch: run.branch,
-          artifact_id: artifact.id,
-          provider_digest: artifact.digest,
-          archive_format: 'zip',
-        },
+        provenance,
       );
 
-      await tx.query(
+      const completed = await tx.query(
         `
           UPDATE artifact_imports
           SET
@@ -345,14 +459,21 @@ export class ArtifactImportWorker {
           WHERE
             id = $1
             AND lease_token = $2
+            AND lease_expires_at > clock_timestamp()
         `,
         [job.id, job.lease_token, retained.id],
       );
 
+      if (!completed.rowCount) {
+        await tx.query('ROLLBACK');
+
+        return;
+      }
+
       await this.integrations.control.audit(tx, principal, 'artifact.imported', retained.id, {
         import_id: job.id,
         connection_id: connection.id,
-        run_id: run.id,
+        run_id: job.run_id,
         digest,
       });
 
@@ -382,7 +503,8 @@ export class ArtifactImportWorker {
       retryAfter = error.retryAfterSeconds;
     }
 
-    const retry = retryable && job.attempts < maximumAttempts;
+    const waiting = code === 'RUN_AWAITING_COMPLETION';
+    const retry = waiting || (retryable && job.attempts < maximumAttempts);
     const delay = Math.max(retryAfter, Math.min(300, 5 * 2 ** (job.attempts - 1)));
 
     await this.db.query(
@@ -390,6 +512,7 @@ export class ArtifactImportWorker {
         UPDATE artifact_imports
         SET
           status = $3,
+          attempts = CASE WHEN $7 THEN attempts - 1 ELSE attempts END,
           available_at = now() + ($4 * interval '1 second'),
           lease_token = NULL,
           lease_expires_at = NULL,
@@ -400,8 +523,9 @@ export class ArtifactImportWorker {
           id = $1
           AND lease_token = $2
           AND status = 'processing'
+          AND lease_expires_at > clock_timestamp()
       `,
-      [job.id, job.lease_token, retry ? 'pending' : 'failed', delay, code, message],
+      [job.id, job.lease_token, retry ? 'pending' : 'failed', delay, code, message, waiting],
     );
   }
 }

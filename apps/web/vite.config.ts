@@ -9,6 +9,7 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       '/api': process.env.KEEL_API_URL || 'http://127.0.0.1:4040',
+      '/publish': process.env.KEEL_API_URL || 'http://127.0.0.1:4040',
       '/webhooks': process.env.KEEL_API_URL || 'http://127.0.0.1:4040',
     },
   },

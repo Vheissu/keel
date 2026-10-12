@@ -1,5 +1,8 @@
 import { z } from 'zod';
-import { DomainError } from '../../domain/src/index.js';
+import { boundedResponse, ProviderError } from './provider-http.js';
+
+export { boundedResponse, ProviderError } from './provider-http.js';
+
 import {
   githubCapabilities,
   type CIProviderAdapter,
@@ -59,70 +62,6 @@ export interface GitHubRun extends ExternalRun {
   branch: string | null;
   event: string;
   startedAt: string;
-}
-
-export class ProviderError extends DomainError {
-  constructor(
-    code: string,
-    message: string,
-    public retryable = false,
-    public retryAfterSeconds = 0,
-  ) {
-    super(code, message, retryable ? 503 : 422);
-  }
-}
-
-export async function boundedResponse(response: Response, maximumBytes: number): Promise<Buffer> {
-  const reader = response.body?.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-
-  if (!reader) {
-    throw new ProviderError('PROVIDER_RESPONSE_INVALID', 'GitHub returned an empty response.');
-  }
-
-  try {
-    if (Number(response.headers.get('content-length')) > maximumBytes) {
-      throw new ProviderError(
-        'PROVIDER_SIZE_LIMIT',
-        'The GitHub response exceeds the configured size limit.',
-      );
-    }
-
-    while (true) {
-      const chunk = await reader.read();
-
-      if (chunk.done) {
-        break;
-      }
-
-      size += chunk.value.length;
-
-      if (size > maximumBytes) {
-        throw new ProviderError(
-          'PROVIDER_SIZE_LIMIT',
-          'The GitHub response exceeds the configured size limit.',
-        );
-      }
-
-      chunks.push(chunk.value);
-    }
-
-    return Buffer.concat(chunks);
-  } catch (error) {
-    if (error instanceof ProviderError) {
-      throw error;
-    }
-
-    throw new ProviderError(
-      'PROVIDER_UNAVAILABLE',
-      'The GitHub response was interrupted. The import will retry.',
-      true,
-    );
-  } finally {
-    await reader.cancel().catch(() => {});
-    reader.releaseLock();
-  }
 }
 
 export class GitHubActionsAdapter implements CIProviderAdapter {
@@ -226,7 +165,7 @@ export class GitHubActionsAdapter implements CIProviderAdapter {
     }
 
     try {
-      const bytes = await boundedResponse(response, 2 * 1024 * 1024);
+      const bytes = await boundedResponse(response, 2 * 1024 * 1024, 'GitHub');
 
       return schema.parse(JSON.parse(bytes.toString('utf8')));
     } catch (error) {
@@ -419,7 +358,7 @@ export class GitHubActionsAdapter implements CIProviderAdapter {
         );
       }
 
-      return await boundedResponse(archive, 25 * 1024 * 1024);
+      return await boundedResponse(archive, 25 * 1024 * 1024, 'GitHub');
     } catch (error) {
       if (error instanceof ProviderError) {
         throw error;

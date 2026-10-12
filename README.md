@@ -2,11 +2,11 @@
 
 Build anywhere. Deploy everywhere.
 
-Keel is a continuous delivery application for artifacts built by your existing CI. This repository contains the control-plane foundation and GitHub Actions artifact ingestion stage from [PLAN.md](PLAN.md).
+Keel is a continuous delivery application for artifacts built by your existing CI. This repository contains the control-plane foundation, GitHub Actions ingestion and Bitbucket Pipelines publishing stages from [PLAN.md](PLAN.md).
 
 You can create projects, publish files with SHA-256 verification, create immutable releases, request deployments to staging or production, approve them from a separate identity, and inspect the audit trail. The Aurelia interface uses navy, sea teal, off-white, and small animated boats for loading states. Motion follows the operating system’s reduced-motion preference.
 
-Deployment execution is not implemented yet. Requests remain queued; Keel does not run scripts or report a successful deployment. GitHub artifact imports and S3 storage are available. Bitbucket ingestion, Temporal deployment workers, agents and rollback are the next stages.
+Deployment execution is not implemented yet. Requests remain queued; Keel does not run scripts or report a successful deployment. GitHub imports, Bitbucket publishing and S3 storage are available. Temporal deployment workers, agents and rollback are the next stages.
 
 ## Run locally
 
@@ -33,6 +33,10 @@ Open **Integrations** to connect a project to a GitHub repository, workflow, bra
 A signed successful-workflow webhook or manual import request queues the import worker. It verifies the run and archive checksum, then retains the ZIP with its source provenance. Create a release from that artifact in the Releases screen. Imports do not create deployments automatically.
 
 See [GitHub setup and CLI examples](docs/github-actions.md).
+
+## Bitbucket Pipelines
+
+[Connect Bitbucket Pipelines](docs/bitbucket-pipelines.md) and copy the standalone publisher into your build repository. Keel accepts the artifact from a running step and waits for the complete pipeline to succeed before making it available for releases. The publisher uses a credential scoped to that connection, not an operator token. Native Bitbucket artifact download is not implemented.
 
 ## Publish from a build
 

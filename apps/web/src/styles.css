@@ -1103,6 +1103,11 @@ nav-icon svg {
   color: var(--muted);
 }
 
+.integration-toolbar .header-actions {
+  flex-wrap: wrap;
+  flex-shrink: 1;
+}
+
 .connection-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));

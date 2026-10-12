@@ -33,11 +33,11 @@ Pause API writes and stop import workers before switching drivers. Configure the
 npm run storage:copy-to-s3
 ```
 
-The command reads every distinct blob referenced by artifact metadata, verifies the local bytes, writes them conditionally to S3, and verifies the retained copy. It does not change database records or delete local files. Re-running it is safe. Do not restart with the S3 driver until the command reports every referenced blob verified. Keep the local files until you have a tested backup of S3 and PostgreSQL.
+The command reads every distinct blob referenced by artifact metadata or a Bitbucket submission, verifies the local bytes, writes them conditionally to S3, and verifies the retained copy. It does not change database records or delete local files. Re-running it is safe. Do not restart with the S3 driver until the command reports every referenced blob verified. Keep the local files until you have a tested backup of S3 and PostgreSQL.
 
 ## Retention behaviour
 
-Keys are `<organisation UUID>/<sha256>`. Uploads use `If-None-Match: *`; an existing object is read and verified instead of overwritten. A corrupt existing object causes an error and is not silently repaired. Failed imports can leave unreferenced blobs. No garbage collector or automatic retention expiry runs in this stage.
+Keys are `<organisation UUID>/<sha256>`. Uploads use `If-None-Match: *`; an existing object is read and verified instead of overwritten. A corrupt existing object causes an error and is not silently repaired. Pending and failed Bitbucket submissions also retain private blobs. Failed imports can leave unreferenced blobs. No garbage collector or automatic retention expiry runs in this stage.
 
 The adapter does not configure bucket permissions, versioning, object lock, replication or lifecycle rules. Its runtime credentials need object put/get access to the configured bucket. Avoid delete permissions and lifecycle rules that remove retained release artifacts. Backups must cover database metadata, blobs and the credential encryption key.
 

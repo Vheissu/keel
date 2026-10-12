@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { readFile, stat } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
@@ -7,6 +9,7 @@ import { parseProcess } from '../../../packages/deployment-schema/src/index.js';
 const { values, positionals } = parseArgs({
   allowPositionals: true,
   options: {
+    provider: { type: 'string' },
     project: { type: 'string' },
     name: { type: 'string' },
     version: { type: 'string' },
@@ -26,6 +29,9 @@ const help = `Keel · publish existing build outputs and create immutable releas
 
   npm run keel -- artifact publish <file> --project <uuid> --name application --version 1.0.0
   npm run keel -- release create --project <uuid> --artifact <uuid> --version 1.0.0 --process process.yaml
+  npm run keel -- artifact publish-bitbucket <file> --connection <uuid>
+  npm run keel -- integration connect --provider bitbucket --config bitbucket.json
+  npm run keel -- integration rotate <connection-uuid> --provider bitbucket
   npm run keel -- integration list
   npm run keel -- integration connect --config github.json
   npm run keel -- integration rotate <connection-uuid>
@@ -37,6 +43,7 @@ const help = `Keel · publish existing build outputs and create immutable releas
 
 Set KEEL_URL (default http://127.0.0.1:4040) and KEEL_TOKEN.
 Connection creation and rotation use KEEL_GITHUB_TOKEN and KEEL_GITHUB_WEBHOOK_SECRET.
+Bitbucket uses KEEL_BITBUCKET_TOKEN and KEEL_PUBLISH_SECRET; publishing needs only KEEL_PUBLISH_SECRET.
 For retryable CI steps, pass a stable --idempotency-key (8–128 characters).
 Results are JSON. Deployment requests and approvals are available in the UI and API.
 `;
@@ -123,13 +130,28 @@ try {
   } else if (command === 'integration' && subcommand === 'list') {
     console.log(JSON.stringify(await request('/integrations'), null, 2));
   } else if (command === 'integration' && (subcommand === 'connect' || subcommand === 'rotate')) {
-    const credentials = {
-      token: process.env.KEEL_GITHUB_TOKEN,
-      webhook_secret: process.env.KEEL_GITHUB_WEBHOOK_SECRET,
-    };
+    const bitbucket = values.provider === 'bitbucket';
 
-    if (!credentials.token || !credentials.webhook_secret) {
-      throw new Error('Set KEEL_GITHUB_TOKEN and KEEL_GITHUB_WEBHOOK_SECRET.');
+    if (values.provider && !['github', 'bitbucket'].includes(values.provider)) {
+      throw new Error('--provider must be github or bitbucket.');
+    }
+
+    const credentials = bitbucket
+      ? { token: process.env.KEEL_BITBUCKET_TOKEN, publish_secret: process.env.KEEL_PUBLISH_SECRET }
+      : {
+          token: process.env.KEEL_GITHUB_TOKEN,
+          webhook_secret: process.env.KEEL_GITHUB_WEBHOOK_SECRET,
+        };
+
+    if (
+      !credentials.token ||
+      !(bitbucket ? credentials.publish_secret : credentials.webhook_secret)
+    ) {
+      throw new Error(
+        bitbucket
+          ? 'Set KEEL_BITBUCKET_TOKEN and KEEL_PUBLISH_SECRET.'
+          : 'Set KEEL_GITHUB_TOKEN and KEEL_GITHUB_WEBHOOK_SECRET.',
+      );
     }
 
     if (subcommand === 'connect') {
@@ -137,7 +159,10 @@ try {
 
       console.log(
         JSON.stringify(
-          await request('/integrations/github', { ...config, ...credentials }),
+          await request(bitbucket ? '/integrations/bitbucket' : '/integrations/github', {
+            ...config,
+            ...credentials,
+          }),
           null,
           2,
         ),
@@ -149,7 +174,10 @@ try {
 
       console.log(
         JSON.stringify(
-          await request(`/integrations/${encodeURIComponent(file)}/credentials`, credentials),
+          await request(
+            `/integrations/${encodeURIComponent(file)}/${bitbucket ? 'bitbucket-credentials' : 'credentials'}`,
+            credentials,
+          ),
           null,
           2,
         ),
@@ -173,6 +201,20 @@ try {
         ),
       );
     }
+  } else if (command === 'artifact' && subcommand === 'publish-bitbucket') {
+    if (!file) {
+      throw new Error('Provide an artifact file.');
+    }
+
+    execFileSync(
+      process.execPath,
+      [
+        fileURLToPath(new URL('../../../scripts/publish-bitbucket.mjs', import.meta.url)),
+        file,
+        required('connection'),
+      ],
+      { stdio: 'inherit' },
+    );
   } else if (command === 'artifact' && subcommand === 'import') {
     console.log(
       JSON.stringify(

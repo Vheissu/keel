@@ -4,6 +4,7 @@ import { Api } from './api';
 
 interface Connection {
   id: string;
+  provider: 'github-actions' | 'bitbucket-pipelines';
   project_id: string;
   name: string;
   repository: string;
@@ -55,6 +56,8 @@ export class IntegrationsPanel {
   artifactName = 'application';
   providerToken = '';
   webhookSecret = '';
+  publishSecret = '';
+  provider: Connection['provider'] = 'github-actions';
   runId = '';
   runAttempt = 1;
   private revision = 0;
@@ -68,17 +71,30 @@ export class IntegrationsPanel {
     this.revision++;
     this.providerToken = '';
     this.webhookSecret = '';
+    this.publishSecret = '';
     this.dialog?.close();
   }
 
   get formTitle() {
     const titles = {
-      connect: 'Connect GitHub Actions',
+      connect: `Connect ${this.providerLabel}`,
       import: 'Import a workflow artifact',
       rotate: 'Rotate connection credentials',
     };
 
     return this.form ? titles[this.form] : '';
+  }
+
+  get providerLabel() {
+    return this.provider === 'bitbucket-pipelines' ? 'Bitbucket Pipelines' : 'GitHub Actions';
+  }
+
+  repositoryUrl(connection: Connection) {
+    return `https://${connection.provider === 'bitbucket-pipelines' ? 'bitbucket.org' : 'github.com'}/${connection.repository}`;
+  }
+
+  publisherCommand(connection: Connection) {
+    return `KEEL_CONNECTION_ID=${connection.id} node scripts/publish-bitbucket.mjs dist/application.tar.gz`;
   }
 
   projectName(id: string) {
@@ -128,18 +144,24 @@ export class IntegrationsPanel {
     }
   }
 
-  open(form: typeof this.form, connection: Connection | null = null) {
+  open(
+    form: typeof this.form,
+    connection: Connection | null = null,
+    provider: Connection['provider'] = 'github-actions',
+  ) {
     this.returnFocus = document.activeElement as HTMLElement;
     this.form = form;
     this.selected = connection;
+    this.provider = connection?.provider ?? provider;
     this.name = '';
     this.projectId = this.projects[0]?.id ?? '';
     this.repository = '';
-    this.workflowId = '';
+    this.workflowId = this.provider === 'bitbucket-pipelines' ? 'branches:main' : '';
     this.branch = 'main';
     this.artifactName = 'application';
     this.providerToken = '';
     this.webhookSecret = '';
+    this.publishSecret = '';
     this.runId = '';
     this.runAttempt = 1;
     this.error = '';
@@ -159,6 +181,7 @@ export class IntegrationsPanel {
     this.form = '';
     this.providerToken = '';
     this.webhookSecret = '';
+    this.publishSecret = '';
     this.returnFocus?.focus();
   }
 
@@ -176,27 +199,42 @@ export class IntegrationsPanel {
     this.error = '';
 
     try {
+      const bitbucket = this.provider === 'bitbucket-pipelines';
+
+      const credentials = bitbucket
+        ? { token: this.providerToken, publish_secret: this.publishSecret }
+        : { token: this.providerToken, webhook_secret: this.webhookSecret };
+
       if (this.form === 'connect') {
-        await this.api.request('/integrations/github', 'POST', {
-          name: this.name,
-          project_id: this.projectId,
-          repository: this.repository,
-          workflow_id: this.workflowId,
-          branch: this.branch,
-          artifact_name: this.artifactName,
-          token: this.providerToken,
-          webhook_secret: this.webhookSecret,
-        });
+        await this.api.request(
+          bitbucket ? '/integrations/bitbucket' : '/integrations/github',
+          'POST',
+          {
+            name: this.name,
+            project_id: this.projectId,
+            repository: this.repository,
+            workflow_id: this.workflowId,
+            branch: this.branch,
+            artifact_name: this.artifactName,
+            ...credentials,
+          },
+        );
 
-        this.notice =
-          'GitHub Actions connected. Add the webhook in your repository to import successful runs.';
+        this.notice = bitbucket
+          ? 'Bitbucket connected. Add the publishing step to submit build artifacts.'
+          : 'GitHub Actions connected. Add the webhook in your repository to import successful runs.';
       } else if (this.form === 'rotate' && this.selected) {
-        await this.api.request(`/integrations/${this.selected.id}/credentials`, 'POST', {
-          token: this.providerToken,
-          webhook_secret: this.webhookSecret,
-        });
+        await this.api.request(
+          `/integrations/${this.selected.id}/${bitbucket ? 'bitbucket-credentials' : 'credentials'}`,
+          'POST',
+          {
+            ...credentials,
+          },
+        );
 
-        this.notice = 'Credentials rotated. Update the webhook secret in GitHub to match.';
+        this.notice = bitbucket
+          ? 'Credentials rotated. Update KEEL_PUBLISH_SECRET in Bitbucket to match.'
+          : 'Credentials rotated. Update the webhook secret in GitHub to match.';
       } else if (this.form === 'import' && this.selected) {
         await this.api.request(`/integrations/${this.selected.id}/imports`, 'POST', {
           run_id: this.runId,

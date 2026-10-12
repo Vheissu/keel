@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { requirePermission } from '../../../packages/domain/src/index.js';
+import { bitbucketConnectionInput, bitbucketCredentialsInput } from './bitbucket-input.js';
 import { sha256 } from './artifact-store.js';
 import {
   adapterConnection,
@@ -71,6 +72,18 @@ export async function registerIntegrationRoutes(api: FastifyInstance, service: I
     const input = connectionInput.parse(req.body);
 
     return mutate(req, (tx) => service.create(tx, req.principal, input));
+  });
+
+  api.post('/integrations/bitbucket', async (req) => {
+    const input = bitbucketConnectionInput.parse(req.body);
+
+    return mutate(req, (tx) => service.createBitbucket(tx, req.principal, input));
+  });
+
+  api.post<{ Params: { id: string } }>('/integrations/:id/bitbucket-credentials', async (req) => {
+    const input = bitbucketCredentialsInput.parse(req.body);
+
+    return mutate(req, (tx) => service.rotateBitbucket(tx, req.principal, req.params.id, input));
   });
 
   api.post<{ Params: { id: string } }>('/integrations/:id/credentials', async (req) => {

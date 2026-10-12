@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { DomainError, type Principal } from '../../../packages/domain/src/index.js';
 import { sha256 } from './artifact-store.js';
-import { IntegrationService, type GitHubConnection } from './integration-service.js';
+import { IntegrationService, type ProviderConnectionRecord } from './integration-service.js';
 
 const runEvent = z.object({
   action: z.string(),
@@ -41,8 +41,17 @@ export async function registerGitHubWebhook(app: FastifyInstance, service: Integ
 
         const signature = String(req.headers['x-hub-signature-256'] ?? '');
 
-        const result = await service.control.db.query<GitHubConnection>(
-          'SELECT * FROM provider_connections WHERE id = $1 AND enabled = true',
+        const result = await service.control.db.query<ProviderConnectionRecord>(
+          `
+            SELECT
+              *
+            FROM
+              provider_connections
+            WHERE
+              id = $1
+              AND enabled = TRUE
+              AND provider = 'github-actions'
+          `,
           [id],
         );
 

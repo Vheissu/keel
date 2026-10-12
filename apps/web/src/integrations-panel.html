@@ -12,6 +12,14 @@
     >
       Connect GitHub Actions
     </button>
+    <button
+      class="button secondary"
+      if.bind="canWrite"
+      click.trigger="open('connect', null, 'bitbucket-pipelines')"
+      disabled.bind="!data.configured || !projects.length || busy"
+    >
+      Connect Bitbucket Pipelines
+    </button>
   </div>
 </div>
 <div class="alert error" role="alert" if.bind="error && !form">${error}</div>
@@ -33,23 +41,21 @@
           <span>${connection.enabled ? 'Enabled' : 'Disabled'}</span>
         </div>
         <p>
-          <a
-            href.bind="'https://github.com/' + connection.repository"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
+          <a href.bind="repositoryUrl(connection)" target="_blank" rel="noopener noreferrer">
             ${connection.repository} ↗
           </a>
         </p>
         <dl class="connection-details">
           <dt>Project</dt>
           <dd>${projectName(connection.project_id)}</dd>
-          <dt>Workflow</dt>
+          <dt>
+            ${connection.provider === 'bitbucket-pipelines' ? 'Pipeline selector' : 'Workflow'}
+          </dt>
           <dd>${connection.workflow_id} · ${connection.branch}</dd>
           <dt>Artifact</dt>
           <dd>${connection.artifact_name}</dd>
         </dl>
-        <details class="webhook-details">
+        <details class="webhook-details" if.bind="connection.provider === 'github-actions'">
           <summary>Webhook setup</summary>
           <p>
             In GitHub repository settings, add this URL with content type application/json, the
@@ -61,9 +67,23 @@
             testing.
           </p>
         </details>
+        <details class="webhook-details" if.bind="connection.provider === 'bitbucket-pipelines'">
+          <summary>Publishing setup</summary>
+          <p>
+            Copy scripts/publish-bitbucket.mjs from Keel into your repository. Set KEEL_URL to your
+            HTTPS API address and save KEEL_PUBLISH_SECRET as a secured Bitbucket variable
+            restricted to trusted builds.
+          </p>
+          <code>${publisherCommand(connection)}</code>
+          <p>
+            Run with Node 22 or later while the step is running. Keel waits for the full pipeline to
+            succeed before making the artifact available for releases. Maximum 25 MiB.
+          </p>
+        </details>
         <div class="connection-actions" if.bind="canWrite">
           <button
             class="button primary"
+            if.bind="connection.provider === 'github-actions'"
             click.trigger="open('import', connection)"
             disabled.bind="!connection.enabled || busy"
           >
@@ -85,7 +105,10 @@
     <div class="empty-state" if.bind="!data.connections.length">
       <boat-mark></boat-mark>
       <h2>Bring your builds aboard.</h2>
-      <p>Connect a GitHub Actions workflow to retain its artifacts and create releases in Keel.</p>
+      <p>
+        Connect GitHub Actions or Bitbucket Pipelines to retain build artifacts and create releases
+        in Keel.
+      </p>
     </div>
   </section>
   <section class="imports-section" aria-labelledby="imports-title">
@@ -119,11 +142,11 @@
               <small if.bind="job.status === 'pending' && job.attempts">
                 Next attempt after ${date(job.available_at)}
               </small>
-              <span if.bind="job.status === 'pending' && !job.attempts">
+              <span if.bind="job.status === 'pending' && !job.attempts && !job.error_message">
                 Waiting for the import worker.
               </span>
               <span if.bind="job.status === 'processing'">
-                Verifying the run and downloading its archive.
+                Verifying the run and retaining its artifact.
               </span>
             </td>
             <td>${date(job.created_at)}</td>
@@ -149,12 +172,12 @@
         </tbody>
       </table>
       <div class="empty-state compact" if.bind="!data.imports.length">
-        <p>Successful workflow webhooks and manual requests will appear here.</p>
+        <p>Webhook imports, manual requests and Bitbucket submissions will appear here.</p>
       </div>
     </div>
     <p class="help">
-      GitHub Actions artifact ingestion is available. Bitbucket Pipelines, Azure Pipelines, GitLab
-      CI and Jenkins adapters are not implemented yet. Imports do not trigger deployments.
+      GitHub Actions imports and Bitbucket publishing are available. Azure Pipelines, GitLab CI and
+      Jenkins adapters are not implemented yet. Imports do not trigger deployments.
     </p>
   </section>
 </template>
@@ -166,7 +189,7 @@
 >
   <div class="dialog-heading">
     <div>
-      <span class="eyebrow">GitHub Actions</span>
+      <span class="eyebrow">${providerLabel}</span>
       <h2 id="integration-dialog-title">${formTitle}</h2>
     </div>
     <button
@@ -194,7 +217,9 @@
         <select id="connection-project" value.bind="projectId" required>
           <option repeat.for="project of projects" model.bind="project.id">${project.name}</option>
         </select>
-        <label for="connection-repository">GitHub repository</label>
+        <label for="connection-repository">
+          ${provider === 'bitbucket-pipelines' ? 'Bitbucket repository' : 'GitHub repository'}
+        </label>
         <input
           id="connection-repository"
           value.bind="repository"
@@ -203,17 +228,33 @@
           autocapitalize="none"
           spellcheck="false"
         />
-        <label for="connection-workflow">Workflow ID</label>
-        <input
-          id="connection-workflow"
-          value.bind="workflowId"
-          required
-          inputmode="numeric"
-          pattern="[1-9][0-9]*"
-        />
-        <p class="help">
-          Use the numeric ID returned by GitHub’s workflows API or gh workflow list.
-        </p>
+        <template if.bind="provider === 'github-actions'">
+          <label for="connection-workflow">Workflow ID</label>
+          <input
+            id="connection-workflow"
+            value.bind="workflowId"
+            required
+            inputmode="numeric"
+            pattern="[1-9][0-9]*"
+          />
+          <p class="help">
+            Use the numeric ID returned by GitHub’s workflows API or gh workflow list.
+          </p>
+        </template>
+        <template if.bind="provider === 'bitbucket-pipelines'">
+          <label for="bitbucket-selector">Pipeline selector</label>
+          <input
+            id="bitbucket-selector"
+            value.bind="workflowId"
+            required
+            maxlength="255"
+            placeholder="branches:main"
+          />
+          <p class="help">
+            Match the pipeline definition exactly: branches:main, default: or custom:release. The
+            allowed branch is checked separately.
+          </p>
+        </template>
         <label for="connection-branch">Allowed branch</label>
         <input
           id="connection-branch"
@@ -222,11 +263,16 @@
           maxlength="255"
           autocapitalize="none"
         />
-        <label for="connection-artifact">GitHub artifact name</label>
+        <label for="connection-artifact">
+          ${provider === 'bitbucket-pipelines' ? 'Artifact name' : 'GitHub artifact name'}
+        </label>
         <input id="connection-artifact" value.bind="artifactName" required maxlength="100" />
       </template>
       <template if.bind="form === 'connect' || form === 'rotate'">
-        <label for="provider-token">GitHub access token</label>
+        <label for="provider-token">
+          ${provider === 'bitbucket-pipelines' ? 'Bitbucket repository access token' : 'GitHub
+          access token'}
+        </label>
         <input
           id="provider-token"
           type="password"
@@ -236,24 +282,48 @@
           maxlength="1024"
           autocomplete="new-password"
         />
-        <p class="help">
-          Use a fine-grained token with Actions: read access to this repository. Credentials are
-          encrypted and never returned by the API.
-        </p>
-        <label for="webhook-secret">Webhook secret</label>
-        <input
-          id="webhook-secret"
-          type="password"
-          value.bind="webhookSecret"
-          required
-          minlength="32"
-          maxlength="256"
-          autocomplete="new-password"
-        />
-        <p class="help">
-          Supply a random secret of at least 32 characters and use the same value in GitHub’s
-          webhook settings.
-        </p>
+        <template if.bind="provider === 'github-actions'">
+          <p class="help">
+            Use a fine-grained token with Actions: read access to this repository. Credentials are
+            encrypted and never returned by the API.
+          </p>
+          <label for="webhook-secret">Webhook secret</label>
+          <input
+            id="webhook-secret"
+            type="password"
+            value.bind="webhookSecret"
+            required
+            minlength="32"
+            maxlength="256"
+            autocomplete="new-password"
+          />
+          <p class="help">
+            Supply a random secret of at least 32 characters and use the same value in GitHub’s
+            webhook settings.
+          </p>
+        </template>
+        <template if.bind="provider === 'bitbucket-pipelines'">
+          <p class="help">
+            Use a repository access token with Repository: read and Pipelines: read permissions.
+            This token stays in Keel.
+          </p>
+          <label for="publish-secret">Publishing secret</label>
+          <input
+            id="publish-secret"
+            type="password"
+            value.bind="publishSecret"
+            required
+            minlength="32"
+            maxlength="256"
+            pattern="[A-Za-z0-9_-]+"
+            autocomplete="new-password"
+          />
+          <p class="help">
+            Generate a random secret of at least 32 letters, digits, underscores or hyphens. Save
+            the same value as KEEL_PUBLISH_SECRET in trusted Bitbucket builds. It only authorises
+            artifact submissions to this connection.
+          </p>
+        </template>
       </template>
       <template if.bind="form === 'import'">
         <p class="help">

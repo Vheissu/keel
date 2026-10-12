@@ -15,6 +15,9 @@ import { CredentialVault } from '../../apps/api/src/credential-vault.js';
 import { IntegrationService } from '../../apps/api/src/integration-service.js';
 import { ArtifactImportWorker } from '../../apps/api/src/artifact-import-worker.js';
 import { GitHubActionsAdapter } from '../../packages/integrations/src/github-actions.js';
+import { BitbucketPipelinesAdapter } from '../../packages/integrations/src/bitbucket-pipelines.js';
+import { bitbucketFixture } from '../bitbucket-fixture.js';
+import { sha256 } from '../../apps/api/src/artifact-store.js';
 import { githubFixture } from '../github-fixture.js';
 
 const schema = `e2e_${randomUUID().replaceAll('-', '')}`;
@@ -23,6 +26,7 @@ const db = new pg.Pool({ connectionString: testDatabaseUrl, options: `-c search_
 let app: FastifyInstance, root: string, f: Awaited<ReturnType<typeof fixture>>;
 let errors: string[] = [];
 let github = githubFixture();
+let bitbucket = bitbucketFixture();
 let importWorker: ArtifactImportWorker;
 
 test.beforeAll(async () => {
@@ -39,6 +43,8 @@ test.beforeAll(async () => {
         async () => credentials,
         (...args) => github.transport(...args),
       ),
+    (credentials) =>
+      new BitbucketPipelinesAdapter(credentials, (...args) => bitbucket.transport(...args)),
   );
 
   importWorker = new ArtifactImportWorker(integrations);
@@ -51,6 +57,7 @@ test.beforeEach(async ({ page }) => {
   f = await fixture(db);
   errors = [];
   github = githubFixture();
+  bitbucket = bitbucketFixture();
   page.on('pageerror', (error) => errors.push(error.message));
 });
 
@@ -285,4 +292,105 @@ test('connects GitHub, retries a failed import, and uses the retained artifact i
 
   await page.getByRole('button', { name: '2.0.0', exact: true }).click();
   await expect(page.getByRole('dialog')).toContainText('"source": "github-actions"');
+});
+
+test('connects Bitbucket, waits for successful CI, and manages publishing credentials accessibly', async ({
+  page,
+}) => {
+  const project = await app.inject({
+    method: 'POST',
+    url: '/api/v1/projects',
+    headers: { authorization: `Bearer ${f.operator.token}`, 'idempotency-key': randomUUID() },
+    payload: { name: 'Bitbucket application', slug: 'bitbucket-app' },
+  });
+
+  expect(project.statusCode).toBe(200);
+  await connect(page);
+  await page.getByRole('link', { name: 'Integrations', exact: true }).click();
+  await page.getByRole('button', { name: 'Connect Bitbucket Pipelines', exact: true }).click();
+  await page.getByLabel('Connection name', { exact: true }).fill('Bitbucket release builds');
+  await page.getByLabel('Bitbucket repository', { exact: true }).fill('keel-test/application');
+  await expect(page.getByLabel('Pipeline selector', { exact: true })).toHaveValue('branches:main');
+
+  await page
+    .getByLabel('Bitbucket repository access token', { exact: true })
+    .fill('bitbucket-browser-test-repository-token');
+
+  await page
+    .getByLabel('Publishing secret', { exact: true })
+    .fill('bitbucket-browser-publishing-secret-32');
+
+  expect((await new AxeBuilder({ page }).include('dialog').analyze()).violations).toEqual([]);
+  await page.getByRole('button', { name: 'Save connection', exact: true }).click();
+  await expect(page.getByRole('dialog')).not.toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Bitbucket release builds' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Import run', exact: true })).toHaveCount(0);
+  await page.getByText('Publishing setup', { exact: true }).click();
+  await expect(page.getByText(/KEEL_CONNECTION_ID=/)).toBeVisible();
+
+  const connection = (
+    await app.inject({
+      method: 'GET',
+      url: '/api/v1/integrations',
+      headers: { authorization: `Bearer ${f.operator.token}` },
+    })
+  ).json().connections[0];
+
+  const submission = await app.inject({
+    method: 'POST',
+    url: `/publish/bitbucket/${connection.id}`,
+    headers: {
+      authorization: 'Bearer bitbucket-browser-publishing-secret-32',
+      'content-type': 'application/octet-stream',
+      'x-bitbucket-pipeline': bitbucket.state.run.uuid,
+      'x-bitbucket-step': bitbucket.state.step.uuid,
+      'x-bitbucket-commit': bitbucket.state.run.target.commit.hash,
+      'x-artifact-sha256': sha256(bitbucket.state.bytes),
+    },
+    payload: bitbucket.state.bytes,
+  });
+
+  expect(submission.statusCode).toBe(202);
+  await importWorker.runOnce();
+  await page.getByRole('button', { name: 'Refresh imports' }).click();
+
+  await expect(
+    page.getByText('Waiting for the full Bitbucket pipeline to succeed.', { exact: true }),
+  ).toBeVisible();
+
+  bitbucket.succeed();
+
+  await db.query('UPDATE artifact_imports SET available_at = now() WHERE id = $1', [
+    submission.json().id,
+  ]);
+
+  await importWorker.runOnce();
+  await page.getByRole('button', { name: 'Refresh imports' }).click();
+  await expect(page.getByText('Retained', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Rotate credentials', exact: true }).click();
+  await expect(page.getByLabel('Publishing secret', { exact: true })).toHaveValue('');
+
+  await page
+    .getByLabel('Bitbucket repository access token', { exact: true })
+    .fill('bitbucket-browser-test-rotated-token');
+
+  await page
+    .getByLabel('Publishing secret', { exact: true })
+    .fill('bitbucket-browser-publishing-secret-rotated');
+
+  await page.getByRole('button', { name: 'Save connection', exact: true }).click();
+  await expect(page.getByRole('dialog')).not.toBeVisible();
+  await page.getByRole('button', { name: 'Disable', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Enable', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Enable', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Disable', exact: true })).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.screenshot({ path: 'output/playwright/bitbucket-desktop.png', fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+
+  await page.screenshot({ path: 'output/playwright/bitbucket-mobile.png', fullPage: true });
 });

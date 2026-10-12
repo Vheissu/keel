@@ -521,7 +521,7 @@ describe('control plane against PostgreSQL', () => {
 
     expect(
       providers.filter((p: { available: boolean }) => p.available).map((p: { id: string }) => p.id),
-    ).toEqual(['github-actions']);
+    ).toEqual(['github-actions', 'bitbucket-pipelines']);
 
     expect((await post('/deployments/complete', { status: 'succeeded' })).statusCode).toBe(404);
   });

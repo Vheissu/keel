@@ -2,6 +2,7 @@ export type Provider =
   'github-actions' | 'bitbucket-pipelines' | 'azure-pipelines' | 'gitlab-ci' | 'jenkins';
 
 export interface ProviderCapabilities {
+  artifactIngestion: 'provider-download' | 'publishing-step' | 'unavailable';
   listPipelines: boolean;
   getRun: boolean;
   listArtifacts: boolean;
@@ -55,6 +56,7 @@ export interface CIProviderAdapter {
 }
 
 export const githubCapabilities: ProviderCapabilities = {
+  artifactIngestion: 'provider-download',
   listPipelines: true,
   getRun: true,
   listArtifacts: true,
@@ -65,6 +67,7 @@ export const githubCapabilities: ProviderCapabilities = {
 };
 
 const unavailableCapabilities: ProviderCapabilities = {
+  artifactIngestion: 'unavailable',
   listPipelines: false,
   getRun: false,
   listArtifacts: false,
@@ -74,16 +77,27 @@ const unavailableCapabilities: ProviderCapabilities = {
   rollback: false,
 };
 
+export const bitbucketCapabilities: ProviderCapabilities = {
+  ...unavailableCapabilities,
+  artifactIngestion: 'publishing-step',
+  getRun: true,
+};
+
 // Availability describes implemented adapters, not configured connections.
 const providerNames: { id: Provider; name: string; available: boolean }[] = [
   { id: 'github-actions', name: 'GitHub Actions', available: true },
-  { id: 'bitbucket-pipelines', name: 'Bitbucket Pipelines', available: false },
+  { id: 'bitbucket-pipelines', name: 'Bitbucket Pipelines', available: true },
   { id: 'azure-pipelines', name: 'Azure Pipelines', available: false },
   { id: 'gitlab-ci', name: 'GitLab CI/CD', available: false },
   { id: 'jenkins', name: 'Jenkins', available: false },
 ];
 
+const capabilitiesByProvider: Partial<Record<Provider, ProviderCapabilities>> = {
+  'github-actions': githubCapabilities,
+  'bitbucket-pipelines': bitbucketCapabilities,
+};
+
 export const providers = providerNames.map((provider) => ({
   ...provider,
-  capabilities: provider.available ? githubCapabilities : unavailableCapabilities,
+  capabilities: capabilitiesByProvider[provider.id] ?? unavailableCapabilities,
 }));
