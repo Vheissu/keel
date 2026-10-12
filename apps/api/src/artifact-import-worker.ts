@@ -369,8 +369,8 @@ export class ArtifactImportWorker {
     version: string,
     provenance: Record<string, unknown>,
   ) {
-    // A lost lease may leave an unreferenced immutable blob, never a release artifact.
-    await this.integrations.control.store.put(job.organisation_id, digest, bytes);
+    // control.artifact() stores the blob. A lost lease may leave an unreferenced immutable
+    // blob, never a release artifact.
     const tx = await this.db.connect();
 
     try {

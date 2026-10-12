@@ -16,7 +16,6 @@ export interface ProviderConnection {
   id: string;
   organisationId: string;
   provider: Provider;
-  credentialReference: string;
   repository: string;
 }
 

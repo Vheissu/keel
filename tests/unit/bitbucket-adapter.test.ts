@@ -10,7 +10,6 @@ const connection: ProviderConnection = {
   id: 'connection',
   organisationId: 'organisation',
   provider: 'bitbucket-pipelines',
-  credentialReference: 'credential',
   repository: 'keel-test/application',
 };
 

@@ -88,7 +88,6 @@ export function adapterConnection(connection: ProviderConnectionRecord): Provide
     organisationId: connection.organisation_id,
     provider: connection.provider,
     repository: connection.repository,
-    credentialReference: connection.id,
   };
 }
 
@@ -321,7 +320,6 @@ export class IntegrationService {
       organisationId: principal.organisation_id,
       provider: 'github-actions' as const,
       repository: input.repository,
-      credentialReference: id,
     };
 
     const repository = await this.createAdapter(input).verifyConnection(
