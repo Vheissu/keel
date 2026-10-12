@@ -1,6 +1,7 @@
 import { bindable, queueTask } from 'aurelia';
 import type { Environment, Project, Release } from '../../../packages/domain/src/index';
 import { Api } from './api';
+import { errorMessage, formatDate } from './format';
 
 interface Agent {
   id: string;
@@ -43,6 +44,7 @@ export class TargetsPanel {
   @bindable releases: Release[] = [];
   @bindable canWrite = false;
   data: Fleet | null = null;
+  loading = false;
   busy = false;
   error = '';
   notice = '';
@@ -60,7 +62,7 @@ export class TargetsPanel {
   private revision = 0;
 
   binding() {
-    return this.refresh();
+    void this.refresh();
   }
 
   unbinding() {
@@ -70,6 +72,9 @@ export class TargetsPanel {
   async refresh() {
     const revision = ++this.revision;
 
+    this.loading = true;
+    this.error = '';
+
     try {
       const data = await this.api.request<Fleet>('/execution');
 
@@ -78,7 +83,11 @@ export class TargetsPanel {
       }
     } catch (error) {
       if (revision === this.revision) {
-        this.error = error instanceof Error ? error.message : 'Could not load targets.';
+        this.error = errorMessage(error, 'Could not load targets.');
+      }
+    } finally {
+      if (revision === this.revision) {
+        this.loading = false;
       }
     }
   }
@@ -159,7 +168,7 @@ export class TargetsPanel {
       this.closeForm();
       await this.refresh();
     } catch (error) {
-      this.error = error instanceof Error ? error.message : 'Could not save.';
+      this.error = errorMessage(error, 'Could not save.');
     } finally {
       this.busy = false;
     }
@@ -179,7 +188,7 @@ export class TargetsPanel {
 
       await this.refresh();
     } catch (error) {
-      this.error = error instanceof Error ? error.message : 'Could not update agent.';
+      this.error = errorMessage(error, 'Could not update agent.');
     } finally {
       this.busy = false;
     }
@@ -238,6 +247,6 @@ export class TargetsPanel {
   }
 
   date(value: string | null) {
-    return value ? new Date(value).toLocaleString() : 'Not connected';
+    return value ? formatDate(value) : 'Not connected';
   }
 }

@@ -1,6 +1,7 @@
 import { bindable, queueTask } from 'aurelia';
 import type { Environment } from '../../../packages/domain/src/index';
 import { Api } from './api';
+import { errorMessage } from './format';
 
 export class EnvironmentPolicies {
   @bindable api!: Api;
@@ -55,7 +56,7 @@ export class EnvironmentPolicies {
       this.close();
       await this.refreshWorkspace();
     } catch (error) {
-      this.error = error instanceof Error ? error.message : 'Could not save the policy.';
+      this.error = errorMessage(error, 'Could not save the policy.');
     } finally {
       this.busy = false;
 

@@ -134,7 +134,7 @@ test('publishes an artifact, creates a release, and obtains a separate productio
   await page.getByRole('button', { name: '1.0.0', exact: true }).click();
   await expect(page.getByRole('dialog')).toContainText('"source": "direct-upload"');
   await page.getByRole('button', { name: 'Close dialog' }).click();
-  await page.getByRole('button', { name: 'Deploy', exact: true }).click();
+  await page.getByRole('button', { name: /^Deploy / }).click();
 
   await page
     .getByLabel('Environment', { exact: true })
@@ -146,13 +146,13 @@ test('publishes an artifact, creates a release, and obtains a separate productio
     .click();
 
   await expect(page.getByText('Awaiting approval', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Approve', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /^Approve / })).toHaveCount(0);
   const context = await browser.newContext();
   const approver = await context.newPage();
 
   await connect(approver, f.approver.token);
   await approver.getByRole('link', { name: /Deployments/ }).click();
-  await approver.getByRole('button', { name: 'Approve', exact: true }).click();
+  await approver.getByRole('button', { name: /^Approve / }).click();
   await expect(approver.getByText('Waiting for agent', { exact: true })).toBeVisible();
   await expect(approver.getByRole('button', { name: 'Request deployment' })).toHaveCount(0);
   await context.close();
@@ -249,7 +249,7 @@ test('connects GitHub, retries a failed import, and uses the retained artifact i
   await page.getByRole('button', { name: 'Save connection', exact: true }).click();
   await expect(page.getByRole('dialog')).not.toBeVisible();
   await expect(page.getByRole('heading', { name: 'Application builds' })).toBeVisible();
-  await page.getByRole('button', { name: 'Import run', exact: true }).click();
+  await page.getByRole('button', { name: /^Import run / }).click();
   await page.getByLabel('Workflow run ID', { exact: true }).fill('9001');
   await page.getByRole('button', { name: 'Queue import', exact: true }).click();
   await expect(page.getByRole('cell', { name: 'Queued', exact: true })).toBeVisible();
@@ -261,7 +261,7 @@ test('connects GitHub, retries a failed import, and uses the retained artifact i
   await page.getByRole('button', { name: 'Refresh imports', exact: true }).click();
   await expect(page.getByRole('cell', { name: 'Failed', exact: true })).toBeVisible();
   github.state.bytes = retainedBytes;
-  await page.getByRole('button', { name: 'Retry import', exact: true }).click();
+  await page.getByRole('button', { name: /^Retry import / }).click();
   await expect(page.getByRole('cell', { name: 'Queued', exact: true })).toBeVisible();
   await importWorker.runOnce();
   await page.getByRole('button', { name: 'Refresh imports', exact: true }).click();
@@ -326,7 +326,7 @@ test('connects Bitbucket, waits for successful CI, and manages publishing creden
   await page.getByRole('button', { name: 'Save connection', exact: true }).click();
   await expect(page.getByRole('dialog')).not.toBeVisible();
   await expect(page.getByRole('heading', { name: 'Bitbucket release builds' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Import run', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /^Import run / })).toHaveCount(0);
   await page.getByText('Publishing setup', { exact: true }).click();
   await expect(page.getByText(/KEEL_CONNECTION_ID=/)).toBeVisible();
 
@@ -369,7 +369,7 @@ test('connects Bitbucket, waits for successful CI, and manages publishing creden
   await importWorker.runOnce();
   await page.getByRole('button', { name: 'Refresh imports' }).click();
   await expect(page.getByText('Retained', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Rotate credentials', exact: true }).click();
+  await page.getByRole('button', { name: /^Rotate credentials / }).click();
   await expect(page.getByLabel('Publishing secret', { exact: true })).toHaveValue('');
 
   await page
@@ -382,10 +382,10 @@ test('connects Bitbucket, waits for successful CI, and manages publishing creden
 
   await page.getByRole('button', { name: 'Save connection', exact: true }).click();
   await expect(page.getByRole('dialog')).not.toBeVisible();
-  await page.getByRole('button', { name: 'Disable', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Enable', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Enable', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Disable', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: /^Disable / }).click();
+  await expect(page.getByRole('button', { name: /^Enable / })).toBeVisible();
+  await page.getByRole('button', { name: /^Enable / }).click();
+  await expect(page.getByRole('button', { name: /^Disable / })).toBeVisible();
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await page.screenshot({ path: 'output/playwright/bitbucket-desktop.png', fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
@@ -423,9 +423,9 @@ test('registers and drains private agents, maps Docker targets and remains acces
   await page.getByRole('button', { name: 'Save registration' }).click();
   await expect(page.getByRole('cell').filter({ hasText: 'Web staging' })).toBeVisible();
   await expect(page.getByRole('cell', { name: 'Unknown', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Drain', exact: true }).click();
+  await page.getByRole('button', { name: /^Drain / }).click();
   await expect(page.getByRole('cell', { name: 'draining', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Replace certificate', exact: true }).click();
+  await page.getByRole('button', { name: /^Replace certificate / }).click();
   await expect(page.getByRole('heading', { name: 'Replace agent certificate' })).toBeVisible();
   await page.getByLabel('Certificate SHA-256 fingerprint').fill(randomBytes(32).toString('hex'));
   await page.getByLabel('I stopped the old agent').check();
@@ -437,13 +437,13 @@ test('registers and drains private agents, maps Docker targets and remains acces
     .click();
 
   await expect(page.getByRole('status').filter({ hasText: 'Certificate replaced.' })).toBeVisible();
-  await page.getByRole('button', { name: 'Resume', exact: true }).click();
+  await page.getByRole('button', { name: /^Resume / }).click();
   await expect(page.getByRole('cell', { name: 'active', exact: true })).toBeVisible();
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await page.screenshot({ path: 'output/playwright/targets-desktop.png', fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole('button', { name: 'Drain', exact: true }).click();
-  await page.getByRole('button', { name: 'Replace certificate', exact: true }).click();
+  await page.getByRole('button', { name: /^Drain / }).click();
+  await page.getByRole('button', { name: /^Replace certificate / }).click();
   await expect(page.getByLabel('Certificate SHA-256 fingerprint')).toBeVisible();
 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
@@ -575,7 +575,7 @@ test('enforces promotion policy and reviews a retained-release rollback with a s
   await page
     .getByRole('row')
     .filter({ has: page.getByRole('button', { name: '3.0.0', exact: true }) })
-    .getByRole('button', { name: 'Deploy', exact: true })
+    .getByRole('button', { name: /^Deploy / })
     .click();
 
   await page
@@ -598,11 +598,11 @@ test('enforces promotion policy and reviews a retained-release rollback with a s
     .filter({ hasText: '2.0.0' })
     .filter({ hasText: 'Production' });
 
-  await current.getByRole('button', { name: 'Plan rollback', exact: true }).click();
+  await current.getByRole('button', { name: /^Plan rollback / }).click();
   await expect(page.getByRole('heading', { name: 'Plan an application rollback' })).toBeFocused();
   await page.getByRole('button', { name: 'Close rollback planner' }).click();
-  await expect(current.getByRole('button', { name: 'Plan rollback', exact: true })).toBeFocused();
-  await current.getByRole('button', { name: 'Plan rollback', exact: true }).click();
+  await expect(current.getByRole('button', { name: /^Plan rollback / })).toBeFocused();
+  await current.getByRole('button', { name: /^Plan rollback / }).click();
   await page.getByRole('button', { name: 'Review rollback plan' }).click();
   await expect(page.getByRole('heading', { name: 'Release 1.0.0 → Production' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Request rollback', exact: true })).toBeDisabled();
@@ -634,7 +634,7 @@ test('enforces promotion policy and reviews a retained-release rollback with a s
   await approver
     .getByRole('row')
     .filter({ hasText: 'Application rollback' })
-    .getByRole('button', { name: 'Approve', exact: true })
+    .getByRole('button', { name: /^Approve / })
     .click();
 
   await expect(approver.getByRole('row').filter({ hasText: 'Application rollback' })).toContainText(

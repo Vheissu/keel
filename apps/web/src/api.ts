@@ -1,4 +1,5 @@
 import type { Snapshot } from '../../../packages/domain/src/index.js';
+import { sha256Hex } from './format';
 
 export type Dashboard = Snapshot & {
   totals: Record<string, number>;
@@ -18,26 +19,26 @@ export class ApiError extends Error {
 export class Api {
   // Intentionally memory-only: an API token is never persisted to browser storage.
   token = '';
-  private pending: { fingerprint: string; key: string } | undefined;
+  // Called when the current token is rejected, so every caller ends the session the same way.
+  onUnauthorized: ((error: ApiError) => void) | null = null;
+  // Idempotency keys for in-flight writes. A request retried after a network error or 5xx reuses its key.
+  private pending = new Map<string, string>();
 
-  async request<T>(path: string, method = 'GET', body?: unknown, key?: string): Promise<T> {
+  /** `bodyDigest` is the SHA-256 hex of a binary body, when the caller has already computed it. */
+  async request<T>(path: string, method = 'GET', body?: unknown, bodyDigest?: string): Promise<T> {
+    const token = this.token;
     const binary = body instanceof ArrayBuffer;
+    let fingerprint = '';
+    let key = '';
 
-    if (method !== 'GET' && !key) {
+    if (method !== 'GET') {
       const content = binary
-        ? Array.from(
-            new Uint8Array(await crypto.subtle.digest('SHA-256', body as ArrayBuffer)),
-            (b) => b.toString(16).padStart(2, '0'),
-          ).join('')
+        ? (bodyDigest ?? (await sha256Hex(body as ArrayBuffer)))
         : JSON.stringify(body ?? {});
 
-      const fingerprint = `${this.token}:${method}:${path}:${content}`;
-
-      if (this.pending?.fingerprint !== fingerprint) {
-        this.pending = { fingerprint, key: crypto.randomUUID() };
-      }
-
-      key = this.pending.key;
+      fingerprint = `${token}:${method}:${path}:${content}`;
+      key = this.pending.get(fingerprint) ?? crypto.randomUUID();
+      this.pending.set(fingerprint, key);
     }
 
     let requestBody: ArrayBuffer | string | undefined;
@@ -49,11 +50,11 @@ export class Api {
     const response = await fetch(`/api/v1${path}`, {
       method,
       headers: {
-        Authorization: `Bearer ${this.token}`,
+        Authorization: `Bearer ${token}`,
         ...(method !== 'GET'
           ? {
               'Content-Type': binary ? 'application/octet-stream' : 'application/json',
-              'Idempotency-Key': key!,
+              'Idempotency-Key': key,
             }
           : {}),
       },
@@ -61,22 +62,17 @@ export class Api {
     });
 
     if (!response.ok) {
-      const data = await response.json().catch(() => null);
-
-      if (method !== 'GET' && response.status < 500) {
-        this.pending = undefined;
+      if (fingerprint && response.status < 500) {
+        this.pending.delete(fingerprint);
       }
 
-      throw new ApiError(
-        data?.error?.message || `Request failed (${response.status}).`,
-        response.status,
-      );
+      throw await this.failure(response, token);
     }
 
     const result = await response.json();
 
-    if (method !== 'GET') {
-      this.pending = undefined;
+    if (fingerprint) {
+      this.pending.delete(fingerprint);
     }
 
     return result;
@@ -87,14 +83,32 @@ export class Api {
   }
 
   async download(id: string): Promise<Blob> {
+    const token = this.token;
+
     const response = await fetch(`/api/v1/artifacts/${id}/download`, {
-      headers: { Authorization: `Bearer ${this.token}` },
+      headers: { Authorization: `Bearer ${token}` },
     });
 
     if (!response.ok) {
-      throw new ApiError((await response.json()).error.message, response.status);
+      throw await this.failure(response, token);
     }
 
     return response.blob();
+  }
+
+  private async failure(response: Response, token: string) {
+    const data = await response.json().catch(() => null);
+
+    const error = new ApiError(
+      data?.error?.message || `Request failed (${response.status}).`,
+      response.status,
+    );
+
+    // Ignore a late rejection for a token the user has already replaced.
+    if (response.status === 401 && token === this.token) {
+      this.onUnauthorized?.(error);
+    }
+
+    return error;
   }
 }

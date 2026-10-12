@@ -1,9 +1,4 @@
 @import 'tailwindcss';
-@theme {
-  --color-keel-navy: #102d40;
-  --color-keel-teal: #226d75;
-  --color-keel-brass: #b18a46;
-}
 :root {
   font-family:
     Inter,
@@ -214,13 +209,6 @@ nav {
 .nav-item.active {
   background: #244b5d;
   color: white;
-}
-.nav-symbol {
-  font-size: 22px;
-  line-height: 1;
-  width: 19px;
-  font-family: Arial, sans-serif;
-  text-align: center;
 }
 .nav-count {
   margin-left: auto;
@@ -942,9 +930,6 @@ fieldset {
     padding: 0 11px;
     white-space: nowrap;
     font-size: 11px;
-  }
-  .nav-symbol {
-    display: none;
   }
   .nav-count {
     margin-left: 4px;

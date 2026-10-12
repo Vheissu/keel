@@ -86,6 +86,7 @@
             if.bind="connection.provider === 'github-actions'"
             click.trigger="open('import', connection)"
             disabled.bind="!connection.enabled || busy"
+            aria-label.bind="'Import run for ' + connection.name"
           >
             Import run
           </button>
@@ -93,10 +94,16 @@
             class="button secondary"
             click.trigger="open('rotate', connection)"
             disabled.bind="busy"
+            aria-label.bind="'Rotate credentials for ' + connection.name"
           >
             Rotate credentials
           </button>
-          <button class="button secondary" click.trigger="toggle(connection)" disabled.bind="busy">
+          <button
+            class="button secondary"
+            click.trigger="toggle(connection)"
+            disabled.bind="busy"
+            aria-label.bind="(connection.enabled ? 'Disable ' : 'Enable ') + connection.name"
+          >
             ${connection.enabled ? 'Disable' : 'Enable'}
           </button>
         </div>
@@ -133,7 +140,7 @@
               <strong>${connectionName(job.connection_id)}</strong>
               <small>Run ${job.run_id} · attempt ${job.run_attempt}</small>
             </td>
-            <td><span class="badge">${statusLabel(job.status)}</span></td>
+            <td>${statusLabel(job.status)}</td>
             <td class="import-details">
               <span if.bind="job.status === 'succeeded'">
                 Verified and retained. Ready to use in a release.
@@ -156,6 +163,7 @@
                 if.bind="job.status === 'failed' && canWrite"
                 click.trigger="retry(job)"
                 disabled.bind="busy"
+                aria-label.bind="'Retry import of run ' + job.run_id"
               >
                 Retry import
               </button>
@@ -171,7 +179,7 @@
           </tr>
         </tbody>
       </table>
-      <div class="empty-state compact" if.bind="!data.imports.length">
+      <div class="empty-state" if.bind="!data.imports.length">
         <p>Webhook imports, manual requests and Bitbucket submissions will appear here.</p>
       </div>
     </div>

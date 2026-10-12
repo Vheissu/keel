@@ -1,6 +1,7 @@
 import { bindable, queueTask } from 'aurelia';
 import type { Deployment } from '../../../packages/domain/src/index';
 import { Api } from './api';
+import { errorMessage, formatDate } from './format';
 
 interface Candidate {
   deployment_id: string;
@@ -37,8 +38,8 @@ export class RollbackPlanner {
   heading!: HTMLElement;
   private revision = 0;
 
-  async binding() {
-    await this.load();
+  binding() {
+    void this.load();
   }
 
   attached() {
@@ -72,7 +73,7 @@ export class RollbackPlanner {
       }
     } catch (error) {
       if (revision === this.revision) {
-        this.error = error instanceof Error ? error.message : 'Could not load rollback history.';
+        this.error = errorMessage(error, 'Could not load rollback history.');
       }
     } finally {
       if (revision === this.revision) {
@@ -103,7 +104,7 @@ export class RollbackPlanner {
 
       this.acknowledged = false;
     } catch (error) {
-      this.error = error instanceof Error ? error.message : 'Could not plan the rollback.';
+      this.error = errorMessage(error, 'Could not plan the rollback.');
     } finally {
       this.busy = false;
     }
@@ -124,13 +125,11 @@ export class RollbackPlanner {
 
       await this.requested();
     } catch (error) {
-      this.error = error instanceof Error ? error.message : 'Could not request the rollback.';
+      this.error = errorMessage(error, 'Could not request the rollback.');
     } finally {
       this.busy = false;
     }
   }
 
-  date(value: string) {
-    return new Date(value).toLocaleString();
-  }
+  readonly date = formatDate;
 }

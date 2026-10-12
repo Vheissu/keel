@@ -1,5 +1,6 @@
-import { Api, ApiError, type Dashboard } from './api';
+import { Api, type Dashboard } from './api';
 import { queueTask } from 'aurelia';
+import { errorMessage, formatDate, sha256Hex } from './format';
 import type { Deployment, Release } from '../../../packages/domain/src/index';
 
 const pages = [
@@ -37,6 +38,7 @@ export class MyApp {
   notice = '';
   query = '';
   dialog!: HTMLDialogElement;
+  main!: HTMLElement;
   form: 'project' | 'artifact' | 'release' | 'deploy' | '' = '';
   name = '';
   slug = '';
@@ -60,12 +62,23 @@ export class MyApp {
   private hashChange = () => this.readHash();
 
   binding() {
+    this.api.onUnauthorized = (error) => {
+      this.disconnect();
+      this.error = error.message;
+    };
+
     this.readHash();
     window.addEventListener('hashchange', this.hashChange);
   }
 
   unbinding() {
     window.removeEventListener('hashchange', this.hashChange);
+    this.api.onUnauthorized = null;
+  }
+
+  // The app routes on the hash, so the skip link moves focus without navigating.
+  skipToMain() {
+    this.main.focus();
   }
 
   readHash() {
@@ -176,11 +189,7 @@ export class MyApp {
     return this.data?.releases.find((r) => r.id === id)?.version ?? id;
   }
 
-  date(value: string) {
-    return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(
-      new Date(value),
-    );
-  }
+  readonly date = formatDate;
 
   size(value: number) {
     if (value < 1024) {
@@ -238,9 +247,13 @@ export class MyApp {
     this.refreshRevision++;
     this.loading = false;
     this.api.token = '';
+    this.close();
     this.data = null;
     this.error = '';
     this.notice = '';
+    this.query = '';
+    this.rollbackSource = null;
+    this.rollbackFocus = null;
   }
 
   async refresh() {
@@ -266,14 +279,9 @@ export class MyApp {
     }
   }
 
+  // A 401 has already disconnected the session through api.onUnauthorized.
   handleError(error: unknown) {
-    if (error instanceof ApiError && error.status === 401) {
-      this.data = null;
-      this.api.token = '';
-      this.close();
-    }
-
-    this.error = error instanceof Error ? error.message : 'The request failed. Try again.';
+    this.error = errorMessage(error, 'The request failed. Try again.');
   }
 
   open(form: typeof this.form, release?: Release) {
@@ -327,8 +335,7 @@ export class MyApp {
       }
     } catch (error) {
       if (revision === this.promotionRevision) {
-        this.promotionError =
-          error instanceof Error ? error.message : 'Could not check promotion policy.';
+        this.promotionError = errorMessage(error, 'Could not check promotion policy.');
       }
     } finally {
       if (revision === this.promotionRevision) {
@@ -361,16 +368,26 @@ export class MyApp {
   }
 
   close() {
+    const wasOpen = this.dialog?.open ?? false;
+
     this.dialog?.close();
     this.promotionRevision++;
     this.promotion = null;
     this.promotionError = '';
     this.form = '';
     this.inspected = null;
-    this.returnFocus?.focus();
+
+    if (wasOpen) {
+      this.returnFocus?.focus();
+    }
+
+    this.returnFocus = null;
   }
 
-  cancelDialog() {
+  // Escape fires `cancel`; prevent the native close so a busy request keeps the dialog open.
+  cancelDialog(event: Event) {
+    event.preventDefault();
+
     if (!this.busy) {
       this.close();
     }
@@ -453,10 +470,7 @@ spec:
 
         const bytes = await file.arrayBuffer();
 
-        const digest = Array.from(
-          new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)),
-          (b) => b.toString(16).padStart(2, '0'),
-        ).join('');
+        const digest = await sha256Hex(bytes);
 
         const params = new URLSearchParams({
           project_id: this.projectId,
@@ -465,7 +479,7 @@ spec:
           digest,
         });
 
-        await this.api.request(`/artifacts?${params}`, 'POST', bytes);
+        await this.api.request(`/artifacts?${params}`, 'POST', bytes, digest);
         this.notice = 'Artifact verified and retained.';
         this.go('Artifacts');
       } else if (this.form === 'release') {

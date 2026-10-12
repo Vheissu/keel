@@ -1,4 +1,4 @@
-<a class="skip-link" href="#main">Skip to content</a>
+<a class="skip-link" href="#main" click.trigger:prevent="skipToMain()">Skip to content</a>
 <div class="app-shell">
   <aside class="sidebar">
     <a class="brand" href="#overview" aria-label="Keel overview">
@@ -41,7 +41,7 @@
       </button>
     </div>
   </aside>
-  <main id="main" tabindex="-1">
+  <main id="main" ref="main" tabindex="-1">
     <div class="breadcrumb">
       Workspace
       <span>/</span>
@@ -154,7 +154,7 @@
             <strong>${data.awaiting_approval}</strong>
           </div>
         </section>
-        <section class="pipeline">
+        <section>
           <div class="section-heading">
             <h2>Your delivery pipeline</h2>
             <span>Staging → Production</span>
@@ -360,6 +360,7 @@
                     class="button small secondary"
                     if.bind="canWrite"
                     click.trigger="open('deploy', release)"
+                    aria-label.bind="'Deploy ' + release.version + ' of ' + projectName(release.project_id)"
                   >
                     Deploy
                   </button>
@@ -426,6 +427,7 @@
                     if.bind="canWrite && (deployment.status === 'succeeded' || deployment.status === 'failed' || deployment.status === 'cancelled')"
                     disabled.bind="busy || !!rollbackSource"
                     click.trigger="openRollback(deployment)"
+                    aria-label.bind="'Plan rollback for ' + releaseVersion(deployment.release_id) + ' in ' + environmentName(deployment.environment_id)"
                   >
                     Plan rollback
                   </button>
@@ -436,6 +438,7 @@
                       class="button small primary"
                       disabled.bind="busy"
                       click.trigger="action(deployment, 'approve')"
+                      aria-label.bind="'Approve deployment of ' + releaseVersion(deployment.release_id) + ' to ' + environmentName(deployment.environment_id)"
                     >
                       Approve
                     </button>
@@ -443,6 +446,7 @@
                       class="text-button danger"
                       disabled.bind="busy"
                       click.trigger="action(deployment, 'reject')"
+                      aria-label.bind="'Reject deployment of ' + releaseVersion(deployment.release_id) + ' to ' + environmentName(deployment.environment_id)"
                     >
                       Reject
                     </button>
@@ -452,6 +456,7 @@
                     if.bind="canWrite && (deployment.status === 'queued' || deployment.status === 'awaiting_approval' || deployment.status === 'running' || deployment.status === 'reconciliation_required')"
                     disabled.bind="busy"
                     click.trigger="action(deployment, 'cancel')"
+                    aria-label.bind="'Cancel deployment of ' + releaseVersion(deployment.release_id) + ' to ' + environmentName(deployment.environment_id)"
                   >
                     Cancel
                   </button>
@@ -538,7 +543,7 @@
 <dialog
   ref="dialog"
   class="form-dialog"
-  cancel.trigger="cancelDialog()"
+  cancel.trigger="cancelDialog($event)"
   aria-labelledby="dialog-title"
 >
   <div class="dialog-heading">

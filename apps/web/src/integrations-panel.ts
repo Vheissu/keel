@@ -1,6 +1,7 @@
 import { bindable, queueTask } from 'aurelia';
 import type { Project } from '../../../packages/domain/src/index';
 import { Api } from './api';
+import { errorMessage, formatDate } from './format';
 
 interface Connection {
   id: string;
@@ -64,7 +65,7 @@ export class IntegrationsPanel {
   private returnFocus: HTMLElement | null = null;
 
   binding() {
-    return this.refresh();
+    void this.refresh();
   }
 
   unbinding() {
@@ -109,11 +110,7 @@ export class IntegrationsPanel {
     return new URL(`/webhooks/github/${connection.id}`, window.location.origin).toString();
   }
 
-  date(value: string) {
-    return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(
-      new Date(value),
-    );
-  }
+  readonly date = formatDate;
 
   statusLabel(status: Import['status']) {
     return { pending: 'Queued', processing: 'Importing', succeeded: 'Retained', failed: 'Failed' }[
@@ -135,7 +132,7 @@ export class IntegrationsPanel {
       }
     } catch (error) {
       if (revision === this.revision) {
-        this.error = error instanceof Error ? error.message : 'Connections could not be loaded.';
+        this.error = errorMessage(error, 'Connections could not be loaded.');
       }
     } finally {
       if (revision === this.revision) {
@@ -247,7 +244,7 @@ export class IntegrationsPanel {
       this.close(true);
       await this.refresh();
     } catch (error) {
-      this.error = error instanceof Error ? error.message : 'The connection could not be updated.';
+      this.error = errorMessage(error, 'The connection could not be updated.');
     } finally {
       this.busy = false;
     }
@@ -278,7 +275,7 @@ export class IntegrationsPanel {
       this.notice = notice;
       await this.refresh();
     } catch (error) {
-      this.error = error instanceof Error ? error.message : 'The request could not be completed.';
+      this.error = errorMessage(error, 'The request could not be completed.');
     } finally {
       this.busy = false;
     }
