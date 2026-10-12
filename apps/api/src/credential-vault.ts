@@ -42,15 +42,18 @@ export class CredentialVault {
   decrypt<T>(organisation: string, connection: string, value: unknown): T {
     try {
       const encrypted = envelope.parse(value);
+      const nonce = Buffer.from(encrypted.nonce, 'base64');
+      const tag = Buffer.from(encrypted.tag, 'base64');
 
-      const decipher = createDecipheriv(
-        'aes-256-gcm',
-        this.key,
-        Buffer.from(encrypted.nonce, 'base64'),
-      );
+      // Reject truncated tags or nonces, which GCM would otherwise accept.
+      if (nonce.length !== 12 || tag.length !== 16) {
+        throw new Error('Invalid credential envelope.');
+      }
+
+      const decipher = createDecipheriv('aes-256-gcm', this.key, nonce, { authTagLength: 16 });
 
       decipher.setAAD(Buffer.from(`keel:credentials:v1:${organisation}:${connection}`));
-      decipher.setAuthTag(Buffer.from(encrypted.tag, 'base64'));
+      decipher.setAuthTag(tag);
 
       const bytes = Buffer.concat([
         decipher.update(Buffer.from(encrypted.ciphertext, 'base64')),
