@@ -83,3 +83,7 @@ export class CredentialVault {
       .digest('hex');
   }
 }
+
+export function deploymentSecretVault(key = process.env.KEEL_DEPLOYMENT_SECRET_KEY) {
+  return key ? new CredentialVault(key, 'deployment-secrets') : undefined;
+}

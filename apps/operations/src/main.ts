@@ -6,12 +6,14 @@ import { configure } from './configuration.js';
 import { verify, quiescent, quarantine } from './recovery.js';
 import { health } from './health.js';
 
+const services = ['api', 'artifact-worker', 'workflow-worker', 'agent-gateway'];
+const tasks = ['provision', 'migrate', 'verify', 'quiescent', 'quarantine', 'health'];
 const command = process.argv[2];
 
 try {
   await configure();
 
-  if (['api', 'artifact-worker', 'workflow-worker', 'agent-gateway'].includes(command)) {
+  if (services.includes(command)) {
     const entry = command === 'api' ? 'server' : 'main';
 
     await import(new URL(`../../${command}/dist/${entry}.js`, import.meta.url).href);
@@ -94,8 +96,10 @@ try {
   }
 } catch {
   // Driver errors can contain connection strings. Operational failures never print credentials.
+  const known = [...services, ...tasks].includes(command) ? command : 'unknown';
+
   console.error(
-    `Keel operations command failed: ${['api', 'artifact-worker', 'workflow-worker', 'agent-gateway', 'provision', 'migrate', 'verify', 'quiescent', 'quarantine', 'health'].includes(command) ? command : 'unknown'}. Check configuration, service health and the recovery guide.`,
+    `Keel operations command failed: ${known}. Check configuration, service health and the recovery guide.`,
   );
 
   process.exitCode = 1;

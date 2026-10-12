@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import fastifyStatic from '@fastify/static';
 import { database } from '../../../packages/database/src/index.js';
 import { artifactStore, repositoryRoot } from './storage-config.js';
-import { CredentialVault } from './credential-vault.js';
+import { CredentialVault, deploymentSecretVault } from './credential-vault.js';
 import { IntegrationService } from './integration-service.js';
 import { ControlPlane } from './control-plane.js';
 import { createApp } from './app.js';
@@ -14,11 +14,7 @@ if (!process.env.DATABASE_URL) {
 
 const db = database(process.env.DATABASE_URL);
 
-const secretVault = process.env.KEEL_DEPLOYMENT_SECRET_KEY
-  ? new CredentialVault(process.env.KEEL_DEPLOYMENT_SECRET_KEY, 'deployment-secrets')
-  : undefined;
-
-const control = new ControlPlane(db, artifactStore(), secretVault);
+const control = new ControlPlane(db, artifactStore(), deploymentSecretVault());
 
 const vault = process.env.KEEL_CREDENTIAL_KEY
   ? new CredentialVault(process.env.KEEL_CREDENTIAL_KEY)

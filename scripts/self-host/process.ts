@@ -1,5 +1,4 @@
 import { spawn } from 'node:child_process';
-import type { Readable, Writable } from 'node:stream';
 
 export function start(command: string, args: string[], env = process.env) {
   const child = spawn(command, args, { env, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -54,11 +53,4 @@ export async function run(command: string, args: string[], env = process.env) {
   }
 
   return Buffer.concat(chunks).toString('utf8');
-}
-
-export interface StreamProcess {
-  input: Writable;
-  output: Readable;
-  done: Promise<void>;
-  stop: () => void;
 }

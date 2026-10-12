@@ -7,6 +7,7 @@ import {
   type Principal,
 } from '../../../packages/domain/src/index.js';
 import {
+  maxSecretValueBytes,
   secretName,
   type DeploymentProcess,
 } from '../../../packages/deployment-schema/src/index.js';
@@ -18,10 +19,10 @@ export const secretValue = z
   .min(1)
   .refine(
     (value) =>
-      Buffer.byteLength(value, 'utf8') <= 8192 &&
+      Buffer.byteLength(value, 'utf8') <= maxSecretValueBytes &&
       !/[\x00\r\n]/.test(value) &&
       Buffer.from(value, 'utf8').toString('utf8') === value,
-    'Use a single-line value of at most 8192 UTF-8 bytes, without NUL characters.',
+    `Use a single-line value of at most ${maxSecretValueBytes} UTF-8 bytes, without NUL characters.`,
   );
 
 export const secretCreateInput = z
@@ -55,6 +56,14 @@ interface Secret {
 
 type References = DeploymentProcess['spec']['environments'][string]['secrets'];
 
+// Binds each ciphertext to its scope, name and version. Recovery verification uses it too.
+export function secretContext(
+  secret: Pick<Secret, 'project_id' | 'environment_id' | 'id' | 'name'>,
+  version: number,
+) {
+  return `${secret.project_id}:${secret.environment_id}:${secret.id}:${secret.name}:${version}`;
+}
+
 export class DeploymentSecrets {
   constructor(
     private control: ControlPlane,
@@ -75,10 +84,6 @@ export class DeploymentSecrets {
 
   fingerprint(value: string) {
     return this.vault().fingerprint(value);
-  }
-
-  private context(secret: Secret, version: number) {
-    return `${secret.project_id}:${secret.environment_id}:${secret.id}:${secret.name}:${version}`;
   }
 
   async scope(tx: Transaction, org: string, project: string, environment: string) {
@@ -152,7 +157,7 @@ export class DeploymentSecrets {
   private async version(tx: Transaction, p: Principal, secret: Secret, value: string) {
     const encrypted = this.vault().encrypt(
       p.organisation_id,
-      this.context(secret, secret.current_version),
+      secretContext(secret, secret.current_version),
       value,
     );
 
@@ -522,7 +527,7 @@ export class DeploymentSecrets {
         values[row.variable] = secretValue.parse(
           this.vault().decrypt<string>(
             deployment.organisation_id,
-            this.context(row, row.version),
+            secretContext(row, row.version),
             row.encrypted_value,
           ),
         );

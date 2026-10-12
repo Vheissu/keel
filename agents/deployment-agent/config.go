@@ -96,7 +96,7 @@ func validateJob(j Job) error {
 		return nil
 	}
 
-	if j.Mode != "deploy" || !digestPattern.MatchString(j.Digest) || !imagePattern.MatchString(j.ImageID) || j.Size < 1 || j.Size > archiveLimit || j.SecretCount < 0 || j.SecretCount > 32 {
+	if j.Mode != "deploy" || !digestPattern.MatchString(j.Digest) || !imagePattern.MatchString(j.ImageID) || j.Size < 1 || j.Size > archiveLimit || j.SecretCount < 0 || j.SecretCount > secretLimit {
 		return errors.New("invalid artifact contract")
 	}
 

@@ -8,11 +8,12 @@ import { start, run } from './process.js';
 
 const components = ['configuration', 'postgres', 'artifacts'] as const;
 
-const imageNames = [
-  'keel/self-host:',
-  'postgres:17.11-alpine',
-  'temporalio/server:1.31.0',
-] as const;
+// Each image is checked against the container of the service that ran it.
+const images = [
+  { name: 'keel/self-host:', service: 'api' },
+  { name: 'postgres:17.11-alpine', service: 'postgres' },
+  { name: 'temporalio/server:1.31.0', service: 'temporal' },
+];
 
 const manifestSchema = z
   .object({
@@ -28,20 +29,14 @@ const manifestSchema = z
   })
   .strict();
 
-async function images(directory: string, installation: Installation) {
+async function usedImages(directory: string, installation: Installation) {
   return Promise.all(
-    imageNames.map(async (name, index) => {
-      name = name.endsWith(':') ? (`${name}${installation.imageTag}` as typeof name) : name;
-
+    images.map(async (image) => {
+      const name = image.name.endsWith(':') ? `${image.name}${installation.imageTag}` : image.name;
       const id = (await run('docker', ['image', 'inspect', '--format', '{{.Id}}', name])).trim();
 
       const container = (
-        await compose(directory, installation, [
-          'ps',
-          '--all',
-          '-q',
-          ['api', 'postgres', 'temporal'][index],
-        ])
+        await compose(directory, installation, ['ps', '--all', '-q', image.service])
       ).trim();
 
       const used = (await run('docker', ['inspect', '--format', '{{.Image}}', container])).trim();
@@ -90,7 +85,7 @@ export async function backup(
   }
 
   const key = await readKey(keyFile);
-  const retainedImages = await images(directory, installation);
+  const retainedImages = await usedImages(directory, installation);
   const checksums: Record<string, string> = {};
 
   await mkdir(destination, { recursive: true, mode: 0o700 });
@@ -190,16 +185,12 @@ export async function restore(
     throw new Error('Restore requires a project with no existing containers.');
   }
 
-  for (const name of ['postgres', 'artifacts']) {
-    const volumes = (await run('docker', ['volume', 'ls', '--format', '{{.Name}}']))
-      .trim()
-      .split('\n');
+  const volumes = (await run('docker', ['volume', 'ls', '--format', '{{.Name}}']))
+    .trim()
+    .split('\n');
 
-    if (volumes.includes(`${project}_${name}`)) {
-      throw new Error(
-        'Restore refuses to overwrite existing volumes. Choose a fresh project name.',
-      );
-    }
+  if (['postgres', 'artifacts'].some((name) => volumes.includes(`${project}_${name}`))) {
+    throw new Error('Restore refuses to overwrite existing volumes. Choose a fresh project name.');
   }
 
   const key = await readKey(keyFile);

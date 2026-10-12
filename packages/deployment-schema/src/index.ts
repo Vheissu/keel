@@ -4,6 +4,10 @@ import { DomainError } from '../../domain/src/index.js';
 
 export const secretName = z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/);
 
+export const maxSecretReferences = 32;
+
+export const maxSecretValueBytes = 8192;
+
 const environment = z
   .object({
     strategy: z.enum(['recreate', 'rolling']),
@@ -11,7 +15,10 @@ const environment = z
     requiresApproval: z.boolean().optional(),
     secrets: z
       .record(secretName, z.object({ secret: secretName }).strict())
-      .refine((value) => Object.keys(value).length <= 32, 'Use at most 32 secret references.')
+      .refine(
+        (value) => Object.keys(value).length <= maxSecretReferences,
+        `Use at most ${maxSecretReferences} secret references.`,
+      )
       .optional(),
     verify: z
       .object({

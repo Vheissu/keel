@@ -12,6 +12,11 @@ import (
 	"unicode/utf8"
 )
 
+const (
+	secretLimit      = 32
+	secretValueLimit = 8192
+)
+
 var secretVariable = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
 
 func (a *Agent) deploymentSecrets(ctx context.Context, j Job) ([]byte, error) {
@@ -33,7 +38,7 @@ func secretEnvironment(data []byte, count int) ([]byte, error) {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&response) != nil || count < 1 || count > 32 || len(response.Values) != count {
+	if decoder.Decode(&response) != nil || count < 1 || count > secretLimit || len(response.Values) != count {
 		return nil, errors.New("invalid deployment secrets")
 	}
 	if decoder.Decode(new(any)) != io.EOF {
@@ -42,7 +47,7 @@ func secretEnvironment(data []byte, count int) ([]byte, error) {
 
 	names := make([]string, 0, count)
 	for name, value := range response.Values {
-		if !secretVariable.MatchString(name) || len(value) == 0 || len(value) > 8192 || !utf8.ValidString(value) || strings.ContainsAny(value, "\x00\r\n") {
+		if !secretVariable.MatchString(name) || len(value) == 0 || len(value) > secretValueLimit || !utf8.ValidString(value) || strings.ContainsAny(value, "\x00\r\n") {
 			return nil, errors.New("invalid deployment secrets")
 		}
 		names = append(names, name)
@@ -55,7 +60,6 @@ func secretEnvironment(data []byte, count int) ([]byte, error) {
 		environment.WriteByte('=')
 		environment.WriteString(response.Values[name])
 		environment.WriteByte('\n')
-		delete(response.Values, name)
 	}
 	return environment.Bytes(), nil
 }

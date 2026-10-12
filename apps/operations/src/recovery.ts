@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readdir } from 'node:fs/promises';
 import { transaction, type Database } from '../../../packages/database/src/index.js';
 import { CredentialVault } from '../../api/src/credential-vault.js';
+import { secretContext } from '../../api/src/deployment-secrets.js';
 import { artifactStore } from '../../api/src/storage-config.js';
 
 export async function quiescent(db: Database) {
@@ -107,9 +108,11 @@ export async function verify(db: Database) {
   ).rows;
 
   for (const secret of secrets) {
-    const context = `${secret.project_id}:${secret.environment_id}:${secret.id}:${secret.name}:${secret.version}`;
-
-    secretVault.decrypt(secret.organisation_id, context, secret.encrypted_value);
+    secretVault.decrypt(
+      secret.organisation_id,
+      secretContext(secret, secret.version),
+      secret.encrypted_value,
+    );
   }
 
   return {

@@ -1,6 +1,5 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { transaction, type Database } from './index.js';
-import { createHash } from 'node:crypto';
 
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
 
@@ -94,7 +93,7 @@ export async function bootstrap(
 
       // Reusing a previous token restores it; a token held by another actor is rejected.
       if (!inserted.rowCount) {
-        throw new Error(`The ${label} token in .env belongs to another identity.`);
+        throw new Error(`The ${label} token belongs to another identity.`);
       }
     }
 

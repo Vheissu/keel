@@ -24,20 +24,16 @@ try {
 
 const env = parse(source);
 
-if (!env.KEEL_CREDENTIAL_KEY) {
-  env.KEEL_CREDENTIAL_KEY = randomBytes(32).toString('base64');
-  source = source.replace(/^KEEL_CREDENTIAL_KEY=.*$/m, '');
-  source += `\nKEEL_CREDENTIAL_KEY=${env.KEEL_CREDENTIAL_KEY}\n`;
-  await writeFile('.env', source, { mode: 0o600 });
-}
+// Generate keys and tokens missing from .env. Existing values are never replaced.
+const generated = {
+  KEEL_CREDENTIAL_KEY: () => randomBytes(32).toString('base64'),
+  KEEL_DEPLOYMENT_SECRET_KEY: () => randomBytes(32).toString('base64'),
+  KEEL_SECRET_MANAGER_TOKEN: () => `keel_${randomBytes(32).toString('hex')}`,
+};
 
-for (const name of ['KEEL_DEPLOYMENT_SECRET_KEY', 'KEEL_SECRET_MANAGER_TOKEN']) {
+for (const [name, generate] of Object.entries(generated)) {
   if (!env[name]) {
-    env[name] =
-      name === 'KEEL_SECRET_MANAGER_TOKEN'
-        ? `keel_${randomBytes(32).toString('hex')}`
-        : randomBytes(32).toString('base64');
-
+    env[name] = generate();
     source = source.replace(new RegExp(`^${name}=.*$`, 'm'), '');
     source += `\n${name}=${env[name]}\n`;
     await writeFile('.env', source, { mode: 0o600 });
