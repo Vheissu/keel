@@ -5,6 +5,7 @@ import { ControlPlane } from '../../api/src/control-plane.js';
 import { CredentialVault } from '../../api/src/credential-vault.js';
 import { IntegrationService } from '../../api/src/integration-service.js';
 import { artifactStore } from '../../api/src/storage-config.js';
+import { heartbeat } from '../../operations/src/heartbeat.js';
 
 if (!process.env.DATABASE_URL || !process.env.KEEL_CREDENTIAL_KEY) {
   throw new Error('DATABASE_URL and KEEL_CREDENTIAL_KEY are required. Run npm run setup first.');
@@ -30,7 +31,11 @@ console.log('Artifact import worker ready.');
 try {
   while (!shutdown.signal.aborted) {
     try {
-      if (await worker.runOnce()) {
+      const worked = await worker.runOnce();
+
+      await heartbeat();
+
+      if (worked) {
         continue;
       }
     } catch {

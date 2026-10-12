@@ -6,6 +6,7 @@ import { artifactStore } from '../../api/src/storage-config.js';
 import { ControlPlane } from '../../api/src/control-plane.js';
 import { ExecutionService } from '../../api/src/execution-service.js';
 import { dispatchOutbox } from './dispatcher.js';
+import { heartbeat } from '../../operations/src/heartbeat.js';
 
 if (!process.env.DATABASE_URL) {
   throw new Error('DATABASE_URL is required.');
@@ -36,6 +37,7 @@ const dispatch = async () => {
   while (!stopping) {
     try {
       await dispatchOutbox(db, client, taskQueue);
+      await heartbeat();
     } catch {
       console.error('Deployment outbox delivery failed; it will retry.');
     }

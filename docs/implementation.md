@@ -1,6 +1,6 @@
 # Implementation status
 
-The control-plane foundation, GitHub ingestion, Bitbucket publishing and Docker execution, agent recovery, promotion policy, rollback planning and scoped deployment secrets are implemented. PLAN.md remains the product roadmap.
+The control-plane foundation, GitHub ingestion, Bitbucket publishing and Docker execution, agent recovery, promotion policy, rollback planning scoped deployment secrets, self-hosted packaging and operational recovery are implemented. PLAN.md remains the product roadmap.
 
 ## Implemented
 
@@ -31,9 +31,12 @@ The control-plane foundation, GitHub ingestion, Bitbucket publishing and Docker 
 - Encrypted, versioned deployment secrets scoped to a project and environment, with separate management permission, admission-time pinning and revocation.
 - Lease-scoped secret delivery to capable agents through mutual TLS and Docker stdin, with metadata-only UI/CLI responses and fixed-code execution reporting.
 
+- Single-host Compose packaging with compiled HTTPS UI/API, persistent PostgreSQL and Temporal, separate migration/runtime roles, generated credentials and service health checks.
+- Encrypted cold backups covering database, retained artifacts, configuration and keys; authenticated fresh-volume restore with retained-data verification and revoked agents.
+
 ## Next increment
 
-Add self-hosted packaging and operational recovery checks. SSH, additional deployment strategies, notifications and automated rollback remain later work.
+Add paginated resource reads and navigation before supporting larger installations. Hosted identity, SSH, additional deployment strategies, notifications and automated rollback remain later work.
 
 ## Decisions and constraints
 
@@ -41,11 +44,11 @@ The control plane is a modular monolith. Domain policy, process validation, data
 
 Artifact storage uses the local filesystem by default, or S3 through the same `ArtifactStore` interface. Organisation IDs and digests determine paths. Writes use a temporary file plus an atomic hard link; an existing digest is verified rather than overwritten. A database rollback can leave an unreferenced blob. No garbage collector runs yet, so a failed transaction cannot accidentally delete a retained release’s bytes. S3 writes use `If-None-Match: *`, and every read verifies SHA-256. Conditional writes prevent this application from replacing existing objects; bucket administrators can still delete or alter them. No garbage collector, object-lock policy or retention expiry is implemented. Copy existing local blobs before changing storage drivers; see [storage setup](storage.md).
 
-SQL queries scope every organisation-owned API read, and composite foreign keys prevent cross-organisation and cross-project references. PostgreSQL RLS is not enabled. The runtime database role can administer the evaluation database; production needs separate migration/runtime roles and a reviewed RLS strategy. Immutable triggers prevent ordinary updates and deletes, not changes by a database administrator.
+SQL queries scope every organisation-owned API read, and composite foreign keys prevent cross-organisation and cross-project references. PostgreSQL RLS is not enabled. The development database role can administer its evaluation database. The self-hosted package uses separate migration and runtime roles; its runtime role has no DDL or Temporal database access. Immutable triggers prevent ordinary updates and deletes, not changes by a database administrator.
 
 The local bootstrap is not a hosted identity system. There is no invitation flow, token-management UI, token expiry, SSO, session cookie, or custom-role editor. Tokens are permission-scoped, but not yet project- or environment-scoped. Keep the development services bound to loopback. The browser does not persist credentials.
 
-Deployment outbox entries are delivered by the Temporal worker. Artifact ingestion retains its separate PostgreSQL-backed worker. Redis, runbooks, tenants, scheduled releases, and production packaging remain unimplemented. See [Docker agent setup and limits](deployment-agents.md), including the 25 MiB archive cap and same-host certificate recovery and the absence of force-unlock or host reassignment. Production defaults to requiring verified staging of the exact release before admission. Approvers can edit prerequisites; accepted requests retain their admission snapshot. See [promotion and rollback](promotion-and-rollback.md) and [deployment secrets](deployment-secrets.md) for policy, key management and recovery boundaries.
+Deployment outbox entries are delivered by the Temporal worker. Artifact ingestion retains its separate PostgreSQL-backed worker. Redis, runbooks, tenants, scheduled releases, and high-availability packaging remain unimplemented. See [Docker agent setup and limits](deployment-agents.md), including the 25 MiB archive cap and same-host certificate recovery and the absence of force-unlock or host reassignment. Production defaults to requiring verified staging of the exact release before admission. Approvers can edit prerequisites; accepted requests retain their admission snapshot. See [promotion and rollback](promotion-and-rollback.md) and [deployment secrets](deployment-secrets.md) for policy, key management and recovery boundaries.
 
 The dashboard shows the newest request per environment, including its pending/cancelled state. It does not claim that this is the currently deployed version. The latest 200 records per resource are loaded; pagination is a follow-up before supporting larger installations.
 
@@ -57,7 +60,7 @@ Imports are limited to 25 MiB, current successful run attempts, one configured a
 
 Bitbucket does not expose native artifact discovery or download through this adapter. A dependency-free publishing script submits up to 25 MiB while its pipeline step is running. Keel verifies the run, step, repository, exact branch, selector and commit, polls for whole-pipeline success, then publishes immutable artifact metadata. Submitted blobs have no release-visible artifact record until verification succeeds. The checksum is publisher-supplied, not a provider attestation; protect the connection-scoped publishing secret and pipeline code. Identical submissions are deduplicated; replacements require a new pipeline UUID. Polling waits at most 24 hours without consuming transient-failure retries. See [Bitbucket setup](bitbucket-pipelines.md).
 
-Tests use GitHub and Bitbucket HTTP fixtures, real PostgreSQL and a real local S3-compatible RustFS service. No live provider repository is connected by the test suite. The object store in Compose is for local evaluation, not production packaging.
+Tests use GitHub and Bitbucket HTTP fixtures, real PostgreSQL and a real local S3-compatible RustFS service. No live provider repository is connected by the test suite. The object store in development Compose is for local evaluation. The self-hosted package and its backup procedure use local artifact volumes; see [self-hosting](self-hosting.md) and [recovery](recovery.md).
 
 ## Design
 

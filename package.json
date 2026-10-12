@@ -14,9 +14,9 @@
     "setup": "tsx scripts/setup.ts",
     "infra:up": "docker compose -f infrastructure/docker/compose.yml up -d --wait",
     "infra:down": "docker compose -f infrastructure/docker/compose.yml down",
-    "db:migrate": "tsx --env-file=.env packages/database/src/migrate.ts",
+    "db:migrate": "tsx --env-file=.env scripts/migrate.ts",
     "dev": "concurrently -k -n api,web,imports 'npm run dev -w @keel/api' 'npm run dev -w @keel/web' 'npm run dev -w @keel/artifact-worker'",
-    "build": "npm run typecheck && npm run build -w @keel/web && esbuild apps/api/src/server.ts --bundle --platform=node --packages=external --format=esm --outfile=apps/api/dist/server.js --sourcemap && esbuild apps/artifact-worker/src/main.ts --bundle --platform=node --packages=external --format=esm --outfile=apps/artifact-worker/dist/main.js --sourcemap && esbuild apps/agent-gateway/src/main.ts --bundle --platform=node --packages=external --format=esm --outfile=apps/agent-gateway/dist/main.js && esbuild apps/workflow-worker/src/main.ts --bundle --platform=node --packages=external --format=esm --outfile=apps/workflow-worker/dist/main.js && tsx scripts/build-workflows.ts",
+    "build": "npm run typecheck && npm run build -w @keel/web && esbuild apps/api/src/server.ts --bundle --platform=node --packages=external --format=esm --outfile=apps/api/dist/server.js --sourcemap && esbuild apps/artifact-worker/src/main.ts --bundle --platform=node --packages=external --format=esm --outfile=apps/artifact-worker/dist/main.js --sourcemap && esbuild apps/agent-gateway/src/main.ts --bundle --platform=node --packages=external --format=esm --outfile=apps/agent-gateway/dist/main.js && esbuild apps/workflow-worker/src/main.ts --bundle --platform=node --packages=external --format=esm --outfile=apps/workflow-worker/dist/main.js && tsx scripts/build-workflows.ts && esbuild apps/operations/src/main.ts --bundle --platform=node --packages=external --format=esm --outfile=apps/operations/dist/main.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test",
@@ -36,7 +36,9 @@
     "infra:execution": "docker compose -f infrastructure/docker/compose.yml --profile execution up -d --wait temporal",
     "agent:build": "sh scripts/build-agent.sh",
     "test:agent": "docker run --rm -v \"$PWD:/src\" -w /src/agents/deployment-agent golang:1.26-alpine go test ./...",
-    "test:execution": "npm run agent:build && tsx scripts/build-workflows.ts && vitest run --config vitest.execution.config.ts"
+    "test:execution": "npm run agent:build && tsx scripts/build-workflows.ts && vitest run --config vitest.execution.config.ts",
+    "self-host": "tsx scripts/self-host/main.ts",
+    "test:self-host": "tsx scripts/self-host/drill.ts"
   },
   "devDependencies": {
     "@aurelia/vite-plugin": "^2.0.0-rc.2",

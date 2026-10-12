@@ -1,4 +1,5 @@
 import { resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import fastifyStatic from '@fastify/static';
 import { database } from '../../../packages/database/src/index.js';
 import { artifactStore, repositoryRoot } from './storage-config.js';
@@ -24,7 +25,20 @@ const vault = process.env.KEEL_CREDENTIAL_KEY
   : undefined;
 
 const integrations = new IntegrationService(control, vault);
-const app = await createApp(control, true, integrations);
+
+if (!!process.env.API_TLS_CERT !== !!process.env.API_TLS_KEY) {
+  throw new Error('API_TLS_CERT and API_TLS_KEY must be configured together.');
+}
+
+const https = process.env.API_TLS_CERT
+  ? {
+      cert: await readFile(process.env.API_TLS_CERT),
+      key: await readFile(process.env.API_TLS_KEY!),
+      minVersion: 'TLSv1.3' as const,
+    }
+  : undefined;
+
+const app = await createApp(control, true, integrations, https);
 
 if (process.env.NODE_ENV === 'production') {
   await app.register(fastifyStatic, {

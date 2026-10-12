@@ -2,7 +2,7 @@
 
 Build anywhere. Deploy everywhere.
 
-Keel is a continuous delivery application for artifacts built by your existing CI. This repository implements the control plane, GitHub Actions ingestion, Bitbucket Pipelines publishing, Docker execution, promotion policy, rollback planning and scoped deployment secrets from [PLAN.md](PLAN.md).
+Keel is a continuous delivery application for artifacts built by your existing CI. This repository implements the control plane, GitHub Actions ingestion, Bitbucket Pipelines publishing, Docker execution, promotion policy, rollback planning scoped deployment secrets, self-hosted packaging and operational recovery from [PLAN.md](PLAN.md).
 
 You can create projects, publish files with SHA-256 verification, create immutable releases, request deployments to staging or production, approve them from a separate identity, and inspect the audit trail. The Aurelia interface uses navy, sea teal, off-white, and small animated boats for loading states. Motion follows the operating system’s reduced-motion preference.
 
@@ -27,6 +27,10 @@ Use `KEEL_SECRET_MANAGER_TOKEN` to create, rotate or revoke [deployment secrets]
 Tokens are stored as SHA-256 hashes in PostgreSQL. The browser keeps its token in memory; reloading the page requires reconnecting. `npm run setup` preserves your data and can be rerun. Changing a bootstrap token in `.env` and rerunning setup revokes the previous token for that local identity.
 
 The default local store keeps artifacts in `.data/artifacts/<organisation>/<sha256>`. [S3 setup and migration](docs/storage.md) are available when you want a shared artifact store. Keep this directory with the database when backing up local state. `npm run infra:down` stops PostgreSQL without removing its volume.
+
+## Self-hosted installation
+
+Use the [self-hosting guide](docs/self-hosting.md) for the packaged Docker Compose installation, private TLS, separate runtime database credentials and service health checks. Follow [backup and recovery](docs/recovery.md) for encrypted cold backups, fresh-volume restore and agent quarantine. Run `npm run test:self-host` to exercise the package and restore procedure in disposable containers.
 
 ## Import from GitHub Actions
 
@@ -88,6 +92,6 @@ NODE_ENV=production npm start
 npm run worker:artifacts
 ```
 
-Open **http://127.0.0.1:4040**. This uses the same local configuration; it is not a supported production deployment package.
+Open **http://127.0.0.1:4040**. This uses the local development configuration. Use the self-hosting package above for a separately configured installation.
 
 See [the API contract](docs/api.md) and [implementation status](docs/implementation.md) for boundaries and next work.

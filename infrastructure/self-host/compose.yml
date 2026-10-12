@@ -1,0 +1,244 @@
+x-app: &app
+  image: keel/self-host:${KEEL_IMAGE_TAG:-0.1.0}
+  build:
+    context: ../..
+    dockerfile: infrastructure/self-host/Dockerfile
+  init: true
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 128
+  tmpfs: ['/tmp:rw,nosuid,noexec,size=64m']
+  stop_grace_period: 2m
+  networks: [backend, outbound]
+  logging:
+    driver: local
+    options: { max-size: 10m, max-file: '3' }
+
+x-runtime: &runtime
+  DB_USER: keel_runtime
+  DB_PASSWORD_FILE: /run/secrets/keel_runtime_password
+  ARTIFACT_PATH: /data/artifacts
+  KEEL_HEALTH_FILE: /tmp/keel-ready
+
+x-health: &health
+  interval: 15s
+  timeout: 10s
+  retries: 4
+  start_period: 45s
+
+services:
+  postgres:
+    image: postgres:17.11-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    volumes: [postgres:/var/lib/postgresql/data]
+    networks: [backend]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U postgres']
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    stop_grace_period: 1m
+    logging:
+      driver: local
+      options: { max-size: 10m, max-file: '3' }
+
+  volumes:
+    image: busybox:1.37.0
+    profiles: [operations]
+    user: '0:0'
+    command: [chown, '1000:1000', /data/artifacts]
+    volumes: [artifacts:/data/artifacts]
+    network_mode: none
+    restart: 'no'
+
+  provision:
+    <<: *app
+    profiles: [operations]
+    restart: 'no'
+    command: [provision]
+    environment:
+      DB_USER: postgres
+      DB_NAME: postgres
+      DB_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password, keel_owner_password, keel_runtime_password, temporal_password]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  migrate:
+    <<: *app
+    profiles: [operations]
+    restart: 'no'
+    command: [migrate]
+    environment:
+      DB_USER: keel_owner
+      DB_PASSWORD_FILE: /run/secrets/keel_owner_password
+      KEEL_OPERATOR_TOKEN_FILE: /run/secrets/operator_token
+      KEEL_APPROVER_TOKEN_FILE: /run/secrets/approver_token
+      KEEL_SECRET_MANAGER_TOKEN_FILE: /run/secrets/secret_manager_token
+    secrets: [keel_owner_password, operator_token, approver_token, secret_manager_token]
+
+  temporal-schema:
+    image: temporalio/admin-tools:1.31.0
+    profiles: [operations]
+    entrypoint: [sh, /scripts/temporal-schema.sh]
+    secrets: [temporal_password]
+    volumes: ['./temporal-schema.sh:/scripts/temporal-schema.sh:ro']
+    networks: [backend]
+    restart: 'no'
+
+  temporal:
+    image: temporalio/server:1.31.0
+    restart: unless-stopped
+    entrypoint: [sh, /scripts/temporal-start.sh]
+    environment:
+      DB: postgres12
+      DB_PORT: '5432'
+      POSTGRES_USER: temporal
+      POSTGRES_SEEDS: postgres
+      DBNAME: temporal
+      VISIBILITY_DBNAME: temporal_visibility
+      BIND_ON_IP: 0.0.0.0
+      NUM_HISTORY_SHARDS: '128'
+      DYNAMIC_CONFIG_FILE_PATH: /etc/temporal/dynamic.yaml
+    secrets: [temporal_password]
+    volumes:
+      - './temporal-start.sh:/scripts/temporal-start.sh:ro'
+      - './temporal-dynamic.yaml:/etc/temporal/dynamic.yaml:ro'
+    networks: [backend]
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: [CMD, nc, -z, localhost, '7233']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+    stop_grace_period: 1m
+    logging:
+      driver: local
+      options: { max-size: 10m, max-file: '3' }
+
+  temporal-namespace:
+    image: temporalio/admin-tools:1.31.0
+    profiles: [operations]
+    entrypoint: [sh, /scripts/temporal-namespace.sh]
+    environment: { TEMPORAL_ADDRESS: 'temporal:7233' }
+    volumes: ['./temporal-namespace.sh:/scripts/temporal-namespace.sh:ro']
+    networks: [backend]
+    restart: 'no'
+
+  api:
+    <<: *app
+    command: [api]
+    environment:
+      <<: *runtime
+      HOST: 0.0.0.0
+      API_TLS_CERT: /run/secrets/server_cert
+      API_TLS_KEY: /run/secrets/server_key
+      API_TLS_CA: /run/secrets/ca_cert
+      API_TLS_SERVER_NAME: ${KEEL_HOSTNAME:-localhost}
+      KEEL_CREDENTIAL_KEY_FILE: /run/secrets/credential_key
+      KEEL_DEPLOYMENT_SECRET_KEY_FILE: /run/secrets/deployment_secret_key
+    secrets:
+      [
+        keel_runtime_password,
+        credential_key,
+        deployment_secret_key,
+        server_cert,
+        server_key,
+        ca_cert,
+      ]
+    volumes: [artifacts:/data/artifacts]
+    ports: ['${KEEL_BIND_ADDRESS:-127.0.0.1}:${KEEL_HTTPS_PORT:-8443}:4040']
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      <<: *health
+      test: [CMD, node, apps/operations/dist/main.js, health, api]
+
+  artifact-worker:
+    <<: *app
+    command: [artifact-worker]
+    environment:
+      <<: *runtime
+      KEEL_CREDENTIAL_KEY_FILE: /run/secrets/credential_key
+    secrets: [keel_runtime_password, credential_key]
+    volumes: [artifacts:/data/artifacts]
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      <<: *health
+      test: [CMD, node, apps/operations/dist/main.js, health, artifact-worker]
+
+  workflow-worker:
+    <<: *app
+    command: [workflow-worker]
+    environment:
+      <<: *runtime
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: keel
+      TEMPORAL_TASK_QUEUE: keel-deployments
+    secrets: [keel_runtime_password]
+    volumes: ['artifacts:/data/artifacts:ro']
+    depends_on:
+      temporal: { condition: service_healthy }
+    healthcheck:
+      <<: *health
+      test: [CMD, node, apps/operations/dist/main.js, health, workflow-worker]
+
+  agent-gateway:
+    <<: *app
+    command: [agent-gateway]
+    environment:
+      <<: *runtime
+      AGENT_HOST: 0.0.0.0
+      AGENT_TLS_CERT: /run/secrets/server_cert
+      AGENT_TLS_KEY: /run/secrets/server_key
+      AGENT_TLS_CA: /run/secrets/ca_cert
+      KEEL_DEPLOYMENT_SECRET_KEY_FILE: /run/secrets/deployment_secret_key
+    secrets: [keel_runtime_password, deployment_secret_key, server_cert, server_key, ca_cert]
+    volumes: ['artifacts:/data/artifacts:ro']
+    ports: ['${KEEL_BIND_ADDRESS:-127.0.0.1}:${KEEL_AGENT_PORT:-8444}:4041']
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      <<: *health
+      test: [CMD, node, apps/operations/dist/main.js, health, agent-gateway]
+
+  operations:
+    <<: *app
+    profiles: [operations]
+    restart: 'no'
+    command: [verify]
+    environment:
+      <<: *runtime
+      KEEL_CREDENTIAL_KEY_FILE: /run/secrets/credential_key
+      KEEL_DEPLOYMENT_SECRET_KEY_FILE: /run/secrets/deployment_secret_key
+    secrets: [keel_runtime_password, credential_key, deployment_secret_key]
+    volumes: ['artifacts:/data/artifacts:ro']
+
+networks:
+  backend: { internal: true }
+  outbound: {}
+volumes:
+  postgres: {}
+  artifacts: {}
+secrets:
+  postgres_password: { file: '${KEEL_INSTANCE_DIR}/secrets/postgres_password' }
+  keel_owner_password: { file: '${KEEL_INSTANCE_DIR}/secrets/keel_owner_password' }
+  keel_runtime_password: { file: '${KEEL_INSTANCE_DIR}/secrets/keel_runtime_password' }
+  temporal_password: { file: '${KEEL_INSTANCE_DIR}/secrets/temporal_password' }
+  operator_token: { file: '${KEEL_INSTANCE_DIR}/secrets/operator_token' }
+  approver_token: { file: '${KEEL_INSTANCE_DIR}/secrets/approver_token' }
+  secret_manager_token: { file: '${KEEL_INSTANCE_DIR}/secrets/secret_manager_token' }
+  credential_key: { file: '${KEEL_INSTANCE_DIR}/secrets/credential_key' }
+  deployment_secret_key: { file: '${KEEL_INSTANCE_DIR}/secrets/deployment_secret_key' }
+  server_cert: { file: '${KEEL_INSTANCE_DIR}/tls/server.crt' }
+  server_key: { file: '${KEEL_INSTANCE_DIR}/tls/server.key' }
+  ca_cert: { file: '${KEEL_INSTANCE_DIR}/tls/ca.crt' }

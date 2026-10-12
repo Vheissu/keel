@@ -1,4 +1,5 @@
 import Fastify, { type FastifyRequest, type FastifyServerOptions } from 'fastify';
+import type { ServerOptions } from 'node:https';
 import rateLimit from '@fastify/rate-limit';
 import { z } from 'zod';
 import {
@@ -41,8 +42,10 @@ export async function createApp(
   service: ControlPlane,
   logger: FastifyServerOptions['logger'] = false,
   integrations = new IntegrationService(service),
+  https?: ServerOptions,
 ) {
   const app = Fastify({
+    ...(https ? { https } : {}),
     logger: logger
       ? { ...(typeof logger === 'object' ? logger : {}), redact: ['req.headers.authorization'] }
       : false,
