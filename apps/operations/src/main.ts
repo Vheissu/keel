@@ -5,6 +5,7 @@ import { bootstrap } from '../../../packages/database/src/bootstrap.js';
 import { configure } from './configuration.js';
 import { verify, quiescent, quarantine } from './recovery.js';
 import { health } from './health.js';
+import { OperationError } from './operation-error.js';
 
 const services = ['api', 'artifact-worker', 'workflow-worker', 'agent-gateway'];
 const tasks = ['provision', 'migrate', 'verify', 'quiescent', 'quarantine', 'health'];
@@ -28,7 +29,7 @@ try {
             const password = (await readFile(`/run/secrets/${role}_password`, 'utf8')).trim();
 
             if (!/^[a-f0-9]{64}$/.test(password)) {
-              throw new Error('Invalid database password file.');
+              throw new OperationError('Invalid database password file.');
             }
 
             const exists = await db.query('SELECT 1 FROM pg_roles WHERE rolname=$1', [role]);
@@ -88,18 +89,27 @@ try {
           await health(db, process.argv[3]);
           break;
         default:
-          throw new Error('Unknown operations command.');
+          throw new OperationError('Unknown operations command.');
       }
     } finally {
       await db.end();
     }
   }
-} catch {
-  // Driver errors can contain connection strings. Operational failures never print credentials.
+} catch (error) {
+  // Driver errors can contain connection strings, so only Keel's own messages and error codes such
+  // as ECONNREFUSED or 28P01 are printed.
   const known = [...services, ...tasks].includes(command) ? command : 'unknown';
+  const code = (error as { code?: unknown } | null)?.code;
+  let reason = '';
+
+  if (error instanceof OperationError) {
+    reason = ` ${error.message}`;
+  } else if (typeof code === 'string' && /^[A-Z0-9_]{2,40}$/.test(code)) {
+    reason = ` Error code ${code}.`;
+  }
 
   console.error(
-    `Keel operations command failed: ${known}. Check configuration, service health and the recovery guide.`,
+    `Keel operations command failed: ${known}.${reason} Check configuration, service health and the recovery guide.`,
   );
 
   process.exitCode = 1;

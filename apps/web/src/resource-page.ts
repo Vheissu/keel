@@ -9,6 +9,9 @@ export interface PageResult<T> {
   previous_cursor: string | null;
 }
 
+// The page-size selector offers only these values; anything else in a URL falls back to the default.
+const pageSizes = [25, 50, 100];
+
 export class ResourcePage<T> {
   items: T[] = [];
   total = 0;
@@ -53,7 +56,9 @@ export class ResourcePage<T> {
 
       this.query = params.get(`${this.key}.q`) || '';
       this.cursor = params.get(`${this.key}.cursor`) || '';
-      this.limit = Number(params.get(`${this.key}.limit`) || 25);
+      const limit = Number(params.get(`${this.key}.limit`));
+
+      this.limit = pageSizes.includes(limit) ? limit : 25;
     }
 
     await this.load();

@@ -4,6 +4,7 @@ import { transaction, type Database } from '../../../packages/database/src/index
 import { CredentialVault } from '../../api/src/credential-vault.js';
 import { secretContext } from '../../api/src/deployment-secrets.js';
 import { artifactStore } from '../../api/src/storage-config.js';
+import { OperationError } from './operation-error.js';
 
 export async function quiescent(db: Database) {
   const result = await db.query(`
@@ -47,7 +48,7 @@ export async function quiescent(db: Database) {
   const counts = result.rows[0];
 
   if (Object.values(counts).some((value) => value !== 0)) {
-    throw new Error('Wait for active work and reconciliation before taking a backup.');
+    throw new OperationError('Wait for active work and reconciliation before taking a backup.');
   }
 
   return counts;
@@ -65,7 +66,7 @@ export async function verify(db: Database) {
   );
 
   if (JSON.stringify(expected) !== JSON.stringify(applied)) {
-    throw new Error('The database and image have different migration versions.');
+    throw new OperationError('The database and image have different migration versions.');
   }
 
   const store = artifactStore();

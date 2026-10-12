@@ -34,10 +34,17 @@ export async function stop(directory: string, installation: Installation) {
 
   try {
     await compose(directory, installation, ['run', '--rm', '--no-deps', 'operations', 'quiescent']);
-  } catch {
+  } catch (error) {
     await compose(directory, installation, ['start', 'api', 'artifact-worker']);
+
+    // The check also fails when PostgreSQL is unavailable, so pass on its own reason.
+    const reason =
+      (error instanceof Error ? error.message : '').match(
+        /Keel operations command failed: .*/,
+      )?.[0] ?? 'The quiescence check did not complete.';
+
     throw new Error(
-      'Active work or reconciliation prevents a clean stop. Admission has resumed. Finish or cancel pending work and resolve reconciliation before retrying.',
+      `Active work, reconciliation or a failed check prevents a clean stop. Admission has resumed. ${reason}`,
     );
   }
 

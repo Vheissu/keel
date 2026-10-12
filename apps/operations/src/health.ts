@@ -4,6 +4,7 @@ import { connect } from 'node:net';
 import { X509Certificate } from 'node:crypto';
 import { Connection } from '@temporalio/client';
 import type { Database } from '../../../packages/database/src/index.js';
+import { OperationError } from './operation-error.js';
 
 export async function health(db: Database, service: string) {
   await db.query('SELECT 1');
@@ -21,13 +22,13 @@ export async function health(db: Database, service: string) {
           if (res.statusCode === 200) {
             resolve();
           } else {
-            reject(new Error('API not ready.'));
+            reject(new OperationError('API not ready.'));
           }
         },
       );
 
       req.on('error', reject);
-      req.on('timeout', () => req.destroy(new Error('API timed out.')));
+      req.on('timeout', () => req.destroy(new OperationError('API timed out.')));
       req.end();
     });
   } else if (service === 'agent-gateway') {
@@ -37,7 +38,7 @@ export async function health(db: Database, service: string) {
       Date.parse(certificate.validTo) <= Date.now() ||
       Date.parse(certificate.validFrom) > Date.now()
     ) {
-      throw new Error('Gateway certificate is not valid.');
+      throw new OperationError('Gateway certificate is not valid.');
     }
 
     await new Promise<void>((resolve, reject) => {
@@ -51,13 +52,13 @@ export async function health(db: Database, service: string) {
       });
 
       socket.on('error', reject);
-      socket.on('timeout', () => socket.destroy(new Error('Gateway timed out.')));
+      socket.on('timeout', () => socket.destroy(new OperationError('Gateway timed out.')));
     });
   } else if (['artifact-worker', 'workflow-worker'].includes(service)) {
     const file = await stat(process.env.KEEL_HEALTH_FILE!);
 
     if (Date.now() - file.mtimeMs > 300000) {
-      throw new Error('Worker heartbeat is stale.');
+      throw new OperationError('Worker heartbeat is stale.');
     }
 
     if (service === 'workflow-worker') {
@@ -70,6 +71,6 @@ export async function health(db: Database, service: string) {
       }
     }
   } else {
-    throw new Error('Unknown service.');
+    throw new OperationError('Unknown service.');
   }
 }

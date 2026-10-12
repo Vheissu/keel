@@ -54,7 +54,8 @@ export class RollbackPlanner {
     this.revision++;
   }
 
-  async load(cursor: string | null = null) {
+  // The page only advances once its candidates load, so a failed request can be retried in place.
+  async load(page = 0) {
     if (!this.source || !this.api) {
       return;
     }
@@ -67,12 +68,16 @@ export class RollbackPlanner {
     this.busy = true;
 
     try {
+      const cursor = this.cursors[page];
+
       const result = await this.api.request<{
         candidates: Candidate[];
         next_cursor: string | null;
       }>(`/deployments/${this.source.id}/rollback-candidates${cursor ? `?cursor=${cursor}` : ''}`);
 
       if (revision === this.revision) {
+        this.page = page;
+        this.cursors[page + 1] = result.next_cursor;
         this.nextCursor = result.next_cursor;
         this.candidates = result.candidates;
         this.candidateId = result.candidates[0]?.deployment_id ?? '';
@@ -90,14 +95,13 @@ export class RollbackPlanner {
 
   async next() {
     if (this.nextCursor) {
-      this.cursors[++this.page] = this.nextCursor;
-      await this.load(this.nextCursor);
+      await this.load(this.page + 1);
     }
   }
 
   async previous() {
     if (this.page > 0) {
-      await this.load(this.cursors[--this.page]);
+      await this.load(this.page - 1);
     }
   }
 

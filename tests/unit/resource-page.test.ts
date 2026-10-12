@@ -90,3 +90,17 @@ it('does not reset a page when a delayed search was already applied by a page-si
   expect(pager.cursor).toBe('next-page');
   expect(request).toHaveBeenCalledTimes(2);
 });
+
+it('falls back to the default page size for an edited page link', async () => {
+  vi.stubGlobal('window', {
+    location: { hash: '#projects?projects.limit=1000&other.limit=50' },
+    addEventListener: vi.fn(),
+  });
+
+  const request = vi.fn().mockResolvedValue(result('first'));
+  const pager = new ResourcePage<string>({ request } as unknown as Api, 'projects', 'projects');
+
+  await pager.start();
+  expect(pager.limit).toBe(25);
+  expect(request).toHaveBeenCalledWith('/resources/projects?limit=25&q=');
+});

@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { OperationError } from './operation-error.js';
 
 export const secretNames = [
   'DB_PASSWORD',
@@ -18,13 +19,13 @@ export async function configure(env = process.env) {
     }
 
     if (env[name]) {
-      throw new Error(`Configure ${name} or ${name}_FILE, not both.`);
+      throw new OperationError(`Configure ${name} or ${name}_FILE, not both.`);
     }
 
     const value = (await readFile(file, 'utf8')).trim();
 
     if (!value) {
-      throw new Error(`${name}_FILE is empty.`);
+      throw new OperationError(`${name}_FILE is empty.`);
     }
 
     env[name] = value;
@@ -32,7 +33,7 @@ export async function configure(env = process.env) {
 
   if (!env.DATABASE_URL) {
     if (!env.DB_USER || !env.DB_PASSWORD) {
-      throw new Error('Database credentials are missing.');
+      throw new OperationError('Database credentials are missing.');
     }
 
     const url = new URL('postgres://postgres:5432/keel');

@@ -1,3 +1,4 @@
+import type { ChildProcess } from 'node:child_process';
 import { join, resolve, relative } from 'node:path';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { Readable } from 'node:stream';
@@ -28,6 +29,20 @@ const manifestSchema = z
       .strict(),
   })
   .strict();
+
+// Settle both ends of an archive stream before the caller cleans up. Otherwise a failed process
+// rejects first while encryption or extraction is still writing.
+async function settle(child: ChildProcess, tasks: Promise<unknown>[]) {
+  try {
+    await Promise.all(tasks);
+  } catch (error) {
+    child.kill();
+    await Promise.allSettled(tasks);
+    throw error;
+  } finally {
+    child.kill();
+  }
+}
 
 async function usedImages(directory: string, installation: Installation) {
   return Promise.all(
@@ -117,12 +132,7 @@ export async function backup(
       const { child, done } = start(name === 'configuration' ? 'tar' : 'docker', args);
 
       child.stdin.end();
-
-      try {
-        await Promise.all([encrypt(child.stdout, file, key, name), done]);
-      } finally {
-        child.kill();
-      }
+      await settle(child, [encrypt(child.stdout, file, key, name), done]);
 
       checksums[name] = await hashFile(file);
     }
@@ -243,12 +253,7 @@ export async function restore(
       const { child, done } = start(name === 'configuration' ? 'tar' : 'docker', args);
 
       child.stdout.resume();
-
-      try {
-        await Promise.all([decrypt(join(source, `${name}.enc`), key, name, child.stdin), done]);
-      } finally {
-        child.kill();
-      }
+      await settle(child, [decrypt(join(source, `${name}.enc`), key, name, child.stdin), done]);
     }
 
     const installation = await readInstallation(destination);

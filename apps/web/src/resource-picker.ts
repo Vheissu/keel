@@ -18,6 +18,8 @@ export class ResourcePicker {
   @bindable projectId = '';
   @bindable state = '';
   @bindable optional = false;
+  // A record that must not be offered, such as an environment as its own prerequisite.
+  @bindable exclude = '';
   @bindable autofocus = false;
   @bindable({ mode: BindingMode.twoWay }) value = '';
   @bindable changed: (item?: Choice) => void = () => {};
@@ -84,7 +86,7 @@ export class ResourcePicker {
     }
 
     if (!this.value && !this.optional) {
-      this.value = this.pager.items[0]?.id || '';
+      this.value = this.pager.items.find((item) => item.id !== this.exclude)?.id || '';
       this.select();
     }
 
@@ -103,6 +105,7 @@ export class ResourcePicker {
   get pinned() {
     return this.selected &&
       this.selected.id === this.value &&
+      this.selected.id !== this.exclude &&
       !this.pager.items.some((item) => item.id === this.value)
       ? this.selected
       : null;
