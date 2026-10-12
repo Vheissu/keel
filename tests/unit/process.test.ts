@@ -22,6 +22,16 @@ describe('deployment process contract', () => {
     expect(() => parseProcess(process)).toThrow();
   });
 
+  it.each(['//external.example/health', '/health#fragment', '/health\nheader', '/health check'])(
+    'rejects unsafe HTTP verification path %j',
+    (path) => {
+      const process = deploymentProcess();
+
+      Object.assign(process.spec.environments.staging, { verify: { http: { path } } });
+      expect(() => parseProcess(process)).toThrow();
+    },
+  );
+
   it('rejects duplicate YAML keys, aliases, oversized documents and missing environments', () => {
     expect(() => parseProcess('kind: DeploymentProcess\nkind: DeploymentProcess')).toThrow(
       'Invalid YAML',

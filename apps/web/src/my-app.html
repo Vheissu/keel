@@ -55,7 +55,7 @@
       <div class="header-actions" if.bind="data">
         <button
           class="button secondary"
-          if.bind="page !== 'Integrations'"
+          if.bind="page !== 'Integrations' && page !== 'Targets'"
           click.trigger="refresh()"
           disabled.bind="loading || busy"
         >
@@ -240,7 +240,7 @@
       </template>
       <div
         class="list-toolbar"
-        if.bind="page !== 'Overview' && page !== 'Environments' && page !== 'Audit log' && page !== 'Integrations'"
+        if.bind="page !== 'Overview' && page !== 'Environments' && page !== 'Audit log' && page !== 'Integrations' && page !== 'Targets'"
       >
         <label class="search-label" for="search">Search ${page.toLowerCase()}</label>
         <input
@@ -378,8 +378,8 @@
         <div class="execution-note">
           <span class="brass-dot"></span>
           <p>
-            Deployment execution is not connected yet. Approved requests stay queued until the agent
-            integration is implemented.
+            Docker execution requires a running workflow worker, a private agent and one matching
+            target. A release is verified only after its container passes the HTTP health check.
           </p>
         </div>
         <div class="table-wrap">
@@ -402,6 +402,9 @@
                 <td>${environmentName(deployment.environment_id)}</td>
                 <td>
                   <span class="status ${deployment.status}">${statusLabel(deployment.status)}</span>
+                  <small if.bind="deployment.result_code">
+                    ${deployment.result_code.replaceAll('_', ' ').toLowerCase()}
+                  </small>
                 </td>
                 <td>${date(deployment.created_at)}</td>
                 <td class="row-actions">
@@ -425,7 +428,7 @@
                   </template>
                   <button
                     class="text-button"
-                    if.bind="canWrite && (deployment.status === 'queued' || deployment.status === 'awaiting_approval')"
+                    if.bind="canWrite && (deployment.status === 'queued' || deployment.status === 'awaiting_approval' || deployment.status === 'running' || deployment.status === 'reconciliation_required')"
                     disabled.bind="busy"
                     click.trigger="action(deployment, 'cancel')"
                   >
@@ -451,6 +454,14 @@
           </div>
         </div>
       </template>
+      <targets-panel
+        if.bind="page === 'Targets'"
+        api.bind="api"
+        projects.bind="data.projects"
+        environments.bind="data.environments"
+        releases.bind="data.releases"
+        can-write.bind="canWrite"
+      ></targets-panel>
       <template if.bind="page === 'Environments'">
         <div class="table-wrap">
           <table>
@@ -655,8 +666,8 @@
         </select>
         <div class="execution-note">
           <p>
-            This creates a deployment request. Execution will wait for an agent integration.
-            Production requires a separate approver.
+            This creates a deployment request for a matching target and private agent. Production
+            requires a separate approver.
           </p>
         </div>
       </template>

@@ -33,11 +33,11 @@ protected request   → awaiting_approval → queued → cancelled
                                        → cancelled
 ```
 
-The environment policy and process policy are combined with OR: either can require approval. YAML cannot disable the production environment’s approval requirement. Approved requests remain queued because execution is not connected. No endpoint accepts a caller-supplied success state.
+The environment policy and process policy are combined with OR: either can require approval. YAML cannot disable the production environment’s approval requirement. Approved requests queue for the Temporal worker. Only the separate mTLS agent gateway accepts execution results under a current fenced lease. Operator API tokens cannot submit success.
 
-Each project/environment pair has at most one pending or queued request, enforced by a partial unique database index. Cancellation or rejection releases that lock. State changes lock the deployment row and commit with append-only deployment events, audit events, and transactional outbox entries. Cancellation rejects later approval attempts.
+Each project/environment pair has at most one pending, queued, running, cancelling or reconciliation-required request, enforced by a partial unique database index. Rejection and cancellation before execution release that lock. Active cancellation keeps it until target cleanup is confirmed. State changes lock the deployment row and commit with append-only deployment events, audit events, and transactional outbox entries. Cancellation rejects later approval attempts.
 
-Deployment requests and approval both recheck the retained artifact. Missing or corrupt bytes leave the request unqueued or unapproved. An execution worker must recheck policy, cancellation, and artifact integrity immediately before execution when that worker is implemented.
+Deployment requests and approval both recheck the retained artifact. Missing or corrupt bytes leave the request unqueued or unapproved. The execution worker reads authoritative deployment state, and the agent rechecks its lease before replacing a target. Both storage and agent verify the retained bytes.
 
 ## Errors and limits
 
@@ -65,7 +65,7 @@ The worker retrieves authoritative GitHub metadata, enforces the connection poli
 
 Imports move from `pending` to `processing`, then `succeeded` or `failed`. Retryable provider/storage errors return to `pending` with persisted backoff. Workers claim rows with `SKIP LOCKED`, renew a two-minute lease, and fence completion with a lease token. Five attempts are allowed before an explicit operator retry is needed. A crashed worker's expired lease can be reclaimed. Import records expose safe error codes/messages, attempts and the next eligible time, never provider response bodies or signed download URLs.
 
-GitHub Actions supports workflow discovery, run reads and artifact ingestion. Other provider adapters remain unavailable. Triggering/cancelling CI, provider deployment, rollback, GitHub App installation/OAuth, automatic release creation and deployment execution are not implemented. See [GitHub setup](github-actions.md).
+GitHub Actions supports workflow discovery, run reads and artifact ingestion. Other provider adapters remain unavailable. Triggering/cancelling CI, provider deployment, rollback, GitHub App installation/OAuth, automatic release creation and provider-owned deployment are not implemented. See [GitHub setup](github-actions.md).
 
 ## Bitbucket publishing
 
@@ -87,3 +87,16 @@ The API verifies that the run and step are currently running and match the conne
 The worker waits for both pipeline and step success, rechecks the run and bytes, and publishes artifact metadata under its current lease and connection revision. Pending blobs cannot be selected for a release. Failed or untrusted runs produce visible failed imports. Normal completion polling waits up to 24 hours and does not consume the five transient-error retries. Artifact provenance explicitly labels the digest as publisher-supplied. [Setup and trust boundaries](bitbucket-pipelines.md).
 
 Provider capability responses include `artifactIngestion`: `provider-download` for GitHub, `publishing-step` for Bitbucket, and `unavailable` for unimplemented adapters. Bitbucket reports run lookup support; workflow/artifact discovery, triggering, cancellation and deployment capabilities remain false.
+
+## Agent and target management
+
+| Method and path          | Permission | Input / result                                                                           |
+| ------------------------ | ---------- | ---------------------------------------------------------------------------------------- |
+| `GET /execution`         | read       | Latest 200 agents, targets and attempts; no lease credentials                            |
+| `POST /agents`           | write      | `{name, certificate_fingerprint}`; lowercase SHA-256 certificate fingerprint             |
+| `POST /agents/:id/state` | write      | `{state: "active"                                                                        | "draining" | "revoked"}`; revoked identities cannot resume |
+| `POST /targets`          | write      | `{name, project_id, environment_id, agent_id, labels}`; fixed Docker recreate capability |
+
+These mutations require idempotency keys. Target bindings are immutable in this increment. A target's `current_release_id` is present only when `current_state` is `verified`. `reconciliation_required` and `cancel_requested` deployments continue holding their environment and target locks. Result codes contain no agent-provided text.
+
+The separate HTTPS gateway provides `POST /agent/v1/poll`, `/heartbeat`, `/artifact` and `/result`. All require a registered trusted client certificate. Poll returns one assigned job or `null`. Other requests include `{attempt_id, fence, token}`; result also includes an allowed outcome/code pair. Artifact access is limited to that active deployment's retained blob. Revocation, cancellation, expiry and superseded fences are checked server-side. [Protocol, setup and recovery limits](deployment-agents.md).

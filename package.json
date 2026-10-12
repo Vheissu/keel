@@ -16,7 +16,7 @@
     "infra:down": "docker compose -f infrastructure/docker/compose.yml down",
     "db:migrate": "tsx --env-file=.env packages/database/src/migrate.ts",
     "dev": "concurrently -k -n api,web,imports 'npm run dev -w @keel/api' 'npm run dev -w @keel/web' 'npm run dev -w @keel/artifact-worker'",
-    "build": "npm run typecheck && npm run build -w @keel/web && esbuild apps/api/src/server.ts --bundle --platform=node --packages=external --format=esm --outfile=apps/api/dist/server.js --sourcemap && esbuild apps/artifact-worker/src/main.ts --bundle --platform=node --packages=external --format=esm --outfile=apps/artifact-worker/dist/main.js --sourcemap",
+    "build": "npm run typecheck && npm run build -w @keel/web && esbuild apps/api/src/server.ts --bundle --platform=node --packages=external --format=esm --outfile=apps/api/dist/server.js --sourcemap && esbuild apps/artifact-worker/src/main.ts --bundle --platform=node --packages=external --format=esm --outfile=apps/artifact-worker/dist/main.js --sourcemap && esbuild apps/agent-gateway/src/main.ts --bundle --platform=node --packages=external --format=esm --outfile=apps/agent-gateway/dist/main.js && esbuild apps/workflow-worker/src/main.ts --bundle --platform=node --packages=external --format=esm --outfile=apps/workflow-worker/dist/main.js && tsx scripts/build-workflows.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test",
@@ -30,7 +30,13 @@
     "test:s3": "TEST_S3_ENDPOINT=http://127.0.0.1:59000 vitest run tests/integration/s3.test.ts",
     "infra:storage": "docker compose -f infrastructure/docker/compose.yml --profile storage up -d --wait s3",
     "format:prettier": "prettier --write apps packages scripts tests examples infrastructure docs .github *.json *.ts *.mjs README.md",
-    "storage:copy-to-s3": "tsx --env-file=.env scripts/copy-artifacts-to-s3.ts"
+    "storage:copy-to-s3": "tsx --env-file=.env scripts/copy-artifacts-to-s3.ts",
+    "gateway:agents": "node --env-file=.env apps/agent-gateway/dist/main.js",
+    "worker:deployments": "node --env-file=.env apps/workflow-worker/dist/main.js",
+    "infra:execution": "docker compose -f infrastructure/docker/compose.yml --profile execution up -d --wait temporal",
+    "agent:build": "sh scripts/build-agent.sh",
+    "test:agent": "docker run --rm -v \"$PWD:/src\" -w /src/agents/deployment-agent golang:1.26-alpine go test ./...",
+    "test:execution": "npm run agent:build && tsx scripts/build-workflows.ts && vitest run --config vitest.execution.config.ts"
   },
   "devDependencies": {
     "@aurelia/vite-plugin": "^2.0.0-rc.2",
@@ -53,5 +59,10 @@
     "typescript": "~5.9.3",
     "vite": "^8.3.4",
     "vitest": "^4.1.11"
+  },
+  "dependencies": {
+    "@temporalio/client": "^1.24.0",
+    "@temporalio/worker": "^1.24.0",
+    "@temporalio/workflow": "^1.24.0"
   }
 }

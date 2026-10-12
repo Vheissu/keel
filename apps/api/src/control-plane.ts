@@ -320,7 +320,12 @@ export class ControlPlane {
     return result.rows[0];
   }
 
-  async deploymentEvent(tx: Transaction, p: Principal, deployment: Deployment) {
+  async deploymentEvent(
+    tx: Transaction,
+    p: Principal,
+    deployment: Deployment,
+    context: Record<string, unknown> = {},
+  ) {
     await tx.query(
       `
         INSERT INTO
@@ -337,7 +342,7 @@ export class ControlPlane {
       [randomUUID(), p.organisation_id, deployment.id, deployment.status, p.actor_id],
     );
 
-    // Worker delivery is deliberately deferred. The transactional event is durable.
+    // The dispatcher starts each queued deployment with a stable Temporal workflow ID.
     await tx.query('INSERT INTO outbox(id,organisation_id,topic,payload) VALUES($1,$2,$3,$4)', [
       randomUUID(),
       p.organisation_id,
@@ -348,6 +353,7 @@ export class ControlPlane {
     await this.audit(tx, p, `deployment.${deployment.status}`, deployment.id, {
       release_id: deployment.release_id,
       environment_id: deployment.environment_id,
+      ...context,
     });
   }
 
@@ -437,7 +443,9 @@ export class ControlPlane {
 
     if (action === 'approve' || action === 'reject') {
       approveDeployment(d, p);
-    } else if (!['queued', 'awaiting_approval'].includes(d.status)) {
+    } else if (
+      !['queued', 'awaiting_approval', 'running', 'reconciliation_required'].includes(d.status)
+    ) {
       throw new DomainError('INVALID_STATE', 'This deployment can no longer be cancelled.', 409);
     }
 
@@ -458,7 +466,10 @@ export class ControlPlane {
       cancel: 'cancelled',
     } as const;
 
-    const status = transitionStatuses[action];
+    const status =
+      action === 'cancel' && ['running', 'reconciliation_required'].includes(d.status)
+        ? 'cancel_requested'
+        : transitionStatuses[action];
 
     const result = await tx.query<Deployment>(
       `

@@ -8,7 +8,20 @@ const environment = z
     targetSelector: z.object({ labels: z.record(z.string().min(1), z.string().min(1)) }).strict(),
     requiresApproval: z.boolean().optional(),
     verify: z
-      .object({ http: z.object({ path: z.string().startsWith('/').max(200) }).strict() })
+      .object({
+        http: z
+          .object({
+            path: z
+              .string()
+              .startsWith('/')
+              .max(200)
+              .refine(
+                (value) => !value.startsWith('//') && !/[\x00-\x20#]/.test(value),
+                'Use a relative HTTP path without whitespace or a fragment.',
+              ),
+          })
+          .strict(),
+      })
       .strict()
       .optional(),
   })
@@ -22,7 +35,14 @@ export const processSchema = z
     spec: z
       .object({
         artifact: z
-          .object({ source: z.literal('release'), name: z.string().min(1).max(100) })
+          .object({
+            source: z.literal('release'),
+            name: z.string().min(1).max(100),
+            dockerImageId: z
+              .string()
+              .regex(/^sha256:[a-f0-9]{64}$/)
+              .optional(),
+          })
           .strict(),
         environments: z
           .record(z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/), environment)

@@ -1,0 +1,5 @@
+{
+  "name": "@keel/workflow-worker",
+  "private": true,
+  "type": "module"
+}

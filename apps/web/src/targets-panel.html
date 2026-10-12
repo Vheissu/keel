@@ -1,0 +1,186 @@
+<div class="section-title">
+  <h2>Private deployment agents</h2>
+  <div class="header-actions">
+    <button class="button secondary" click.trigger="refresh()" disabled.bind="busy">
+      Refresh targets
+    </button>
+    <button class="button primary" if.bind="canWrite" click.trigger="open('agent')">
+      Register agent
+    </button>
+    <button
+      class="button secondary"
+      if.bind="canWrite"
+      click.trigger="open('target')"
+      disabled.bind="!data.agents.length || !projects.length"
+    >
+      Add target
+    </button>
+  </div>
+</div>
+<p class="muted">
+  Agents connect outward over mutual TLS. Each Docker target belongs to one project, environment and
+  agent.
+</p>
+<p class="alert error" role="alert" if.bind="error">${error}</p>
+<p class="alert success" role="status" if.bind="notice">${notice}</p>
+<form class="target-form" if.bind="form" submit.trigger="save()">
+  <h3>${form === 'agent' ? 'Register a certificate' : 'Register a Docker target'}</h3>
+  <label>
+    Name
+    <input ref="nameInput" value.bind="name" required maxlength="100" autocomplete="off" />
+  </label>
+  <label if.bind="form === 'agent'">
+    Certificate SHA-256 fingerprint
+    <input value.bind="fingerprint" required autocomplete="off" spellcheck="false" />
+  </label>
+  <template if.bind="form === 'target'">
+    <label>
+      <span id="target-project-label">Project</span>
+      <select value.bind="projectId" aria-labelledby="target-project-label">
+        <option repeat.for="project of projects" model.bind="project.id">${project.name}</option>
+      </select>
+    </label>
+    <label>
+      <span id="target-environment-label">Environment</span>
+      <select value.bind="environmentId" aria-labelledby="target-environment-label">
+        <option repeat.for="environment of environments" model.bind="environment.id">
+          ${environment.name}
+        </option>
+      </select>
+    </label>
+    <label>
+      <span id="target-agent-label">Agent</span>
+      <select value.bind="agentId" aria-labelledby="target-agent-label">
+        <option
+          repeat.for="agent of data.agents"
+          disabled.bind="agent.state !== 'active'"
+          model.bind="agent.id"
+        >
+          ${agent.name}
+        </option>
+      </select>
+    </label>
+    <label>
+      Target labels (JSON)
+      <textarea value.bind="labels" rows="3" required spellcheck="false"></textarea>
+    </label>
+  </template>
+  <div class="header-actions">
+    <button class="button primary" type="submit" disabled.bind="busy">Save registration</button>
+    <button class="button secondary" type="button" click.trigger="closeForm()">Cancel</button>
+  </div>
+</form>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Registered agents">
+  <table>
+    <thead>
+      <tr>
+        <th>Agent</th>
+        <th>State</th>
+        <th>Last connected</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr repeat.for="agent of data.agents">
+        <td>
+          <strong>${agent.name}</strong>
+          <small><code>${agent.id}</code></small>
+        </td>
+        <td>${label(agent.state)}</td>
+        <td>${date(agent.last_seen_at)}</td>
+        <td class="row-actions">
+          <button
+            class="text-button"
+            if.bind="canWrite && agent.state === 'active'"
+            disabled.bind="busy"
+            click.trigger="setState(agent, 'draining')"
+          >
+            Drain
+          </button>
+          <button
+            class="text-button"
+            if.bind="canWrite && agent.state === 'draining'"
+            disabled.bind="busy"
+            click.trigger="setState(agent, 'active')"
+          >
+            Resume
+          </button>
+          <button
+            class="text-button danger"
+            if.bind="canWrite && agent.state !== 'revoked'"
+            disabled.bind="busy"
+            click.trigger="setState(agent, 'revoked')"
+          >
+            Revoke certificate
+          </button>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="empty-state" if.bind="!data.agents.length">
+    <boat-mark></boat-mark>
+    <h3>No agents registered.</h3>
+    <p>
+      Register a client certificate fingerprint, then configure the agent on a private Docker host.
+    </p>
+  </div>
+</div>
+<div class="section-title"><h2>Docker targets</h2></div>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Docker targets">
+  <table>
+    <thead>
+      <tr>
+        <th>Target / allowlist ID</th>
+        <th>Environment</th>
+        <th>Agent</th>
+        <th>Verified release</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr repeat.for="target of data.targets">
+        <td>
+          <strong>${target.name}</strong>
+          <small><code>${target.id}</code></small>
+        </td>
+        <td>${environmentName(target.environment_id)}</td>
+        <td>${agentName(target.agent_id)}</td>
+        <td>${releaseVersion(target)}</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="empty-state" if.bind="!data.targets.length">
+    <h3>No Docker targets.</h3>
+    <p>Add a target, then allow its ID and ports in the agent configuration.</p>
+  </div>
+</div>
+<div class="section-title"><h2>Execution attempts</h2></div>
+<p class="muted">
+  Reconciliation required means the target stays locked until its agent confirms cleanup. Refresh to
+  see new results.
+</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Execution attempts">
+  <table>
+    <thead>
+      <tr>
+        <th>Deployment</th>
+        <th>Target</th>
+        <th>State</th>
+        <th>Fence</th>
+        <th>Result</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr repeat.for="attempt of data.attempts">
+        <td><code>${attempt.deployment_id}</code></td>
+        <td>${targetName(attempt.target_id)}</td>
+        <td>${label(attempt.state)}</td>
+        <td>${attempt.fence}</td>
+        <td>${attempt.result_code ? label(attempt.result_code.toLowerCase()) : 'Pending'}</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="empty-state" if.bind="!data.attempts.length">
+    <h3>No execution attempts.</h3>
+    <p>A queued release needs a running workflow worker and one matching target.</p>
+  </div>
+</div>

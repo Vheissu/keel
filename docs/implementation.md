@@ -1,6 +1,6 @@
 # Implementation status
 
-The control-plane foundation, GitHub ingestion and Bitbucket publishing stages are implemented. PLAN.md remains the product roadmap.
+The control-plane foundation, GitHub ingestion, Bitbucket publishing and initial Docker execution stages are implemented. PLAN.md remains the product roadmap.
 
 ## Implemented
 
@@ -8,7 +8,7 @@ The control-plane foundation, GitHub ingestion and Bitbucket publishing stages a
 - Local workspace bootstrap with separate operator and approver tokens, hashed credentials, and fixed staging/production environments.
 - Project creation, artifact upload/download, immutable releases with canonical process snapshots, and deployment requests.
 - SHA-256 verification, atomic content-addressed local blob writes, database immutability triggers, and composite foreign keys across organisation/project references.
-- Strict deployment process validation for release artifacts, environment selectors, recreate/rolling strategy declarations, and optional HTTP verification declarations. These describe intent; no target executor exists yet.
+- Strict deployment process validation for release artifacts, environment selectors, recreate/rolling strategy declarations, and optional HTTP verification declarations. The Docker executor accepts recreate, a pinned image ID and an HTTP verification path; rolling remains a declaration only.
 - Environment approval enforcement, separation of duties, environment request locks, cancellation/rejection, append-only audit/deployment events, and transactional outbox writes.
 - Persistent request idempotency, scoped tokens, request validation, bounded uploads, stable errors, and process-local rate limiting.
 - GitHub Actions adapter with workflow discovery, authoritative run checks, paginated artifact discovery, signed download handling and SHA-256 verification. Bitbucket uses a separate publishing flow; other providers remain explicitly unavailable.
@@ -18,10 +18,14 @@ The control-plane foundation, GitHub ingestion and Bitbucket publishing stages a
 - Integration management, manual GitHub imports, Bitbucket publishing and retry controls in the UI and CLI.
 - CLI publishing, release creation, process validation, and status output.
 - Responsive UI, keyboard-accessible dialogs, reduced-motion boat loaders, and empty states backed by actual data.
+- Temporal deployment workflows and transactional outbox delivery, with stable workflow IDs.
+- A separate mutual-TLS gateway and outbound Go agent with scoped downloads, heartbeats, monotonic target fences, draining and revocation.
+- Controlled Docker recreate execution of a retained image archive, HTTP verification, cancellation cleanup and expiry reconciliation.
+- Target registration, agent state and verified-release projections in the UI.
 
 ## Next increment
 
-Connect the deployment outbox to Temporal and implement a fenced, outbound-only agent protocol. A queued deployment must never be treated as an executed deployment. The worker needs idempotent dispatch, cancellation reconciliation, heartbeats, lease expiry, log redaction, target validation, and verification results before a successful state can exist. Deploy one retained artifact to a controlled Docker target before adding SSH or additional strategies.
+Add deployable GitHub ZIP packaging, certificate recovery and richer target diagnostics before expanding execution to SSH or additional strategies. Promotion policy, secrets and rollback planning still need their own implementation. The current Docker path can redeploy a retained release through the ordinary approval flow.
 
 ## Decisions and constraints
 
@@ -33,7 +37,7 @@ SQL queries scope every organisation-owned API read, and composite foreign keys 
 
 The local bootstrap is not a hosted identity system. There is no invitation flow, token-management UI, token expiry, SSO, session cookie, or custom-role editor. Tokens are permission-scoped, but not yet project- or environment-scoped. Keep the development services bound to loopback. The browser does not persist credentials.
 
-Deployment outbox entries are durable but have no delivery worker. Artifact ingestion has a separate PostgreSQL-backed worker; it does not execute deployments or substitute for Temporal. Agent registration, Temporal, Redis, deployment secrets management, targets, verified deployment outcomes, staging-before-production promotion, rollback, runbooks, tenants, scheduled releases, and production packaging remain unimplemented. Successful staging is not required before requesting production in this increment; production approval still applies.
+Deployment outbox entries are delivered by the Temporal worker. Artifact ingestion retains its separate PostgreSQL-backed worker. Redis, deployment secrets management, staging-before-production promotion, rollback planning, runbooks, tenants, scheduled releases, and production packaging remain unimplemented. See [Docker agent setup and limits](deployment-agents.md), including the 25 MiB archive cap and the lack of forced recovery for unfinished revoked agents. Successful staging is not required before requesting production in this increment; production approval still applies.
 
 The dashboard shows the newest request per environment, including its pending/cancelled state. It does not claim that this is the currently deployed version. The latest 200 records per resource are loaded; pagination is a follow-up before supporting larger installations.
 

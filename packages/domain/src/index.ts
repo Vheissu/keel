@@ -54,7 +54,16 @@ export interface ReleaseManifest {
   provenance: Record<string, unknown>;
 }
 
-export type DeploymentStatus = 'awaiting_approval' | 'queued' | 'cancelled' | 'rejected';
+export type DeploymentStatus =
+  | 'awaiting_approval'
+  | 'queued'
+  | 'running'
+  | 'cancel_requested'
+  | 'reconciliation_required'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'rejected';
 
 export interface Deployment {
   id: string;
@@ -63,6 +72,7 @@ export interface Deployment {
   release_id: string;
   environment_id: string;
   status: DeploymentStatus;
+  result_code: string | null;
   requested_by: string;
   approved_by: string | null;
   created_at: string;

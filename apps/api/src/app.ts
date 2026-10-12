@@ -15,6 +15,8 @@ import {
   releaseInput,
   deploymentInput,
 } from './control-plane.js';
+import { ExecutionService } from './execution-service.js';
+import { registerExecutionRoutes } from './execution-routes.js';
 import { sha256 } from './artifact-store.js';
 import { IntegrationService } from './integration-service.js';
 import { registerIntegrationRoutes } from './integration-routes.js';
@@ -98,7 +100,7 @@ export async function createApp(
     try {
       await service.db.query('SELECT 1');
 
-      return { status: 'ok', execution: 'not-configured' };
+      return { status: 'ok', execution: 'agent-protocol-available' };
     } catch {
       return reply.code(503).send({ status: 'unavailable' });
     }
@@ -145,7 +147,7 @@ export async function createApp(
 
           const result: Record<string, unknown> = {
             principal: p,
-            execution: 'not-configured',
+            execution: 'agent-protocol-available',
             limit: 200,
           };
 
@@ -210,6 +212,7 @@ export async function createApp(
       });
 
       await registerIntegrationRoutes(api, integrations);
+      await registerExecutionRoutes(api, new ExecutionService(service));
 
       api.get('/providers', async () => ({ providers }));
 

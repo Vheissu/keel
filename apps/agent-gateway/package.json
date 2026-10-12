@@ -1,0 +1,5 @@
+{
+  "name": "@keel/agent-gateway",
+  "private": true,
+  "type": "module"
+}

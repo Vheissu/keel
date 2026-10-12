@@ -13,6 +13,26 @@ services:
       interval: 2s
       timeout: 3s
       retries: 20
+  temporal-data:
+    image: busybox:1.37.0
+    profiles: [execution]
+    user: '0:0'
+    command: chown 1000:1000 /data
+    volumes: ['temporal:/data']
+  temporal:
+    image: temporalio/temporal:1.6.1
+    profiles: [execution]
+    depends_on:
+      temporal-data:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ['CMD', 'temporal', 'operator', 'cluster', 'health']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    command: server start-dev --ip 0.0.0.0 --db-filename /data/temporal.db
+    ports: ['127.0.0.1:7233:7233', '127.0.0.1:8233:8233']
+    volumes: ['temporal:/data']
   s3:
     image: rustfs/rustfs:1.0.1
     profiles: [storage]
@@ -28,5 +48,6 @@ services:
       timeout: 3s
       retries: 30
 volumes:
+  temporal:
   artifacts:
   postgres:

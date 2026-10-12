@@ -394,3 +394,47 @@ test('connects Bitbucket, waits for successful CI, and manages publishing creden
 
   await page.screenshot({ path: 'output/playwright/bitbucket-mobile.png', fullPage: true });
 });
+
+test('registers and drains private agents, maps Docker targets and remains accessible on mobile', async ({
+  page,
+}) => {
+  await connect(page);
+  await page.getByRole('button', { name: 'New project', exact: true }).click();
+  await page.getByLabel('Project name', { exact: true }).fill('Docker service');
+
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: 'Create project', exact: true })
+    .click();
+
+  await expect(page.getByRole('dialog')).not.toBeVisible();
+  await page.getByRole('link', { name: 'Targets', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'No agents registered.' })).toBeVisible();
+  await page.getByRole('button', { name: 'Register agent', exact: true }).click();
+  await page.getByLabel('Name', { exact: true }).fill('Private staging host');
+  await page.getByLabel('Certificate SHA-256 fingerprint').fill(randomBytes(32).toString('hex'));
+  await page.getByRole('button', { name: 'Save registration' }).click();
+  await expect(page.getByRole('cell').filter({ hasText: 'Private staging host' })).toBeVisible();
+  await page.getByRole('button', { name: 'Add target', exact: true }).click();
+  await page.getByLabel('Name', { exact: true }).fill('Web staging');
+  await page.getByLabel('Environment', { exact: true }).selectOption({ label: 'Staging' });
+  await page.getByRole('button', { name: 'Save registration' }).click();
+  await expect(page.getByRole('cell').filter({ hasText: 'Web staging' })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'Unknown', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Drain', exact: true }).click();
+  await expect(page.getByRole('cell', { name: 'draining', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Resume', exact: true }).click();
+  await expect(page.getByRole('cell', { name: 'active', exact: true })).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.screenshot({ path: 'output/playwright/targets-desktop.png', fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('button', { name: 'Register agent', exact: true }).click();
+  await expect(page.getByLabel('Certificate SHA-256 fingerprint')).toBeVisible();
+
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.screenshot({ path: 'output/playwright/targets-mobile.png', fullPage: true });
+});

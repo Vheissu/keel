@@ -153,3 +153,5 @@ vite.config.ts.timestamp-*
 output/
 test-results/
 playwright-report/
+
+/agents/deployment-agent/deployment-agent

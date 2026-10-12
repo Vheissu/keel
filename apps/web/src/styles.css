@@ -1180,3 +1180,46 @@ nav-icon svg {
   max-width: 380px;
   white-space: normal;
 }
+
+.target-form {
+  display: grid;
+  gap: 1rem;
+  max-width: 44rem;
+  margin: 1.5rem 0;
+  padding: 1.5rem;
+  border: 1px solid var(--line, #cbd5d9);
+  border-radius: 0.75rem;
+  background: white;
+}
+.target-form label {
+  margin: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+.status.running {
+  background: #e5f2f3;
+  color: #174f56;
+}
+.status.succeeded {
+  background: #e4f2e9;
+  color: #245734;
+}
+.status.failed,
+.status.reconciliation_required,
+.status.cancel_requested {
+  background: #fff0d5;
+  color: #714614;
+}
+
+targets-panel {
+  display: block;
+}
+targets-panel .section-title {
+  margin: 1.5rem 0 0.75rem;
+}
+targets-panel > .section-title:first-child {
+  margin-top: 0;
+}
+targets-panel > p {
+  margin: 0.5rem 0 1rem;
+}

@@ -1,0 +1,14 @@
+{
+  "gateway": "https://127.0.0.1:4041",
+  "certificate": "/absolute/path/agent.crt",
+  "key": "/absolute/path/agent.key",
+  "ca": "/absolute/path/ca.crt",
+  "state_directory": "/absolute/path/agent-state",
+  "docker_socket": "/var/run/docker.sock",
+  "targets": {
+    "00000000-0000-0000-0000-000000000001": {
+      "host_port": 8088,
+      "container_port": 8080
+    }
+  }
+}

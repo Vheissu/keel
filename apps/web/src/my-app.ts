@@ -9,6 +9,7 @@ const pages = [
   'Releases',
   'Deployments',
   'Environments',
+  'Targets',
   'Integrations',
   'Audit log',
 ] as const;
@@ -88,6 +89,7 @@ export class MyApp {
       Releases: 'Immutable snapshots. The same artifact in every environment.',
       Deployments: 'Review approvals and track deployment requests.',
       Environments: 'Choose where releases go and who approves them.',
+      Targets: 'Private agents, target state and verified deployment results.',
       Integrations: 'Connect existing CI workflows and retain their build artifacts.',
       'Audit log': 'A record of changes and the people behind them.',
     }[this.page];
@@ -186,6 +188,11 @@ export class MyApp {
         {
           queued: 'Waiting for agent',
           awaiting_approval: 'Awaiting approval',
+          running: 'Deploying',
+          cancel_requested: 'Cancelling · cleanup pending',
+          reconciliation_required: 'Reconciliation required',
+          succeeded: 'Verified',
+          failed: 'Failed',
           cancelled: 'Cancelled',
           rejected: 'Rejected',
         } as Record<string, string>
@@ -434,7 +441,7 @@ spec:
       const notices = {
         approve: 'Deployment approved and queued.',
         reject: 'Deployment rejected.',
-        cancel: 'Deployment cancelled.',
+        cancel: 'Cancellation requested. Active target work must finish cleanup.',
       };
 
       this.notice = notices[action];

@@ -1,0 +1,24 @@
+apiVersion: keel.dev/v1alpha1
+kind: DeploymentProcess
+metadata:
+  name: docker-web
+spec:
+  artifact:
+    source: release
+    name: application
+    # Replace with docker image inspect --format '{{.Id}}' your-image:version
+    dockerImageId: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  environments:
+    staging:
+      strategy: recreate
+      targetSelector:
+        labels: { app: web, tier: staging }
+      verify:
+        http: { path: / }
+    production:
+      strategy: recreate
+      requiresApproval: true
+      targetSelector:
+        labels: { app: web, tier: production }
+      verify:
+        http: { path: / }

@@ -31,5 +31,8 @@ jobs:
       - run: npm run format:check
       - run: npm run infra:storage
       - run: npm run check
+      - run: npm run test:agent
+      - run: npm run infra:execution
+      - run: npm run test:execution
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
