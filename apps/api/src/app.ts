@@ -1,3 +1,4 @@
+import { registerResourceReads } from './resource-reads.js';
 import Fastify, { type FastifyRequest, type FastifyServerOptions } from 'fastify';
 import type { ServerOptions } from 'node:https';
 import rateLimit from '@fastify/rate-limit';
@@ -166,6 +167,7 @@ export async function createApp(
               principal: p,
               execution: 'agent-protocol-available',
               limit: 200,
+              integrations_configured: integrations.configured,
             };
 
             result.organisation = (
@@ -184,7 +186,19 @@ export async function createApp(
             ]) {
               result[table === 'audit_events' ? 'audit' : table] = (
                 await tx.query(
-                  `SELECT * FROM ${table} WHERE organisation_id=$1 ORDER BY created_at DESC,id DESC LIMIT 200`,
+                  `
+                    SELECT
+                      *
+                    FROM
+                      ${table}
+                    WHERE
+                      organisation_id = $1
+                    ORDER BY
+                      created_at DESC,
+                      id DESC
+                    LIMIT
+                      200
+                  `,
                   [p.organisation_id],
                 )
               ).rows;
@@ -198,20 +212,50 @@ export async function createApp(
               );
             }
 
+            result.environment_states = (
+              await tx.query(
+                `
+                  SELECT DISTINCT
+                    ON (d.project_id, d.environment_id) d.project_id,
+                    e.slug AS environment_slug,
+                    r.version AS release_version,
+                    d.status
+                  FROM
+                    deployments d
+                    JOIN environments e ON e.organisation_id = d.organisation_id
+                    AND e.id = d.environment_id
+                    JOIN releases r ON r.organisation_id = d.organisation_id
+                    AND r.id = d.release_id
+                  WHERE
+                    d.organisation_id = $1
+                    AND d.project_id = ANY ($2::UUID[])
+                  ORDER BY
+                    d.project_id,
+                    d.environment_id,
+                    d.created_at DESC,
+                    d.id DESC
+                `,
+                [
+                  p.organisation_id,
+                  (result.projects as { id: string }[]).map((project) => project.id),
+                ],
+              )
+            ).rows;
+
             result.totals = totals;
 
             result.awaiting_approval = Number(
               (
                 await tx.query(
                   `
-                  SELECT
-                    count(*)
-                  FROM
-                    deployments
-                  WHERE
-                    organisation_id = $1
-                    AND status = 'awaiting_approval'
-                `,
+                    SELECT
+                      count(*)
+                    FROM
+                      deployments
+                    WHERE
+                      organisation_id = $1
+                      AND status = 'awaiting_approval'
+                  `,
                   [p.organisation_id],
                 )
               ).rows[0].count,
@@ -223,6 +267,7 @@ export async function createApp(
         );
       });
 
+      await registerResourceReads(api, service.db);
       await registerIntegrationRoutes(api, integrations);
       await registerExecutionRoutes(api, new ExecutionService(service));
       await registerDeliveryRoutes(api, service);

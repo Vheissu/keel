@@ -10,6 +10,11 @@ const options = {
   allowPositionals: true,
   options: {
     provider: { type: 'string' },
+    limit: { type: 'string' },
+    cursor: { type: 'string' },
+    search: { type: 'string' },
+    state: { type: 'string' },
+    status: { type: 'string' },
     project: { type: 'string' },
     name: { type: 'string' },
     version: { type: 'string' },
@@ -22,6 +27,7 @@ const options = {
     'value-stdin': { type: 'boolean' },
     'acknowledge-data-not-restored': { type: 'boolean' },
     connection: { type: 'string' },
+    agent: { type: 'string' },
     run: { type: 'string' },
     attempt: { type: 'string' },
     config: { type: 'string' },
@@ -68,7 +74,7 @@ const help = `Keel · publish existing build outputs and create immutable releas
   npm run keel -- import retry <import-uuid>
   npm run keel -- deployment promotion --release <uuid> --environment <uuid>
   npm run keel -- deployment request --release <uuid> --environment <uuid>
-  npm run keel -- deployment rollback-candidates <deployment-uuid>
+  npm run keel -- deployment rollback-candidates <deployment-uuid> [--cursor <cursor>]
   npm run keel -- rollback plan --from <deployment-uuid> --candidate <prior-deployment-uuid>
   npm run keel -- rollback request <plan-uuid> --acknowledge-data-not-restored
   npm run keel -- secret list --project <uuid> --environment <uuid>
@@ -77,12 +83,15 @@ const help = `Keel · publish existing build outputs and create immutable releas
   npm run keel -- secret revoke <secret-uuid> --revision <number>
   npm run keel -- deployment secret-bindings <deployment-uuid>
   npm run keel -- validate <process.yaml>
+  npm run keel -- list <resource> [--limit 25] [--cursor <cursor>] [--search <text>]
   npm run keel -- status --json
 
 Set KEEL_URL (default http://127.0.0.1:4040) and KEEL_TOKEN.
 Connection creation and rotation use KEEL_GITHUB_TOKEN and KEEL_GITHUB_WEBHOOK_SECRET.
 Bitbucket uses KEEL_BITBUCKET_TOKEN and KEEL_PUBLISH_SECRET; publishing needs only KEEL_PUBLISH_SECRET.
 For retryable CI steps, pass a stable --idempotency-key (8–128 characters).
+List resources: projects, environments, artifacts, releases, deployments, audit, agents, targets, attempts, connections, imports, secrets.
+Use --project, --environment, --connection, --agent, --state or --status where the resource supports that filter.
 Results are JSON. Review a rollback plan before requesting it. Approvals remain available in the UI and API.
 Secret writes require manage_secrets permission. Pipe the exact single-line value on stdin, with no trailing newline.
 Secret values are never returned. Revocation cannot recall credentials already delivered to a container.
@@ -213,6 +222,30 @@ try {
     }
 
     print({ valid: true, process: parseProcess(await readFile(subcommand, 'utf8')) });
+  } else if (command === 'list') {
+    if (!subcommand || !/^[a-z]+$/.test(subcommand)) {
+      throw new Error('Provide a resource name, such as projects, releases or deployments.');
+    }
+
+    const query = new URLSearchParams();
+
+    for (const [flag, parameter] of [
+      ['limit', 'limit'],
+      ['cursor', 'cursor'],
+      ['search', 'q'],
+      ['project', 'project_id'],
+      ['environment', 'environment_id'],
+      ['connection', 'connection_id'],
+      ['agent', 'agent_id'],
+      ['state', 'state'],
+      ['status', 'status'],
+    ] as const) {
+      if (values[flag]) {
+        query.set(parameter, values[flag]!);
+      }
+    }
+
+    print(await request(`/resources/${subcommand}?${query}`));
   } else if (command === 'status') {
     print(await request('/snapshot'));
   } else if (command === 'secret' && subcommand === 'list') {
@@ -269,7 +302,9 @@ try {
       throw new Error('Provide a deployment UUID.');
     }
 
-    print(await request(`/deployments/${encodeURIComponent(file)}/rollback-candidates`));
+    const query = new URLSearchParams(values.cursor ? { cursor: values.cursor } : {});
+
+    print(await request(`/deployments/${encodeURIComponent(file)}/rollback-candidates?${query}`));
   } else if (command === 'rollback' && subcommand === 'plan') {
     print(
       await request('/rollback-plans', {

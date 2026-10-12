@@ -32,6 +32,9 @@ export class RollbackPlanner {
   @bindable requested: () => Promise<void> = async () => {};
   candidates: Candidate[] = [];
   candidateId = '';
+  nextCursor: string | null = null;
+  private cursors: (string | null)[] = [null];
+  page = 0;
   plan: Plan | null = null;
   acknowledged = false;
   busy = false;
@@ -51,7 +54,7 @@ export class RollbackPlanner {
     this.revision++;
   }
 
-  async load() {
+  async load(cursor: string | null = null) {
     if (!this.source || !this.api) {
       return;
     }
@@ -64,11 +67,13 @@ export class RollbackPlanner {
     this.busy = true;
 
     try {
-      const result = await this.api.request<{ candidates: Candidate[] }>(
-        `/deployments/${this.source.id}/rollback-candidates`,
-      );
+      const result = await this.api.request<{
+        candidates: Candidate[];
+        next_cursor: string | null;
+      }>(`/deployments/${this.source.id}/rollback-candidates${cursor ? `?cursor=${cursor}` : ''}`);
 
       if (revision === this.revision) {
+        this.nextCursor = result.next_cursor;
         this.candidates = result.candidates;
         this.candidateId = result.candidates[0]?.deployment_id ?? '';
       }
@@ -80,6 +85,19 @@ export class RollbackPlanner {
       if (revision === this.revision) {
         this.busy = false;
       }
+    }
+  }
+
+  async next() {
+    if (this.nextCursor) {
+      this.cursors[++this.page] = this.nextCursor;
+      await this.load(this.nextCursor);
+    }
+  }
+
+  async previous() {
+    if (this.page > 0) {
+      await this.load(this.cursors[--this.page]);
     }
   }
 

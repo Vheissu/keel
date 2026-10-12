@@ -381,6 +381,7 @@ main {
   font-size: 11px;
 }
 .table-wrap {
+  position: relative;
   border: 1px solid var(--line);
   border-radius: 5px;
   background: #fff;
@@ -1259,4 +1260,47 @@ secrets-panel {
 }
 secrets-panel > .button {
   margin-bottom: 1rem;
+}
+
+.pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.75rem;
+  padding: 1rem 0;
+}
+
+.pagination label {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+}
+
+.pagination input {
+  min-width: 0;
+  width: 100%;
+}
+
+.page-search {
+  flex: 1 1 12rem;
+}
+
+.page-summary {
+  align-self: center;
+  color: var(--muted, #52616b);
+  font-size: 0.8rem;
+}
+
+.resource-picker {
+  min-width: 0;
+  margin-bottom: 1rem;
+}
+
+.resource-picker > select {
+  width: 100%;
+}
+
+.resource-picker .pagination {
+  gap: 0.5rem;
+  padding: 0.5rem 0;
 }

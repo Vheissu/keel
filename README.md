@@ -2,11 +2,13 @@
 
 Build anywhere. Deploy everywhere.
 
-Keel is a continuous delivery application for artifacts built by your existing CI. This repository implements the control plane, GitHub Actions ingestion, Bitbucket Pipelines publishing, Docker execution, promotion policy, rollback planning scoped deployment secrets, self-hosted packaging and operational recovery from [PLAN.md](PLAN.md).
+Keel is a continuous delivery application for artifacts built by your existing CI. This repository implements the control plane, GitHub Actions ingestion, Bitbucket Pipelines publishing, Docker execution, promotion policy, rollback planning, scoped deployment secrets, self-hosted packaging, operational recovery and paginated resource navigation from [PLAN.md](PLAN.md).
 
 You can create projects, publish files with SHA-256 verification, create immutable releases, request deployments to staging or production, approve them from a separate identity, and inspect the audit trail. The Aurelia interface uses navy, sea teal, off-white, and small animated boats for loading states. Motion follows the operating system’s reduced-motion preference.
 
 Retained Docker image archives can now deploy through Temporal and an outbound-only Go agent, with mutual TLS, fenced leases, cancellation cleanup and HTTP verification. Follow the [agent setup](docs/deployment-agents.md) to enable execution. Production requires a verified staging deployment of the same release by default. [Promotion and rollback planning](docs/promotion-and-rollback.md) provide policy checks and reviewed recovery to an earlier retained release. SSH, rolling deployments, registry artifacts and automatic rollback are later stages. The API never launches customer commands.
+
+Resource lists and form selectors search the full collection and load 25, 50 or 100 records at a time. Page links retain search and navigation state; reconnect after reloading because tokens stay in memory. Use `npm run keel -- list projects --limit 25` for the same paginated reads in the CLI. See [resource reads](docs/api.md#paginated-resource-reads) for filters and cursor behavior.
 
 ## Run locally
 

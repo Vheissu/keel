@@ -135,7 +135,7 @@ export class RollbackService {
     return target;
   }
 
-  async candidates(tx: Transaction, org: string, sourceId: string) {
+  async candidates(tx: Transaction, org: string, sourceId: string, before: string | null = null) {
     const source = await this.source(tx, org, sourceId);
 
     await this.target(tx, org, source);
@@ -176,10 +176,11 @@ export class RollbackService {
               d.release_id,
               a.fence DESC
           ) history
+        WHERE ($7::bigint IS NULL OR fence < $7::bigint)
         ORDER BY
           fence DESC
         LIMIT
-          50
+          51
       `,
       [
         org,
@@ -188,10 +189,15 @@ export class RollbackService {
         source.target_id,
         source.fence,
         source.release_id,
+        before,
       ],
     );
 
-    return { source_deployment_id: source.id, candidates: result.rows };
+    return {
+      source_deployment_id: source.id,
+      candidates: result.rows.slice(0, 50),
+      next_cursor: result.rows.length > 50 ? String(result.rows[49].fence) : null,
+    };
   }
 
   private async preflight(tx: Transaction, org: string, source: Source, candidateId: string) {

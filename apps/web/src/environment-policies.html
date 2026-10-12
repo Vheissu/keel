@@ -6,22 +6,15 @@
 <p class="alert success" role="status" if.bind="notice">${notice}</p>
 <form class="target-form" if.bind="selected" submit.trigger:prevent="save()">
   <h2>Promotion policy · ${selected.name}</h2>
-  <label for="promotion-prerequisite">Required prior environment</label>
-  <select
-    id="promotion-prerequisite"
-    ref="prerequisiteInput"
+  <resource-picker
+    api.bind="api"
+    resource="environments"
+    label="Required prior environment"
+    input-id="promotion-prerequisite"
     value.bind="prerequisite"
-    disabled.bind="busy"
-  >
-    <option value="">No prerequisite</option>
-    <option
-      repeat.for="environment of environments"
-      if.bind="environment.id !== selected.id"
-      model.bind="environment.id"
-    >
-      ${environment.name}
-    </option>
-  </select>
+    optional.bind="true"
+    autofocus.bind="true"
+  ></resource-picker>
   <p class="help">
     This affects new requests across all projects. Existing requests keep the policy recorded when
     they were created. Approval requirements remain in place.
@@ -53,7 +46,10 @@
           ${environment.requires_approval ? 'Required · separate approver' : 'No environment
           approval required'}
         </td>
-        <td>${name(environment.promotion_from_environment_id)}</td>
+        <td>
+          ${environment.prerequisite_name || (environment.promotion_from_environment_id ?
+          environment.promotion_from_environment_id : 'No prerequisite')}
+        </td>
         <td if.bind="canApprove">
           <button
             class="text-button"

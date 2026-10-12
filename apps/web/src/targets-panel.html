@@ -56,32 +56,28 @@
     </label>
   </template>
   <template if.bind="form === 'target'">
-    <label>
-      <span id="target-project-label">Project</span>
-      <select value.bind="projectId" aria-labelledby="target-project-label">
-        <option repeat.for="project of projects" model.bind="project.id">${project.name}</option>
-      </select>
-    </label>
-    <label>
-      <span id="target-environment-label">Environment</span>
-      <select value.bind="environmentId" aria-labelledby="target-environment-label">
-        <option repeat.for="environment of environments" model.bind="environment.id">
-          ${environment.name}
-        </option>
-      </select>
-    </label>
-    <label>
-      <span id="target-agent-label">Agent</span>
-      <select value.bind="agentId" aria-labelledby="target-agent-label">
-        <option
-          repeat.for="agent of data.agents"
-          disabled.bind="agent.state !== 'active'"
-          model.bind="agent.id"
-        >
-          ${agent.name}
-        </option>
-      </select>
-    </label>
+    <resource-picker
+      api.bind="api"
+      resource="projects"
+      label="Project"
+      input-id="targets-panel-projectId"
+      value.bind="projectId"
+    ></resource-picker>
+    <resource-picker
+      api.bind="api"
+      resource="environments"
+      label="Environment"
+      input-id="targets-panel-environmentId"
+      value.bind="environmentId"
+    ></resource-picker>
+    <resource-picker
+      api.bind="api"
+      resource="agents"
+      state="active"
+      label="Agent"
+      input-id="targets-panel-agentId"
+      value.bind="agentId"
+    ></resource-picker>
     <label>
       Target labels (JSON)
       <textarea value.bind="labels" rows="3" required spellcheck="false"></textarea>
@@ -95,6 +91,7 @@
   </div>
 </form>
 <template if.bind="data">
+  <page-controls pager.bind="agents" label="Agents"></page-controls>
   <div class="table-wrap" tabindex="0" role="region" aria-label="Registered agents">
     <table>
       <thead>
@@ -164,6 +161,7 @@
     </div>
   </div>
   <div class="section-title"><h2>Docker targets</h2></div>
+  <page-controls pager.bind="targets" label="Targets"></page-controls>
   <div class="table-wrap" tabindex="0" role="region" aria-label="Docker targets">
     <table>
       <thead>
@@ -180,9 +178,9 @@
             <strong>${target.name}</strong>
             <small><code>${target.id}</code></small>
           </td>
-          <td>${environmentName(target.environment_id)}</td>
-          <td>${agentName(target.agent_id)}</td>
-          <td>${releaseVersion(target)}</td>
+          <td>${target.environment_name || environmentName(target.environment_id)}</td>
+          <td>${target.agent_name || agentName(target.agent_id)}</td>
+          <td>${target.current_state === 'verified' ? target.release_version : 'Unknown'}</td>
         </tr>
       </tbody>
     </table>
@@ -192,6 +190,7 @@
     </div>
   </div>
   <div class="section-title"><h2>Execution attempts</h2></div>
+  <page-controls pager.bind="attempts" label="Attempts"></page-controls>
   <p class="muted">
     Reconciliation required means the target stays locked until its agent confirms cleanup. Refresh
     to see new results.
@@ -211,7 +210,7 @@
       <tbody>
         <tr repeat.for="attempt of data.attempts">
           <td><code>${attempt.deployment_id}</code></td>
-          <td>${targetName(attempt.target_id)}</td>
+          <td>${attempt.target_name || targetName(attempt.target_id)}</td>
           <td>${label(attempt.state)}</td>
           <td>${attempt.fence}</td>
           <td>

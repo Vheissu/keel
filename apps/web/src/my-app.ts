@@ -1,7 +1,15 @@
+import { ResourcePage } from './resource-page';
 import { Api, type Dashboard } from './api';
 import { queueTask } from 'aurelia';
 import { errorMessage, formatDate, sha256Hex } from './format';
-import type { Deployment, Release } from '../../../packages/domain/src/index';
+import type {
+  Deployment,
+  Release,
+  Project,
+  Artifact,
+  AuditEvent,
+  Environment,
+} from '../../../packages/domain/src/index';
 
 const pages = [
   'Overview',
@@ -15,6 +23,16 @@ const pages = [
   'Integrations',
   'Audit log',
 ] as const;
+
+type Named = {
+  project_name?: string;
+  environment_name?: string;
+  release_version?: string;
+  actor_name?: string;
+  prerequisite_name?: string;
+};
+
+type Row = (Project | Artifact | Release | Deployment | AuditEvent | Environment) & Named;
 
 type Page = (typeof pages)[number];
 
@@ -45,7 +63,7 @@ export class MyApp {
   loading = false;
   error = '';
   notice = '';
-  query = '';
+  list: ResourcePage<Row> | null = null;
   dialog!: HTMLDialogElement;
   main!: HTMLElement;
   form: 'project' | 'artifact' | 'release' | 'deploy' | '' = '';
@@ -82,6 +100,7 @@ export class MyApp {
   }
 
   unbinding() {
+    this.list?.dispose();
     window.removeEventListener('hashchange', this.hashChange);
     this.api.onUnauthorized = null;
   }
@@ -92,12 +111,38 @@ export class MyApp {
   }
 
   readHash() {
-    const path = window.location.hash.slice(1);
+    const path = window.location.hash.slice(1).split('?')[0];
+    const page = pages.find((p) => this.path(p) === path) || 'Overview';
+    const changed = page !== this.page;
 
-    this.page = pages.find((p) => this.path(p) === path) || 'Overview';
-    this.query = '';
+    this.page = page;
     this.rollbackSource = null;
     document.title = `Keel · ${this.page}`;
+
+    if (changed || !this.list) {
+      this.openList();
+    }
+  }
+
+  openList() {
+    this.list?.dispose();
+    this.list = null;
+
+    if (
+      this.data &&
+      ['Projects', 'Artifacts', 'Releases', 'Deployments', 'Environments', 'Audit log'].includes(
+        this.page,
+      )
+    ) {
+      const resource = this.page === 'Audit log' ? 'audit' : this.page.toLowerCase();
+
+      this.list = new ResourcePage<Row>(this.api, resource, resource);
+      void this.list.start();
+    }
+  }
+
+  get query() {
+    return this.list?.query || '';
   }
 
   path(page: string) {
@@ -136,56 +181,31 @@ export class MyApp {
   }
 
   get projects() {
-    return this.data?.projects.filter((p) => this.matches(p.name, p.slug)) ?? [];
+    return (this.list?.resource === 'projects' ? this.list.items : []) as (Project & Named)[];
   }
 
   get artifacts() {
-    return (
-      this.data?.artifacts.filter((a) =>
-        this.matches(a.name, a.version, this.projectName(a.project_id)),
-      ) ?? []
-    );
+    return (this.list?.resource === 'artifacts' ? this.list.items : []) as (Artifact & Named)[];
   }
 
   get releases() {
-    return (
-      this.data?.releases.filter((r) => this.matches(r.version, this.projectName(r.project_id))) ??
-      []
-    );
+    return (this.list?.resource === 'releases' ? this.list.items : []) as (Release & Named)[];
   }
 
   get deployments() {
-    return (
-      this.data?.deployments.filter((d) =>
-        this.matches(
-          this.projectName(d.project_id),
-          this.environmentName(d.environment_id),
-          this.statusLabel(d.status),
-        ),
-      ) ?? []
-    );
+    return (this.list?.resource === 'deployments' ? this.list.items : []) as (Deployment & Named)[];
   }
 
-  get projectArtifacts() {
-    return this.data?.artifacts.filter((a) => a.project_id === this.projectId) ?? [];
+  get audit() {
+    return (this.list?.resource === 'audit' ? this.list.items : []) as AuditEvent[];
   }
 
-  get projectReleases() {
-    return this.data?.releases.filter((r) => r.project_id === this.projectId) ?? [];
+  get environments() {
+    return (this.list?.resource === 'environments' ? this.list.items : []) as Environment[];
   }
 
   get manifestText() {
     return JSON.stringify(this.inspected?.manifest, null, 2);
-  }
-
-  get hasMore() {
-    const table = this.page === 'Audit log' ? 'audit_events' : this.page.toLowerCase();
-
-    return (this.data?.totals[table] ?? 0) > (this.data?.limit ?? 200);
-  }
-
-  matches(...values: string[]) {
-    return values.join(' ').toLowerCase().includes(this.query.toLowerCase());
   }
 
   projectName(id: string) {
@@ -237,15 +257,11 @@ export class MyApp {
   }
 
   environmentState(project: string, slug: string) {
-    const environment = this.data?.environments.find((e) => e.slug === slug);
-
-    const d = this.data?.deployments.find(
-      (d) => d.project_id === project && d.environment_id === environment?.id,
+    const d = this.data?.environment_states?.find(
+      (row) => row.project_id === project && row.environment_slug === slug,
     );
 
-    return d
-      ? `${this.releaseVersion(d.release_id)} · ${this.statusLabel(d.status)}`
-      : 'No deployment';
+    return d ? `${d.release_version} · ${this.statusLabel(d.status)}` : 'No deployment';
   }
 
   async connect() {
@@ -262,7 +278,8 @@ export class MyApp {
     this.data = null;
     this.error = '';
     this.notice = '';
-    this.query = '';
+    this.list?.dispose();
+    this.list = null;
     this.rollbackSource = null;
     this.rollbackFocus = null;
   }
@@ -278,6 +295,12 @@ export class MyApp {
 
       if (revision === this.refreshRevision) {
         this.data = data;
+
+        if (this.list) {
+          await this.list.load();
+        } else {
+          this.openList();
+        }
       }
     } catch (error) {
       if (revision === this.refreshRevision) {
@@ -309,7 +332,6 @@ export class MyApp {
     this.releaseId = release?.id ?? '';
     this.files = null;
     this.environmentId = this.data?.environments.find((e) => e.slug === 'staging')?.id ?? '';
-    this.resetArtifact();
     this.resetProcess();
     this.returnFocus = document.activeElement as HTMLElement;
 
@@ -430,7 +452,7 @@ export class MyApp {
   }
 
   projectChanged() {
-    this.resetArtifact();
+    this.artifactId = '';
     this.resetProcess();
     this.releaseId = '';
     void this.loadPromotion();
@@ -446,13 +468,7 @@ export class MyApp {
     }
   }
 
-  resetArtifact() {
-    this.artifactId = this.projectArtifacts[0]?.id ?? '';
-  }
-
-  resetProcess() {
-    const artifact = this.data?.artifacts.find((a) => a.id === this.artifactId);
-
+  resetProcess(artifact?: { name?: string }) {
     // JSON strings are valid YAML scalars, including unusual uploaded artifact names.
     this.process = `apiVersion: keel.dev/v1alpha1
 kind: DeploymentProcess

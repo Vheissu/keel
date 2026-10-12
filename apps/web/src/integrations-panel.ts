@@ -1,3 +1,4 @@
+import { ResourcePage } from './resource-page';
 import { bindable, queueTask } from 'aurelia';
 import type { Project } from '../../../packages/domain/src/index';
 import { Api } from './api';
@@ -28,20 +29,22 @@ interface Import {
   created_at: string;
 }
 
-interface IntegrationSnapshot {
-  connections: Connection[];
-  imports: Import[];
-  configured: boolean;
-  limit: number;
-}
-
 export class IntegrationsPanel {
   @bindable api!: Api;
   @bindable projects: Project[] = [];
   @bindable canWrite = false;
   @bindable refreshWorkspace!: () => Promise<void>;
 
-  data: IntegrationSnapshot | null = null;
+  @bindable configured = false;
+  connections!: ResourcePage<Connection>;
+  imports!: ResourcePage<Import>;
+
+  get data() {
+    return this.connections && this.imports
+      ? { connections: this.connections.items, imports: this.imports.items }
+      : null;
+  }
+
   loading = false;
   busy = false;
   error = '';
@@ -65,11 +68,15 @@ export class IntegrationsPanel {
   private returnFocus: HTMLElement | null = null;
 
   binding() {
-    void this.refresh();
+    this.connections = new ResourcePage(this.api, 'connections', 'connections');
+    this.imports = new ResourcePage(this.api, 'imports', 'imports');
+    void Promise.all([this.connections.start(), this.imports.start()]);
   }
 
   unbinding() {
     this.revision++;
+    this.connections?.dispose();
+    this.imports?.dispose();
     this.providerToken = '';
     this.webhookSecret = '';
     this.publishSecret = '';
@@ -125,11 +132,7 @@ export class IntegrationsPanel {
     this.error = '';
 
     try {
-      const data = await this.api.request<IntegrationSnapshot>('/integrations');
-
-      if (revision === this.revision) {
-        this.data = data;
-      }
+      await Promise.all([this.connections.load(), this.imports.load()]);
     } catch (error) {
       if (revision === this.revision) {
         this.error = errorMessage(error, 'Connections could not be loaded.');

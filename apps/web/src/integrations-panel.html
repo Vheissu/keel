@@ -8,7 +8,7 @@
       class="button primary"
       if.bind="canWrite"
       click.trigger="open('connect')"
-      disabled.bind="!data.configured || !projects.length || busy"
+      disabled.bind="!configured || !projects.length || busy"
     >
       Connect GitHub Actions
     </button>
@@ -16,7 +16,7 @@
       class="button secondary"
       if.bind="canWrite"
       click.trigger="open('connect', null, 'bitbucket-pipelines')"
-      disabled.bind="!data.configured || !projects.length || busy"
+      disabled.bind="!configured || !projects.length || busy"
     >
       Connect Bitbucket Pipelines
     </button>
@@ -28,11 +28,12 @@
   <boat-mark animated.bind="true"></boat-mark>
   <span>Loading connections…</span>
 </div>
-<p class="help" if.bind="data && !data.configured">
+<p class="help" if.bind="data && !configured">
   Provider connections require a server credential key. Run setup or configure KEEL_CREDENTIAL_KEY.
 </p>
 <p class="help" if.bind="!projects.length">Create a project before connecting a provider.</p>
 <template if.bind="data">
+  <page-controls pager.bind="connections" label="Connections"></page-controls>
   <section aria-label="Provider connections">
     <div class="connection-grid">
       <article class="connection-card" repeat.for="connection of data.connections; key: id">
@@ -47,7 +48,7 @@
         </p>
         <dl class="connection-details">
           <dt>Project</dt>
-          <dd>${projectName(connection.project_id)}</dd>
+          <dd>${connection.project_name || projectName(connection.project_id)}</dd>
           <dt>
             ${connection.provider === 'bitbucket-pipelines' ? 'Pipeline selector' : 'Workflow'}
           </dt>
@@ -121,7 +122,7 @@
   <section class="imports-section" aria-labelledby="imports-title">
     <div class="section-heading">
       <h2 id="imports-title">Artifact imports</h2>
-      <span>Latest ${data.limit}</span>
+      <page-controls pager.bind="imports" label="Imports"></page-controls>
     </div>
     <div class="table-wrap">
       <table if.bind="data.imports.length">
@@ -137,7 +138,7 @@
         <tbody>
           <tr repeat.for="job of data.imports; key: id">
             <td>
-              <strong>${connectionName(job.connection_id)}</strong>
+              <strong>${job.connection_name || connectionName(job.connection_id)}</strong>
               <small>Run ${job.run_id} · attempt ${job.run_attempt}</small>
             </td>
             <td>${statusLabel(job.status)}</td>
@@ -209,7 +210,7 @@
       ×
     </button>
   </div>
-  <form if.bind="form" submit.trigger="submit()">
+  <form if.bind="form" submit.trigger:prevent="submit()">
     <div class="alert error" role="alert" if.bind="error">${error}</div>
     <fieldset disabled.bind="busy">
       <template if.bind="form === 'connect'">
@@ -221,10 +222,13 @@
           maxlength="100"
           placeholder="Application build"
         />
-        <label for="connection-project">Project</label>
-        <select id="connection-project" value.bind="projectId" required>
-          <option repeat.for="project of projects" model.bind="project.id">${project.name}</option>
-        </select>
+        <resource-picker
+          api.bind="api"
+          resource="projects"
+          label="Project"
+          input-id="integrations-panel-projectId"
+          value.bind="projectId"
+        ></resource-picker>
         <label for="connection-repository">
           ${provider === 'bitbucket-pipelines' ? 'Bitbucket repository' : 'GitHub repository'}
         </label>

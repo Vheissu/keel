@@ -22,6 +22,25 @@
       Review rollback plan
     </button>
   </form>
+  <div class="pagination">
+    <button
+      type="button"
+      class="button secondary small"
+      disabled.bind="busy || !page"
+      click.trigger="previous()"
+    >
+      Previous rollback releases
+    </button>
+    <span role="status">Rollback history page ${page + 1}</span>
+    <button
+      type="button"
+      class="button secondary small"
+      disabled.bind="busy || !nextCursor"
+      click.trigger="next()"
+    >
+      Older rollback releases
+    </button>
+  </div>
   <p if.bind="!busy && !error && !candidates.length">
     No earlier release was verified on this target. A normal deployment request can still use a
     retained release that meets the environment policy.

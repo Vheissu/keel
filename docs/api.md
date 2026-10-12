@@ -6,6 +6,8 @@ Resource mutations require an `Idempotency-Key` header: 8–128 letters, numbers
 
 | Method and path                 | Permission | Input / result                                                                     |
 | ------------------------------- | ---------- | ---------------------------------------------------------------------------------- |
+| `GET /resources/:resource`      | read       | Paginated items, filtered total and next/previous cursors                          |
+| `GET /resources/:resource/:id`  | read       | One scoped record, including related display names                                 |
 | `GET /snapshot`                 | read       | Workspace, principal, totals, latest 200 records per resource                      |
 | `POST /projects`                | write      | `{name, slug, description?}`                                                       |
 | `POST /artifacts`               | write      | Binary bytes; query parameters `project_id`, `name`, `version`, `digest`           |
@@ -23,6 +25,38 @@ Tokens also require `read` to use resource routes. Unknown input properties are 
 Artifact publishing requires `Content-Type: application/octet-stream`, nonempty content, and a lowercase hex SHA-256 digest. The current limit is 25 MiB. Keel computes the digest from the received bytes before creating metadata. Downloads verify it again. The uploaded file is opaque; no archive extraction or script execution occurs.
 
 Release manifests capture the artifact ID, digest, size, provenance, and parsed process. Direct uploads record the authenticated publisher. They do not claim verified CI provenance. Artifact versions and release versions cannot be replaced. An existing version returns `409`.
+
+## Paginated resource reads
+
+`GET /api/v1/resources/:resource` returns `{items, total, limit, next_cursor, previous_cursor}`. The default limit is 25; any integer from 1 to 100 is accepted. `q` performs case-insensitive substring search across the resource's display fields, with a maximum of 200 characters. Percent signs and underscores are literal characters. Unknown parameters and unsupported filters return `400`.
+
+| Resource                               | Optional filters                                    |
+| -------------------------------------- | --------------------------------------------------- |
+| `projects`, `environments`, `audit`    | None                                                |
+| `artifacts`, `releases`, `connections` | `project_id`                                        |
+| `deployments`                          | `project_id`, `environment_id`, `status`            |
+| `agents`                               | `state`                                             |
+| `targets`                              | `project_id`, `environment_id`, `agent_id`          |
+| `attempts`                             | `agent_id`, `state`                                 |
+| `imports`                              | `project_id`, `connection_id`, `status`             |
+| `secrets`                              | Both `project_id` and `environment_id` are required |
+
+Results are ordered by creation time and UUID, newest first. Cursors preserve PostgreSQL microseconds and are bound to the organisation, resource, search and filters. Pass either returned cursor with the same filters to move in that direction. Treat cursors as opaque positions, not credentials. Every request still checks the token and organisation. A cursor used with different filters returns `INVALID_CURSOR`; omit it to restart. Page size may change, although the UI starts a fresh first page when it does.
+
+The first page anchors the upper position, so records created later do not shift an ongoing walk. Return to the first page to include those records. Each response reads its items and exact filtered total within one database snapshot. The total includes newer matching records outside the cursor anchor. Pages do not freeze mutable values or filter membership across requests: a state change can move a record into or out of a filtered result. Backdated inserts can also appear below the anchor.
+
+`GET /api/v1/resources/:resource/:id` returns one record or `404` for an inaccessible record. Related names are joined on the server, including when they fall outside the overview window. Connection credentials, import lease tokens, agent certificate fingerprints, deployment lease hashes and secret values are excluded. Secret lookups return metadata only; they never join encrypted versions. Both routes send `Cache-Control: no-store`.
+
+The UI stores list search, cursor and size in the URL fragment. Secret pages also store the selected project and environment. Form selectors load bounded pages and retain the selected record when searching or paging through other choices. The CLI uses the same endpoint:
+
+```sh
+npm run keel -- list releases --project <project-uuid> --search 1.2 --limit 25
+npm run keel -- list releases --project <project-uuid> --search 1.2 --limit 25 --cursor '<next_cursor>'
+npm run keel -- list deployments --environment <environment-uuid> --status failed
+npm run keel -- list secrets --project <project-uuid> --environment <environment-uuid>
+```
+
+Indexes support organisation and common scope ordering. Exact counts and substring searches can still scan the matching collection; pagination bounds response size, not total database work.
 
 ## Deployment state
 
@@ -43,7 +77,7 @@ Deployment requests and approval both recheck the retained artifact. Missing or 
 
 Errors use `{ "error": { "code": "...", "message": "...", "request_id": "..." } }`. Common status codes are `400` for validation or digest mismatches, `401` for invalid or revoked tokens, `403` for permission or self-approval failures, `404` for inaccessible references, and `409` for version conflicts, environment locks, invalid transitions, missing blobs, and corrupted blobs. Internal database details are not returned.
 
-The API rate limit is 180 requests per minute per IP in one API process. The snapshot is an evaluation interface with a 200-record window; totals cover all stored records. Cursor pagination and distributed rate limits are still needed before larger deployments. The UI discloses truncated lists.
+The API rate limit is 180 requests per minute per IP in one API process. Distributed rate limiting is not implemented. The overview and legacy `/snapshot`, `/integrations` and `/execution` responses retain their 200-record windows; use `/resources/:resource` for complete navigation. Existing CLI `status`, `integration list` and `secret list` commands keep their response shapes.
 
 ## Provider connections and imports
 
@@ -111,7 +145,7 @@ The private mTLS gateway accepts `POST /agent/v1/progress` with the current leas
 
 - `GET /api/v1/releases/:id/promotion?environment_id=<uuid>` reports promotion eligibility, prerequisite evidence, approval requirement and digest. It does not reserve a target.
 - `POST /api/v1/environments/:id/promotion-policy` requires **approve** permission and `{ "promotion_from_environment_id": "<uuid-or-null>", "expected_revision": 1 }`. Use JSON `null`, not the string `"null"`, to remove a prerequisite. The referenced environment must be in the same workspace; cycles are rejected.
-- `GET /api/v1/deployments/:id/rollback-candidates` lists at most 50 distinct releases previously verified on the source deployment's target and environment. The source must be the target's latest finished attempt with no outstanding deployment lock.
+- `GET /api/v1/deployments/:id/rollback-candidates` returns a page of at most 50 distinct releases previously verified on the source deployment's target and environment. The source must be the target's latest finished attempt with no outstanding deployment lock. Pass the returned `next_cursor` as `?cursor=...` to read older releases; a null cursor marks the last page. Deduplication occurs before pagination, so repeated verifications do not repeat a release on later pages. The CLI accepts `deployment rollback-candidates <id> --cursor <cursor>`.
 - `POST /api/v1/rollback-plans` requires **write** permission and `{ "source_deployment_id": "<uuid>", "candidate_deployment_id": "<uuid>" }`. It verifies the retained bytes and current execution/promotion contract, then returns a 15-minute immutable plan and review details.
 - `POST /api/v1/rollback-plans/:id/request` requires **write** permission and `{ "acknowledge_data_not_restored": true }`. It rechecks the plan and creates one ordinary deployment with `kind: "rollback"`; approval is not bypassed.
 

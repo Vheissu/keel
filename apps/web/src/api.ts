@@ -5,6 +5,13 @@ export type Dashboard = Snapshot & {
   totals: Record<string, number>;
   awaiting_approval: number;
   limit: number;
+  integrations_configured: boolean;
+  environment_states: {
+    project_id: string;
+    environment_slug: string;
+    release_version: string;
+    status: string;
+  }[];
 };
 
 export class ApiError extends Error {

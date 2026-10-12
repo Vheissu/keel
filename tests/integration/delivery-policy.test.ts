@@ -427,6 +427,47 @@ describe('Promotion admission', () => {
 });
 
 describe('Retained-release rollback plans', () => {
+  it('paginates rollback history after deduplicating verified releases', async () => {
+    const previous: string[] = [];
+
+    for (let n = 0; n < 53; n++) {
+      const retained = await release(`history-${n}`);
+      const deployment = await finish(retained.id, f.environments.staging);
+
+      previous.unshift(deployment.id);
+    }
+
+    // A repeated verification must not leak a second copy onto an older page.
+    await finish(v1.id, f.environments.staging);
+    const latestV1 = await finish(v1.id, f.environments.staging);
+
+    previous.unshift(latestV1.id);
+    const current = await finish(v2.id, f.environments.staging);
+    const first = await get(`/deployments/${current.id}/rollback-candidates`);
+
+    expect(first.statusCode).toBe(200);
+    expect(first.json().candidates).toHaveLength(50);
+
+    const second = await get(
+      `/deployments/${current.id}/rollback-candidates?cursor=${first.json().next_cursor}`,
+    );
+
+    expect(second.statusCode).toBe(200);
+    expect(second.json().next_cursor).toBeNull();
+
+    expect(
+      [...first.json().candidates, ...second.json().candidates].map(
+        (row: { deployment_id: string }) => row.deployment_id,
+      ),
+    ).toEqual(previous);
+
+    for (const cursor of ['-1', 'invalid', '9223372036854775808', '1.5']) {
+      expect(
+        (await get(`/deployments/${current.id}/rollback-candidates?cursor=${cursor}`)).statusCode,
+      ).toBe(400);
+    }
+  });
+
   it('plans and requests a pinned rollback with approval, immutable evidence and normal fenced execution', async () => {
     const { previous, current, staging } = await history();
     const candidates = await get(`/deployments/${current.id}/rollback-candidates`);

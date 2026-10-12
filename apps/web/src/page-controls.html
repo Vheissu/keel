@@ -1,0 +1,53 @@
+<div class="pagination" aria-label.bind="label + ' pagination'">
+  <label if.bind="searchable" class="page-search">
+    <span>Search ${label.toLowerCase()}</span>
+    <input
+      type="search"
+      maxlength="200"
+      value.bind="pager.query"
+      input.trigger="pager.search() & debounce:300"
+    />
+  </label>
+  <label>
+    <span>${label} per page</span>
+    <select
+      aria-label.bind="label + ' per page'"
+      value.bind="pager.limit"
+      change.trigger="pager.navigate()"
+      disabled.bind="pager.loading"
+    >
+      <option model.bind="25">25</option>
+      <option model.bind="50">50</option>
+      <option model.bind="100">100</option>
+    </select>
+  </label>
+  <span ref="summary" tabindex="-1" class="page-summary" role="status">
+    ${pager.loading ? 'Loading…' : pager.items.length + ' of ' + pager.total + ' matching ' +
+    label.toLowerCase()}
+  </span>
+  <button
+    type="button"
+    class="button secondary small"
+    disabled.bind="pager.loading || !pager.previousCursor"
+    click.trigger="move(pager.previousCursor)"
+    aria-label.bind="'Previous ' + label.toLowerCase()"
+  >
+    Previous
+  </button>
+  <button
+    type="button"
+    class="button secondary small"
+    disabled.bind="pager.loading || !pager.nextCursor"
+    click.trigger="move(pager.nextCursor)"
+    aria-label.bind="'Next ' + label.toLowerCase()"
+  >
+    Next
+  </button>
+  <button type="button" class="text-button" click.trigger="move()" disabled.bind="pager.loading">
+    First page
+  </button>
+</div>
+<div class="alert error" role="alert" if.bind="pager.error">
+  ${pager.error}
+  <button type="button" class="text-button" click.trigger="pager.load()">Retry page</button>
+</div>

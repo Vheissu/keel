@@ -1,3 +1,4 @@
+import { ResourcePage } from './resource-page';
 import { bindable, queueTask } from 'aurelia';
 import type { Environment, Project } from '../../../packages/domain/src/index';
 import { Api } from './api';
@@ -18,7 +19,12 @@ export class SecretsPanel {
   @bindable canManage = false;
   projectId = '';
   environmentId = '';
-  secrets: Secret[] = [];
+  pager: ResourcePage<Secret> | null = null;
+
+  get secrets() {
+    return this.pager?.items || [];
+  }
+
   selected: Secret | null = null;
   mode: 'create' | 'rotate' | 'revoke' | '' = '';
   name = '';
@@ -32,14 +38,50 @@ export class SecretsPanel {
   private revision = 0;
   private returnFocus: HTMLElement | null = null;
 
-  async binding() {
-    this.projectId = this.projects[0]?.id ?? '';
-    this.environmentId = this.environments[0]?.id ?? '';
+  private hashChange = () => {
+    void this.restoreScope();
+  };
+
+  binding() {
+    window.addEventListener('hashchange', this.hashChange);
+    void this.restoreScope(true);
+  }
+
+  private async restoreScope(initial = false) {
+    const [path, search] = window.location.hash.split('?');
+    const params = new URLSearchParams(search || '');
+    const project = params.get('secrets.project') || this.projects[0]?.id || '';
+    const environment = params.get('secrets.environment') || this.environments[0]?.id || '';
+
+    if (initial || project !== this.projectId || environment !== this.environmentId) {
+      this.projectId = project;
+      this.environmentId = environment;
+
+      if (initial) {
+        params.set('secrets.project', project);
+        params.set('secrets.environment', environment);
+        window.history.replaceState(null, '', `${path}?${params}`);
+      }
+
+      await this.load();
+    }
+  }
+
+  async scopeChanged() {
+    const [path, search] = window.location.hash.split('?');
+    const params = new URLSearchParams(search || '');
+
+    params.set('secrets.project', this.projectId);
+    params.set('secrets.environment', this.environmentId);
+    params.delete('secrets.cursor');
+    window.history.pushState(null, '', `${path}?${params}`);
     await this.load();
   }
 
   unbinding() {
+    window.removeEventListener('hashchange', this.hashChange);
     this.revision++;
+    this.pager?.dispose();
     this.value = '';
   }
 
@@ -48,7 +90,8 @@ export class SecretsPanel {
 
     this.mode = '';
     this.value = '';
-    this.secrets = [];
+    this.pager?.dispose();
+    this.pager = null;
     this.error = '';
 
     if (!this.projectId || !this.environmentId) {
@@ -58,16 +101,12 @@ export class SecretsPanel {
     this.busy = true;
 
     try {
-      const query = new URLSearchParams({
+      this.pager = new ResourcePage<Secret>(this.api, 'secrets', 'secrets', {
         project_id: this.projectId,
         environment_id: this.environmentId,
       });
 
-      const secrets = await this.api.request<Secret[]>(`/secrets?${query}`);
-
-      if (revision === this.revision) {
-        this.secrets = secrets;
-      }
+      await this.pager.start();
     } catch (error) {
       if (revision === this.revision) {
         this.error = error instanceof Error ? error.message : 'Could not load secret metadata.';

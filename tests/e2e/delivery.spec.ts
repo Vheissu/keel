@@ -29,6 +29,7 @@ let errors: string[] = [];
 let github = githubFixture();
 let bitbucket = bitbucketFixture();
 let importWorker: ArtifactImportWorker;
+let integrations: IntegrationService;
 let control: ControlPlane;
 
 test.beforeAll(async () => {
@@ -42,7 +43,7 @@ test.beforeAll(async () => {
     new CredentialVault(randomBytes(32).toString('base64'), 'deployment-secrets'),
   );
 
-  const integrations = new IntegrationService(
+  integrations = new IntegrationService(
     control,
     new CredentialVault(randomBytes(32).toString('base64')),
     (credentials) =>
@@ -55,8 +56,6 @@ test.beforeAll(async () => {
   );
 
   importWorker = new ArtifactImportWorker(integrations);
-  app = await createApp(control, false, integrations);
-  await app.listen({ host: '127.0.0.1', port: 4051 });
   await mkdir('output/playwright', { recursive: true });
 });
 
@@ -65,15 +64,17 @@ test.beforeEach(async ({ page }) => {
   errors = [];
   github = githubFixture();
   bitbucket = bitbucketFixture();
+  app = await createApp(control, false, integrations);
+  await app.listen({ host: '127.0.0.1', port: 4051 });
   page.on('pageerror', (error) => errors.push(error.message));
 });
 
-test.afterEach(() => {
+test.afterEach(async () => {
+  await app.close();
   expect(errors).toEqual([]);
 });
 
 test.afterAll(async () => {
-  await app.close();
   await db.end();
   await admin.query(`DROP SCHEMA ${schema} CASCADE`);
   await admin.end();
@@ -531,7 +532,11 @@ test('enforces promotion policy and reviews a retained-release rollback with a s
   await connect(approver, f.approver.token);
   await approver.getByRole('link', { name: 'Environments', exact: true }).click();
   await approver.getByRole('button', { name: 'Edit Production promotion policy' }).click();
-  await approver.getByLabel('Required prior environment').selectOption({ label: 'Staging' });
+
+  await approver
+    .getByLabel('Required prior environment', { exact: true })
+    .selectOption({ label: 'Staging' });
+
   await approver.getByRole('button', { name: 'Save promotion policy' }).click();
 
   await expect(
@@ -653,6 +658,8 @@ test('manages scoped secrets and reviews pinned versions without disclosing valu
   page,
   browser,
 }) => {
+  // Two browser identities, history navigation and accessibility scans share this budget.
+  test.setTimeout(60000);
   const manager = randomUUID();
   const managerToken = randomBytes(32).toString('hex');
 
@@ -718,7 +725,7 @@ test('manages scoped secrets and reviews pinned versions without disclosing valu
 
   await connect(page, managerToken);
   await page.getByRole('link', { name: 'Secrets', exact: true }).click();
-  await page.getByLabel('Secret environment').selectOption({ label: 'Staging' });
+  await page.getByLabel('Secret environment', { exact: true }).selectOption({ label: 'Staging' });
   await page.getByRole('button', { name: 'Add secret', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Add a deployment secret' })).toBeFocused();
   await page.getByLabel('Secret name', { exact: true }).fill('DATABASE_PASSWORD');
@@ -750,6 +757,22 @@ test('manages scoped secrets and reviews pinned versions without disclosing valu
   );
 
   await expect(page.getByRole('button', { name: 'Add secret', exact: true })).toBeFocused();
+
+  await page
+    .getByLabel('Secret environment', { exact: true })
+    .selectOption(f.environments.production);
+
+  await expect(page.getByRole('row').filter({ hasText: 'DATABASE_PASSWORD' })).toHaveCount(0);
+  await page.goBack();
+
+  await expect(page.getByLabel('Secret environment', { exact: true })).toHaveValue(
+    f.environments.staging,
+  );
+
+  await expect(page.getByRole('row').filter({ hasText: 'DATABASE_PASSWORD' })).toContainText(
+    'Available',
+  );
+
   expect(await page.content()).not.toContain(secretValue);
 
   const context = await browser.newContext();
@@ -829,4 +852,197 @@ test('manages scoped secrets and reviews pinned versions without disclosing valu
   ).not.toContain(secretValue);
 
   await context.close();
+});
+
+test('navigates and searches beyond 200 records and retains paged selector choices', async ({
+  page,
+}) => {
+  await db.query(
+    `
+      INSERT INTO
+        projects (id, organisation_id, name, slug, created_at)
+      SELECT
+        gen_random_uuid(),
+        $1,
+        'Project ' || lpad(n::text, 3, '0'),
+        'project-' || n,
+        '2026-01-01'::timestamptz + n * interval '1 second'
+      FROM
+        generate_series(1, 237) n
+    `,
+    [f.org],
+  );
+
+  await connect(page);
+  await page.getByRole('link', { name: 'Projects', exact: true }).click();
+  await expect(page.locator('tbody tr')).toHaveCount(25);
+  const first = await page.locator('tbody tr').first().innerText();
+
+  await page.getByRole('button', { name: 'Next projects', exact: true }).click();
+  await expect(page.locator('tbody tr')).toHaveCount(25);
+  await expect(page.locator('tbody tr').first()).not.toHaveText(first);
+  await expect(page).toHaveURL(/projects.cursor=/);
+  await page.goBack();
+  await expect(page.locator('tbody tr').first()).toHaveText(first);
+  await page.getByLabel('Search projects', { exact: true }).fill('Project 001');
+  await expect(page.locator('tbody tr')).toHaveCount(1);
+  await expect(page.locator('tbody')).toContainText('Project 001');
+  await page.getByLabel('Search projects', { exact: true }).fill('');
+  await page.getByLabel('Projects per page', { exact: true }).selectOption('50');
+  await expect(page.locator('tbody tr')).toHaveCount(50);
+  await page.getByRole('button', { name: 'Next projects', exact: true }).click();
+  await expect(page.locator('tbody tr').first()).toContainText('Project 187');
+  const retainedUrl = page.url();
+  const retainedRow = await page.locator('tbody tr').first().innerText();
+
+  await page.reload();
+  await page.getByLabel('API token', { exact: true }).fill(f.operator.token);
+  await page.getByRole('button', { name: 'Connect workspace', exact: true }).click();
+  await expect(page).toHaveURL(retainedUrl);
+  await expect(page.locator('tbody tr').first()).toHaveText(retainedRow);
+  await page.getByRole('link', { name: 'Artifacts', exact: true }).click();
+  await page.getByRole('button', { name: 'Publish artifact', exact: true }).click();
+  await page.getByLabel('Search project options', { exact: true }).fill('Project 001');
+  await page.getByLabel('Project', { exact: true }).selectOption({ label: 'Project 001' });
+  const selected = await page.getByLabel('Project', { exact: true }).inputValue();
+
+  await page.getByLabel('Search project options', { exact: true }).fill('Project 23');
+
+  await expect(
+    page.getByRole('status').filter({ hasText: '8 of 8 matching project options' }),
+  ).toBeVisible();
+
+  await expect(page.getByLabel('Project', { exact: true })).toHaveValue(selected);
+  await page.getByLabel('Artifact name', { exact: true }).fill('old-project-build');
+  await page.getByLabel('Artifact version', { exact: true }).fill('1.0.0');
+
+  await page.getByLabel('Artifact file', { exact: true }).setInputFiles({
+    name: 'build',
+    mimeType: 'application/octet-stream',
+    buffer: Buffer.from('old project build'),
+  });
+
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: 'Publish artifact', exact: true })
+    .click();
+
+  await expect(page.getByRole('dialog')).not.toBeVisible();
+  await expect(page.locator('tbody')).toContainText('Project 001');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByLabel('Search artifacts', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+});
+
+test('creates a release from an older artifact and selects a release beyond the snapshot window', async ({
+  page,
+}) => {
+  const project = randomUUID();
+  const bytes = Buffer.from('retained older artifact');
+  const digest = sha256(bytes);
+
+  await control.store.put(f.org, digest, bytes);
+
+  await db.query(
+    "INSERT INTO projects(id,organisation_id,name,slug) VALUES($1,$2,'Archive','archive')",
+    [project, f.org],
+  );
+
+  await db.query(
+    `
+    INSERT INTO
+      artifacts (
+        id,
+        organisation_id,
+        project_id,
+        name,
+        version,
+        digest,
+        size,
+        provenance,
+        created_at
+      )
+    SELECT
+      gen_random_uuid(),
+      $1,
+      $2,
+      'application',
+      lpad(n::text, 4, '0'),
+      $3,
+      $4,
+      '{}',
+      '2026-01-01'::timestamptz + n * interval '1 second'
+    FROM
+      generate_series(1, 237) n
+  `,
+    [f.org, project, digest, bytes.length],
+  );
+
+  await connect(page);
+  await page.getByRole('link', { name: 'Releases', exact: true }).click();
+  await page.getByRole('button', { name: 'Create release', exact: true }).click();
+  await page.getByLabel('Search artifact options', { exact: true }).fill('0001');
+  await page.getByLabel('Artifact', { exact: true }).selectOption({ label: 'application · 0001' });
+  await page.getByLabel('Release version', { exact: true }).fill('retained-0001');
+
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: 'Create release', exact: true })
+    .click();
+
+  await expect(page.getByRole('dialog')).not.toBeVisible();
+
+  const retained = (await db.query('SELECT * FROM releases WHERE organisation_id=$1', [f.org]))
+    .rows[0];
+
+  expect(
+    (await db.query('SELECT version FROM artifacts WHERE id=$1', [retained.artifact_id])).rows[0]
+      .version,
+  ).toBe('0001');
+
+  await db.query(
+    `
+    INSERT INTO
+      releases (
+        id,
+        organisation_id,
+        project_id,
+        artifact_id,
+        version,
+        manifest,
+        created_at
+      )
+    SELECT
+      gen_random_uuid(),
+      organisation_id,
+      project_id,
+      artifact_id,
+      'newer-' || n,
+      manifest,
+      created_at + n * interval '1 second'
+    FROM
+      releases
+      CROSS JOIN generate_series(1, 237) n
+    WHERE
+      id = $1
+  `,
+    [retained.id],
+  );
+
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await expect(page.locator('tbody')).toContainText('newer-237');
+  await page.getByLabel('Search releases', { exact: true }).fill('retained-0001');
+  await page.getByRole('button', { name: /^Deploy retained-0001/ }).click();
+  await expect(page.getByLabel('Release', { exact: true })).toHaveValue(retained.id);
+  await expect(page.getByRole('dialog')).toContainText('Promotion policy satisfied.');
+
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: 'Request deployment', exact: true })
+    .click();
+
+  await expect(page.getByRole('dialog')).not.toBeVisible();
+  await expect(page.locator('tbody')).toContainText('retained-0001');
+  await expect(page.locator('tbody')).toContainText('Waiting for agent');
 });

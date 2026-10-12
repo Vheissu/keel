@@ -1,3 +1,4 @@
+import { ResourcePage } from './resource-page';
 import { bindable, queueTask } from 'aurelia';
 import type { Environment, Project, Release } from '../../../packages/domain/src/index';
 import { Api } from './api';
@@ -31,19 +32,22 @@ interface Attempt {
   phase_updated_at: string;
 }
 
-interface Fleet {
-  agents: Agent[];
-  targets: Target[];
-  attempts: Attempt[];
-}
-
 export class TargetsPanel {
   @bindable api!: Api;
   @bindable projects: Project[] = [];
   @bindable environments: Environment[] = [];
   @bindable releases: Release[] = [];
   @bindable canWrite = false;
-  data: Fleet | null = null;
+  agents!: ResourcePage<Agent>;
+  targets!: ResourcePage<Target>;
+  attempts!: ResourcePage<Attempt>;
+
+  get data() {
+    return this.agents && this.targets && this.attempts
+      ? { agents: this.agents.items, targets: this.targets.items, attempts: this.attempts.items }
+      : null;
+  }
+
   loading = false;
   busy = false;
   error = '';
@@ -62,11 +66,17 @@ export class TargetsPanel {
   private revision = 0;
 
   binding() {
-    void this.refresh();
+    this.agents = new ResourcePage(this.api, 'agents', 'agents');
+    this.targets = new ResourcePage(this.api, 'targets', 'targets');
+    this.attempts = new ResourcePage(this.api, 'attempts', 'attempts');
+    void Promise.all([this.agents.start(), this.targets.start(), this.attempts.start()]);
   }
 
   unbinding() {
     this.revision++;
+    this.agents?.dispose();
+    this.targets?.dispose();
+    this.attempts?.dispose();
   }
 
   async refresh() {
@@ -76,11 +86,7 @@ export class TargetsPanel {
     this.error = '';
 
     try {
-      const data = await this.api.request<Fleet>('/execution');
-
-      if (revision === this.revision) {
-        this.data = data;
-      }
+      await Promise.all([this.agents.load(), this.targets.load(), this.attempts.load()]);
     } catch (error) {
       if (revision === this.revision) {
         this.error = errorMessage(error, 'Could not load targets.');

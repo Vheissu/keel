@@ -13,7 +13,6 @@ export class EnvironmentPolicies {
   busy = false;
   error = '';
   notice = '';
-  prerequisiteInput!: HTMLSelectElement;
   private returnFocus: HTMLElement | null = null;
 
   edit(environment: Environment) {
@@ -22,7 +21,6 @@ export class EnvironmentPolicies {
     this.prerequisite = environment.promotion_from_environment_id ?? '';
     this.error = '';
     this.notice = '';
-    queueTask(() => this.prerequisiteInput?.focus());
   }
 
   close() {

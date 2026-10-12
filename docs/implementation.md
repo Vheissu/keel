@@ -1,6 +1,6 @@
 # Implementation status
 
-The control-plane foundation, GitHub ingestion, Bitbucket publishing and Docker execution, agent recovery, promotion policy, rollback planning scoped deployment secrets, self-hosted packaging and operational recovery are implemented. PLAN.md remains the product roadmap.
+The control-plane foundation, GitHub ingestion, Bitbucket publishing and Docker execution, agent recovery, promotion policy, rollback planning, scoped deployment secrets, self-hosted packaging, operational recovery and paginated resource navigation are implemented. PLAN.md remains the product roadmap.
 
 ## Implemented
 
@@ -34,9 +34,12 @@ The control-plane foundation, GitHub ingestion, Bitbucket publishing and Docker 
 - Single-host Compose packaging with compiled HTTPS UI/API, persistent PostgreSQL and Temporal, separate migration/runtime roles, generated credentials and service health checks.
 - Encrypted cold backups covering database, retained artifacts, configuration and keys; authenticated fresh-volume restore with retained-data verification and revoked agents.
 
+- Cursor pagination, full-collection search and scoped lookups for 12 resource collections, with matching database indexes and metadata-only projections for sensitive resources.
+- Paged tables and form selectors, browser history and reload state, CLI list filters, and navigation through older verified rollback releases.
+
 ## Next increment
 
-Add paginated resource reads and navigation before supporting larger installations. Hosted identity, SSH, additional deployment strategies, notifications and automated rollback remain later work.
+Add deployment notifications with durable delivery, retries and visible delivery status. Hosted identity, SSH, additional deployment strategies and automated rollback remain later work.
 
 ## Decisions and constraints
 
@@ -50,7 +53,7 @@ The local bootstrap is not a hosted identity system. There is no invitation flow
 
 Deployment outbox entries are delivered by the Temporal worker. Artifact ingestion retains its separate PostgreSQL-backed worker. Redis, runbooks, tenants, scheduled releases, and high-availability packaging remain unimplemented. See [Docker agent setup and limits](deployment-agents.md), including the 25 MiB archive cap and same-host certificate recovery and the absence of force-unlock or host reassignment. Production defaults to requiring verified staging of the exact release before admission. Approvers can edit prerequisites; accepted requests retain their admission snapshot. See [promotion and rollback](promotion-and-rollback.md) and [deployment secrets](deployment-secrets.md) for policy, key management and recovery boundaries.
 
-The dashboard shows the newest request per environment, including its pending/cancelled state. It does not claim that this is the currently deployed version. The latest 200 records per resource are loaded; pagination is a follow-up before supporting larger installations.
+The dashboard shows the newest request per environment, including its pending/cancelled state. It does not claim that this is the currently deployed version. The overview and legacy snapshot endpoints retain a 200-record window. Resource screens and selectors use cursor pagination over the full collection. The overview resolves the newest request for each displayed project and environment independently of that window. Search and exact counts run in PostgreSQL; this stage does not add a search index or distributed rate limiting.
 
 ## Ingestion boundaries
 

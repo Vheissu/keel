@@ -36,8 +36,19 @@ export async function registerDeliveryRoutes(api: FastifyInstance, control: Cont
   api.get<{ Params: { id: string } }>('/deployments/:id/rollback-candidates', async (req) => {
     const id = uuid.parse(req.params.id);
 
+    const query = z
+      .object({
+        cursor: z
+          .string()
+          .regex(/^[1-9][0-9]{0,18}$/)
+          .refine((value) => value.length < 19 || value <= '9223372036854775807')
+          .optional(),
+      })
+      .strict()
+      .parse(req.query);
+
     return transaction(control.db, (tx) =>
-      rollback.candidates(tx, req.principal.organisation_id, id),
+      rollback.candidates(tx, req.principal.organisation_id, id, query.cursor ?? null),
     );
   });
 

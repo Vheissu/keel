@@ -190,6 +190,10 @@
               </button>
             </div>
           </div>
+          <p class="help" if.bind="data.projects.length < data.totals.projects">
+            Showing the newest ${data.projects.length} of ${data.totals.projects} projects.
+            <a href="#projects">Browse all projects</a>
+          </p>
         </section>
         <div class="overview-bottom">
           <section>
@@ -238,22 +242,7 @@
           </section>
         </div>
       </template>
-      <div
-        class="list-toolbar"
-        if.bind="page !== 'Overview' && page !== 'Environments' && page !== 'Audit log' && page !== 'Integrations' && page !== 'Targets'"
-      >
-        <label class="search-label" for="search">Search ${page.toLowerCase()}</label>
-        <input
-          id="search"
-          class="search"
-          type="search"
-          value.bind="query"
-          placeholder.bind="'Filter ' + page.toLowerCase() + '…'"
-        />
-      </div>
-      <p class="help" if.bind="hasMore">
-        Showing the latest ${data.limit} records. Older records remain stored in PostgreSQL.
-      </p>
+      <page-controls if.bind="list" pager.bind="list" label.bind="page"></page-controls>
       <template if.bind="page === 'Projects'">
         <div class="table-wrap">
           <table>
@@ -304,7 +293,7 @@
                   <strong>${artifact.name}</strong>
                   <small>${artifact.version}</small>
                 </td>
-                <td>${projectName(artifact.project_id)}</td>
+                <td>${artifact.project_name || projectName(artifact.project_id)}</td>
                 <td><code title.bind="artifact.digest">${short(artifact.digest)}…</code></td>
                 <td>${size(artifact.size)}</td>
                 <td>${date(artifact.created_at)}</td>
@@ -348,7 +337,7 @@
                     ${release.version}
                   </button>
                 </td>
-                <td>${projectName(release.project_id)}</td>
+                <td>${release.project_name || projectName(release.project_id)}</td>
                 <td>
                   <code title.bind="release.manifest.artifact.digest">
                     ${short(release.manifest.artifact.digest)}…
@@ -360,7 +349,7 @@
                     class="button small secondary"
                     if.bind="canWrite"
                     click.trigger="open('deploy', release)"
-                    aria-label.bind="'Deploy ' + release.version + ' of ' + projectName(release.project_id)"
+                    aria-label.bind="'Deploy ' + release.version + ' of ' + (release.project_name || projectName(release.project_id))"
                   >
                     Deploy
                   </button>
@@ -404,12 +393,14 @@
             <tbody>
               <tr repeat.for="deployment of deployments">
                 <td>
-                  <strong>${releaseVersion(deployment.release_id)}</strong>
-                  <small>${projectName(deployment.project_id)}</small>
+                  <strong>
+                    ${(deployment.release_version || releaseVersion(deployment.release_id))}
+                  </strong>
+                  <small>${(deployment.project_name || projectName(deployment.project_id))}</small>
                   <small if.bind="deployment.kind === 'rollback'">Application rollback</small>
                 </td>
                 <td>
-                  ${environmentName(deployment.environment_id)}
+                  ${(deployment.environment_name || environmentName(deployment.environment_id))}
                   <small if.bind="deployment.promotion_source_deployment_id">
                     Verified prerequisite recorded
                   </small>
@@ -427,7 +418,7 @@
                     if.bind="canWrite && (deployment.status === 'succeeded' || deployment.status === 'failed' || deployment.status === 'cancelled')"
                     disabled.bind="busy || !!rollbackSource"
                     click.trigger="openRollback(deployment)"
-                    aria-label.bind="'Plan rollback for ' + releaseVersion(deployment.release_id) + ' in ' + environmentName(deployment.environment_id)"
+                    aria-label.bind="'Plan rollback for ' + (deployment.release_version || releaseVersion(deployment.release_id)) + ' in ' + (deployment.environment_name || environmentName(deployment.environment_id))"
                   >
                     Plan rollback
                   </button>
@@ -445,7 +436,7 @@
                       class="button small primary"
                       disabled.bind="busy"
                       click.trigger="action(deployment, 'approve')"
-                      aria-label.bind="'Approve deployment of ' + releaseVersion(deployment.release_id) + ' to ' + environmentName(deployment.environment_id)"
+                      aria-label.bind="'Approve deployment of ' + (deployment.release_version || releaseVersion(deployment.release_id)) + ' to ' + (deployment.environment_name || environmentName(deployment.environment_id))"
                     >
                       Approve
                     </button>
@@ -453,7 +444,7 @@
                       class="text-button danger"
                       disabled.bind="busy"
                       click.trigger="action(deployment, 'reject')"
-                      aria-label.bind="'Reject deployment of ' + releaseVersion(deployment.release_id) + ' to ' + environmentName(deployment.environment_id)"
+                      aria-label.bind="'Reject deployment of ' + (deployment.release_version || releaseVersion(deployment.release_id)) + ' to ' + (deployment.environment_name || environmentName(deployment.environment_id))"
                     >
                       Reject
                     </button>
@@ -463,7 +454,7 @@
                     if.bind="canWrite && (deployment.status === 'queued' || deployment.status === 'awaiting_approval' || deployment.status === 'running' || deployment.status === 'reconciliation_required')"
                     disabled.bind="busy"
                     click.trigger="action(deployment, 'cancel')"
-                    aria-label.bind="'Cancel deployment of ' + releaseVersion(deployment.release_id) + ' to ' + environmentName(deployment.environment_id)"
+                    aria-label.bind="'Cancel deployment of ' + (deployment.release_version || releaseVersion(deployment.release_id)) + ' to ' + (deployment.environment_name || environmentName(deployment.environment_id))"
                   >
                     Cancel
                   </button>
@@ -498,7 +489,7 @@
       <environment-policies
         if.bind="page === 'Environments'"
         api.bind="api"
-        environments.bind="data.environments"
+        environments.bind="environments"
         can-approve.bind="canApprove"
         refresh-workspace.bind="() => refresh()"
       ></environment-policies>
@@ -510,6 +501,7 @@
         can-manage.bind="data.principal.permissions.includes('manage_secrets')"
       ></secrets-panel>
       <integrations-panel
+        configured.bind="data.integrations_configured"
         if.bind="page === 'Integrations'"
         api.bind="api"
         projects.bind="data.projects"
@@ -528,7 +520,7 @@
               </tr>
             </thead>
             <tbody>
-              <tr repeat.for="event of data.audit">
+              <tr repeat.for="event of audit; key: id">
                 <td><strong>${event.action}</strong></td>
                 <td><code title.bind="event.actor_id">${short(event.actor_id)}…</code></td>
                 <td><code title.bind="event.resource_id">${short(event.resource_id)}…</code></td>
@@ -536,7 +528,7 @@
               </tr>
             </tbody>
           </table>
-          <div class="empty-state" if.bind="!data.audit.length">
+          <div class="empty-state" if.bind="!audit.length">
             <boat-mark></boat-mark>
             <h3>No changes recorded yet.</h3>
             <p>Your first project, artifact, or release will start the audit trail.</p>
@@ -619,12 +611,14 @@
         <textarea id="description" value.bind="description" maxlength="500" rows="3"></textarea>
       </template>
       <template if.bind="form !== 'project'">
-        <label for="project">Project</label>
-        <select id="project" value.bind="projectId" change.trigger="projectChanged()" required>
-          <option repeat.for="project of data.projects" model.bind="project.id">
-            ${project.name}
-          </option>
-        </select>
+        <resource-picker
+          api.bind="api"
+          resource="projects"
+          label="Project"
+          input-id="project"
+          value.bind="projectId"
+          changed.bind="() => projectChanged()"
+        ></resource-picker>
       </template>
       <template if.bind="form === 'artifact'">
         <label for="artifact-name">Artifact name</label>
@@ -651,13 +645,15 @@
         </p>
       </template>
       <template if.bind="form === 'release'">
-        <label for="artifact">Artifact</label>
-        <select id="artifact" value.bind="artifactId" change.trigger="resetProcess()" required>
-          <option value="">Choose an artifact</option>
-          <option repeat.for="artifact of projectArtifacts" model.bind="artifact.id">
-            ${artifact.name} · ${artifact.version}
-          </option>
-        </select>
+        <resource-picker
+          api.bind="api"
+          resource="artifacts"
+          label="Artifact"
+          input-id="artifact"
+          value.bind="artifactId"
+          project-id.bind="projectId"
+          changed.bind="item => resetProcess(item)"
+        ></resource-picker>
         <label for="release-version">Release version</label>
         <input
           id="release-version"
@@ -680,24 +676,23 @@
         </p>
       </template>
       <template if.bind="form === 'deploy'">
-        <label for="release">Release</label>
-        <select id="release" value.bind="releaseId" change.trigger="loadPromotion()" required>
-          <option value="">Choose a release</option>
-          <option repeat.for="release of projectReleases" model.bind="release.id">
-            ${release.version}
-          </option>
-        </select>
-        <label for="environment">Environment</label>
-        <select
-          id="environment"
+        <resource-picker
+          api.bind="api"
+          resource="releases"
+          label="Release"
+          input-id="release"
+          value.bind="releaseId"
+          project-id.bind="projectId"
+          changed.bind="() => loadPromotion()"
+        ></resource-picker>
+        <resource-picker
+          api.bind="api"
+          resource="environments"
+          label="Environment"
+          input-id="environment"
           value.bind="environmentId"
-          change.trigger="loadPromotion()"
-          required
-        >
-          <option repeat.for="environment of data.environments" model.bind="environment.id">
-            ${environment.name}${environment.requires_approval ? ' · approval required' : ''}
-          </option>
-        </select>
+          changed.bind="() => loadPromotion()"
+        ></resource-picker>
         <div class="execution-note">
           <p if.bind="checkingPromotion" role="status">Checking promotion policy…</p>
           <p if.bind="promotionError" role="alert">${promotionError}</p>

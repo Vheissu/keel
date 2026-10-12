@@ -1,0 +1,11 @@
+<div class="resource-picker" if.bind="pager && ready">
+  <label for.bind="inputId">${label}</label>
+  <select id.bind="inputId" value.bind="value" change.trigger="select()" required.bind="!optional">
+    <option value="">${optional ? 'None' : 'Choose ' + label.toLowerCase()}</option>
+    <option if.bind="pinned" value.bind="pinned.id">${text(pinned)}</option>
+    <option repeat.for="item of pager.items; key: id" value.bind="item.id">${text(item)}</option>
+  </select>
+  <page-controls pager.bind="pager" label.bind="label + ' options'"></page-controls>
+</div>
+
+<p if.bind="!ready" class="help" role="status">Loading ${label.toLowerCase()} options…</p>
