@@ -21,7 +21,14 @@ export async function createGateway(execution: ExecutionService, tls: ServerOpti
     requestTimeout: 30000,
   });
 
-  await app.register(rateLimit, { max: 240, timeWindow: '1 minute' });
+  // Agents often share an egress address, so limit each certificate separately.
+  await app.register(rateLimit, {
+    max: 240,
+    timeWindow: '1 minute',
+    keyGenerator: (req) =>
+      (req.raw.socket as TLSSocket).getPeerCertificate().fingerprint256 ?? req.ip,
+  });
+
   const identities = new WeakMap<object, AgentIdentity>();
 
   app.addHook('onRequest', async (req) => {
@@ -42,13 +49,20 @@ export async function createGateway(execution: ExecutionService, tls: ServerOpti
     );
   });
 
-  app.setErrorHandler((error, _req, reply) => {
+  app.setErrorHandler((error: Error & { statusCode?: number }, _req, reply) => {
     if (error instanceof DomainError) {
       return reply.code(error.status).send({ error: { code: error.code, message: error.message } });
     }
 
     if (error instanceof z.ZodError) {
       return reply.code(400).send({ error: { code: 'INVALID_REQUEST' } });
+    }
+
+    // Preserve Fastify client errors such as rate limits, oversized bodies and malformed JSON.
+    if (error.statusCode && error.statusCode < 500) {
+      return reply.code(error.statusCode).send({
+        error: { code: error.statusCode === 429 ? 'RATE_LIMITED' : 'INVALID_REQUEST' },
+      });
     }
 
     return reply.code(500).send({ error: { code: 'GATEWAY_ERROR' } });
