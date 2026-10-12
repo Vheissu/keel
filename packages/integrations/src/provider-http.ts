@@ -67,3 +67,18 @@ export async function boundedResponse(
     reader.releaseLock();
   }
 }
+
+// Converts rate-limit headers into a bounded retry delay, defaulting to one minute.
+export function rateLimitDelay(headers: Headers) {
+  const retryAfter = Number(headers.get('retry-after') ?? NaN);
+  const reset = Number(headers.get('x-ratelimit-reset') ?? NaN) - Date.now() / 1000;
+  let seconds = 60;
+
+  if (retryAfter > 0) {
+    seconds = retryAfter;
+  } else if (reset > 0) {
+    seconds = reset;
+  }
+
+  return Math.min(3600, Math.max(30, Math.ceil(seconds)));
+}

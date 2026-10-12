@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { boundedResponse, ProviderError } from './provider-http.js';
+import { boundedResponse, ProviderError, rateLimitDelay } from './provider-http.js';
 
 export { boundedResponse, ProviderError } from './provider-http.js';
 
@@ -116,15 +116,11 @@ export class GitHubActionsAdapter implements CIProviderAdapter {
           response.headers.get('x-ratelimit-remaining') === '0'));
 
     if (limited) {
-      const retryAfter = Number(response.headers.get('retry-after'));
-      const reset = Number(response.headers.get('x-ratelimit-reset')) - Date.now() / 1000;
-      const delay = Math.min(3600, Math.max(30, retryAfter || reset || 60));
-
       throw new ProviderError(
         'PROVIDER_RATE_LIMIT',
         'GitHub rate limited this connection. The import will retry.',
         true,
-        delay,
+        rateLimitDelay(response.headers),
       );
     }
 

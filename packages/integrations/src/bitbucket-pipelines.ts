@@ -7,7 +7,7 @@ import {
   type ExternalRun,
   type ProviderConnection,
 } from './index.js';
-import { boundedResponse, ProviderError } from './provider-http.js';
+import { boundedResponse, ProviderError, rateLimitDelay } from './provider-http.js';
 
 export const bitbucketRepository = z
   .string()
@@ -110,14 +110,11 @@ export class BitbucketPipelinesAdapter implements CIProviderAdapter {
       await response.body?.cancel();
 
       if (response.status === 429) {
-        const seconds = Number(response.headers.get('retry-after'));
-        const delay = Number.isFinite(seconds) ? Math.min(3600, Math.max(30, seconds)) : 60;
-
         throw new ProviderError(
           'PROVIDER_RATE_LIMIT',
           'Bitbucket rate limited this connection. The import will retry.',
           true,
-          delay,
+          rateLimitDelay(response.headers),
         );
       }
 
