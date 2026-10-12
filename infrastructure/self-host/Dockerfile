@@ -13,6 +13,7 @@ COPY --from=build /app/apps/web/dist ./apps/web/dist
 COPY --from=build /app/apps/artifact-worker/dist ./apps/artifact-worker/dist
 COPY --from=build /app/apps/agent-gateway/dist ./apps/agent-gateway/dist
 COPY --from=build /app/apps/workflow-worker/dist ./apps/workflow-worker/dist
+COPY --from=build /app/apps/notification-worker/dist ./apps/notification-worker/dist
 COPY --from=build /app/apps/operations/dist ./apps/operations/dist
 COPY --from=build /app/packages/database/migrations ./packages/database/migrations
 USER node

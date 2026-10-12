@@ -2,7 +2,9 @@
 
 This package runs one Keel installation on a Docker Compose host. PostgreSQL stores both Keel records and Temporal history in separate databases. Local artifact bytes live in a separate volume. It is a single-host deployment: losing the host interrupts service until you restore it.
 
-Use a dedicated host with Docker Engine, Docker Compose v2, Node.js 22.12 or later, npm, OpenSSL and tar. The host must reach your artifact providers. Agents need outbound access to the gateway. The API, workers and gateway run as an unprivileged user with a read-only root filesystem, dropped capabilities and no Docker socket. Deployment agents run on deployment hosts; see [agent setup](deployment-agents.md).
+Use a dedicated host with Docker Engine, Docker Compose v2, Node.js 22.12 or later, npm, OpenSSL and tar. The host must reach your artifact providers and any approved notification receivers. Agents need outbound access to the gateway. The API, workers and gateway run as an unprivileged user with a read-only root filesystem, dropped capabilities and no Docker socket. Deployment agents run on deployment hosts; see [agent setup](deployment-agents.md).
+
+The package includes a separate notification worker. Set the API and worker destination allowlist as described in [deployment notifications](notifications.md).
 
 ## Install
 

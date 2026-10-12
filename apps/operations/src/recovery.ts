@@ -91,6 +91,16 @@ export async function verify(db: Database) {
     credentialVault.decrypt(connection.organisation_id, connection.id, connection.credentials);
   }
 
+  const notificationVault = new CredentialVault(process.env.KEEL_CREDENTIAL_KEY!, 'notifications');
+
+  const endpoints = (
+    await db.query('SELECT organisation_id, id, credentials FROM notification_endpoints')
+  ).rows;
+
+  for (const endpoint of endpoints) {
+    notificationVault.decrypt(endpoint.organisation_id, endpoint.id, endpoint.credentials);
+  }
+
   const secrets = (
     await db.query(`
       SELECT
@@ -120,6 +130,7 @@ export async function verify(db: Database) {
     migrations: applied.length,
     artifacts: artifacts.length,
     connections: connections.length,
+    notification_endpoints: endpoints.length,
     secret_versions: secrets.length,
   };
 }
@@ -127,6 +138,35 @@ export async function verify(db: Database) {
 export async function quarantine(db: Database) {
   return transaction(db, async (tx) => {
     const organisations = (await tx.query('SELECT id FROM organisations')).rows;
+
+    // Restored deliveries may already have reached receivers after the backup was taken.
+    await tx.query(
+      'UPDATE notification_endpoints SET enabled=false, revision=revision+1 WHERE enabled',
+    );
+
+    await tx.query(
+      `
+        UPDATE notification_attempts
+        SET
+          code = 'RESTORE_QUARANTINE',
+          completed_at = now()
+        WHERE
+          completed_at IS NULL
+      `,
+    );
+
+    await tx.query(
+      `
+        UPDATE notification_deliveries
+        SET
+          status = 'cancelled',
+          last_code = 'RESTORE_QUARANTINE',
+          lease_id = NULL,
+          lease_expires_at = NULL
+        WHERE
+          status IN ('pending', 'retrying', 'sending')
+      `,
+    );
 
     const agents = await tx.query(
       "UPDATE deployment_agents SET state='revoked' WHERE state <> 'revoked'",

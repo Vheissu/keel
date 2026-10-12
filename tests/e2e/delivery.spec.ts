@@ -1,3 +1,4 @@
+import { NotificationWorker } from '../../apps/api/src/notification-worker.js';
 import { test, expect, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { randomUUID, randomBytes } from 'node:crypto';
@@ -1045,4 +1046,122 @@ test('creates a release from an older artifact and selects a release beyond the 
   await expect(page.getByRole('dialog')).not.toBeVisible();
   await expect(page.locator('tbody')).toContainText('retained-0001');
   await expect(page.locator('tbody')).toContainText('Waiting for agent');
+});
+
+test('configures signed webhooks and shows failed, retried and delivered attempts', async ({
+  page,
+}) => {
+  const oldKey = process.env.KEEL_CREDENTIAL_KEY;
+  const oldOrigins = process.env.KEEL_NOTIFICATION_ORIGINS;
+  const key = randomBytes(32).toString('base64');
+
+  process.env.KEEL_CREDENTIAL_KEY = key;
+  process.env.KEEL_NOTIFICATION_ORIGINS = 'https://receiver.example';
+
+  try {
+    await connect(page);
+    await page.getByRole('link', { name: 'Notifications', exact: true }).click();
+    await page.getByRole('button', { name: 'Add destination', exact: true }).click();
+    await expect(page.getByLabel('Destination name', { exact: true })).toBeFocused();
+    await page.getByLabel('Destination name', { exact: true }).fill('Release alerts');
+
+    await page
+      .getByLabel('Webhook URL', { exact: true })
+      .fill('https://receiver.example/private-hook');
+
+    await page
+      .getByLabel('Signing secret', { exact: true })
+      .fill('a-random-test-signing-secret-with-32-characters');
+
+    await page.getByRole('checkbox', { name: 'queued', exact: true }).check();
+    await page.getByRole('button', { name: 'Save destination', exact: true }).click();
+    await expect(page.getByRole('cell', { name: 'Release alerts', exact: true })).toBeVisible();
+    const principal = await control.authenticate(f.operator.token);
+    const { transaction } = await import('../../packages/database/src/index.js');
+
+    await transaction(db, async (tx) => {
+      const project = await control.project(tx, principal, {
+        name: 'Notification app',
+        slug: 'notification-app',
+        description: '',
+      });
+
+      const bytes = Buffer.from('notification browser test');
+
+      const artifact = await control.artifact(
+        tx,
+        principal,
+        { project_id: project.id, name: 'application', version: '1.0', digest: sha256(bytes) },
+        bytes,
+      );
+
+      const release = await control.release(tx, principal, {
+        project_id: project.id,
+        artifact_id: artifact.id,
+        version: '1.0',
+        process: deploymentProcess(),
+      });
+
+      await control.deploy(tx, principal, {
+        release_id: release.id,
+        environment_id: f.environments.staging,
+      });
+    });
+
+    await new NotificationWorker(
+      db,
+      new CredentialVault(key, 'notifications'),
+      async () => ({ status: 400 }),
+      ['https://receiver.example'],
+    ).runOnce();
+
+    await page.getByRole('button', { name: 'Refresh notifications', exact: true }).click();
+    await expect(page.getByRole('cell', { name: 'failed', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'View attempts', exact: true }).click();
+    await expect(page.getByRole('cell', { name: 'HTTP_ERROR', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Retry delivery', exact: true }).click();
+    await expect(page.getByRole('cell', { name: 'pending', exact: true })).toBeVisible();
+
+    await new NotificationWorker(
+      db,
+      new CredentialVault(key, 'notifications'),
+      async () => ({ status: 204 }),
+      ['https://receiver.example'],
+    ).runOnce();
+
+    await page.getByRole('button', { name: 'Refresh notifications', exact: true }).click();
+    await expect(page.getByRole('cell', { name: 'delivered', exact: true })).toBeVisible();
+    await expect(page.getByRole('cell', { name: 'ACCEPTED', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Disable', exact: true }).click();
+    await expect(page.getByRole('cell', { name: 'Disabled', exact: true })).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 844 });
+
+    const violations = (
+      await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze()
+    ).violations;
+
+    expect(violations).toEqual([]);
+
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+
+    await page.screenshot({ path: 'output/playwright/notifications-mobile.png', fullPage: true });
+    await connect(page, f.reader.token);
+    await page.getByRole('link', { name: 'Notifications', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Add destination', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('cell', { name: 'delivered', exact: true })).toBeVisible();
+  } finally {
+    if (oldKey === undefined) {
+      delete process.env.KEEL_CREDENTIAL_KEY;
+    } else {
+      process.env.KEEL_CREDENTIAL_KEY = oldKey;
+    }
+
+    if (oldOrigins === undefined) {
+      delete process.env.KEEL_NOTIFICATION_ORIGINS;
+    } else {
+      process.env.KEEL_NOTIFICATION_ORIGINS = oldOrigins;
+    }
+  }
 });

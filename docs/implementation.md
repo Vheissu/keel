@@ -1,6 +1,6 @@
 # Implementation status
 
-The control-plane foundation, GitHub ingestion, Bitbucket publishing and Docker execution, agent recovery, promotion policy, rollback planning, scoped deployment secrets, self-hosted packaging, operational recovery and paginated resource navigation are implemented. PLAN.md remains the product roadmap.
+The control-plane foundation, GitHub ingestion, Bitbucket publishing and Docker execution, agent recovery, promotion policy, rollback planning, scoped deployment secrets, self-hosted packaging, operational recovery, paginated resource navigation and durable webhook notifications are implemented. PLAN.md remains the product roadmap.
 
 ## Implemented
 
@@ -34,12 +34,15 @@ The control-plane foundation, GitHub ingestion, Bitbucket publishing and Docker 
 - Single-host Compose packaging with compiled HTTPS UI/API, persistent PostgreSQL and Temporal, separate migration/runtime roles, generated credentials and service health checks.
 - Encrypted cold backups covering database, retained artifacts, configuration and keys; authenticated fresh-volume restore with retained-data verification and revoked agents.
 
-- Cursor pagination, full-collection search and scoped lookups for 12 resource collections, with matching database indexes and metadata-only projections for sensitive resources.
+- Cursor pagination, full-collection search and scoped lookups for 15 resource collections, with matching database indexes and metadata-only projections for sensitive resources.
 - Paged tables and form selectors, browser history and reload state, CLI list filters, and navigation through older verified rollback releases.
+
+- Signed deployment webhooks with scoped event rules, encrypted destinations, durable delivery jobs, leased attempts, bounded retries and visible UI/CLI delivery history.
+- A separate notification worker in local development and self-hosted Compose, with restore quarantine for unfinished deliveries.
 
 ## Next increment
 
-Add deployment notifications with durable delivery, retries and visible delivery status. Hosted identity, SSH, additional deployment strategies and automated rollback remain later work.
+Add hosted identity and workspace membership with managed token lifecycle. SSO, SSH, additional deployment strategies and automated rollback remain later work.
 
 ## Decisions and constraints
 

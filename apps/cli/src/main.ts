@@ -9,6 +9,9 @@ import { parseProcess } from '../../../packages/deployment-schema/src/index.js';
 const options = {
   allowPositionals: true,
   options: {
+    endpoint: { type: 'string' },
+    delivery: { type: 'string' },
+    deployment: { type: 'string' },
     provider: { type: 'string' },
     limit: { type: 'string' },
     cursor: { type: 'string' },
@@ -84,14 +87,18 @@ const help = `Keel · publish existing build outputs and create immutable releas
   npm run keel -- deployment secret-bindings <deployment-uuid>
   npm run keel -- validate <process.yaml>
   npm run keel -- list <resource> [--limit 25] [--cursor <cursor>] [--search <text>]
+  npm run keel -- notification create --config webhook.json
+  npm run keel -- notification enable|disable <endpoint-uuid> --revision <number>
+  npm run keel -- notification retry <delivery-uuid>
   npm run keel -- status --json
 
 Set KEEL_URL (default http://127.0.0.1:4040) and KEEL_TOKEN.
 Connection creation and rotation use KEEL_GITHUB_TOKEN and KEEL_GITHUB_WEBHOOK_SECRET.
 Bitbucket uses KEEL_BITBUCKET_TOKEN and KEEL_PUBLISH_SECRET; publishing needs only KEEL_PUBLISH_SECRET.
 For retryable CI steps, pass a stable --idempotency-key (8–128 characters).
-List resources: projects, environments, artifacts, releases, deployments, audit, agents, targets, attempts, connections, imports, secrets.
+List resources: projects, environments, artifacts, releases, deployments, audit, agents, targets, attempts, connections, imports, secrets, notification-endpoints, notification-deliveries, notification-attempts.
 Use --project, --environment, --connection, --agent, --state or --status where the resource supports that filter.
+Notification filters: --endpoint, --deployment, --delivery, --status. Creation reads KEEL_NOTIFICATION_SECRET.
 Results are JSON. Review a rollback plan before requesting it. Approvals remain available in the UI and API.
 Secret writes require manage_secrets permission. Pipe the exact single-line value on stdin, with no trailing newline.
 Secret values are never returned. Revocation cannot recall credentials already delivered to a container.
@@ -223,13 +230,16 @@ try {
 
     print({ valid: true, process: parseProcess(await readFile(subcommand, 'utf8')) });
   } else if (command === 'list') {
-    if (!subcommand || !/^[a-z]+$/.test(subcommand)) {
+    if (!subcommand || !/^[a-z-]+$/.test(subcommand)) {
       throw new Error('Provide a resource name, such as projects, releases or deployments.');
     }
 
     const query = new URLSearchParams();
 
     for (const [flag, parameter] of [
+      ['endpoint', 'endpoint_id'],
+      ['delivery', 'delivery_id'],
+      ['deployment', 'deployment_id'],
       ['limit', 'limit'],
       ['cursor', 'cursor'],
       ['search', 'q'],
@@ -246,6 +256,30 @@ try {
     }
 
     print(await request(`/resources/${subcommand}?${query}`));
+  } else if (command === 'notification' && subcommand === 'create') {
+    const config = JSON.parse(await readFile(required('config'), 'utf8'));
+
+    print(
+      await request('/notifications/endpoints', {
+        ...config,
+        signing_secret: process.env.KEEL_NOTIFICATION_SECRET,
+      }),
+    );
+  } else if (command === 'notification' && ['enable', 'disable', 'retry'].includes(subcommand)) {
+    if (!file) {
+      throw new Error('Provide a destination or delivery UUID.');
+    }
+
+    print(
+      await request(
+        subcommand === 'retry'
+          ? `/notifications/deliveries/${encodeURIComponent(file)}/retry`
+          : `/notifications/endpoints/${encodeURIComponent(file)}/state`,
+        subcommand === 'retry'
+          ? {}
+          : { enabled: subcommand === 'enable', expected_revision: Number(required('revision')) },
+      ),
+    );
   } else if (command === 'status') {
     print(await request('/snapshot'));
   } else if (command === 'secret' && subcommand === 'list') {

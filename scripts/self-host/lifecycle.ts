@@ -2,7 +2,13 @@ import { join } from 'node:path';
 import { rm, writeFile } from 'node:fs/promises';
 import { compose, type Installation } from './installation.js';
 
-export const services = ['api', 'artifact-worker', 'workflow-worker', 'agent-gateway'];
+export const services = [
+  'api',
+  'artifact-worker',
+  'notification-worker',
+  'workflow-worker',
+  'agent-gateway',
+];
 
 export async function up(directory: string, installation: Installation) {
   const running = (
@@ -30,12 +36,17 @@ export async function up(directory: string, installation: Installation) {
 
 export async function stop(directory: string, installation: Installation) {
   // Close admission before checking for work. Existing agents can still finish through the gateway.
-  await compose(directory, installation, ['stop', 'api', 'artifact-worker']);
+  await compose(directory, installation, ['stop', 'api', 'artifact-worker', 'notification-worker']);
 
   try {
     await compose(directory, installation, ['run', '--rm', '--no-deps', 'operations', 'quiescent']);
   } catch (error) {
-    await compose(directory, installation, ['start', 'api', 'artifact-worker']);
+    await compose(directory, installation, [
+      'start',
+      'api',
+      'artifact-worker',
+      'notification-worker',
+    ]);
 
     // The check also fails when PostgreSQL is unavailable, so pass on its own reason.
     const reason =

@@ -2,7 +2,7 @@
 
 Build anywhere. Deploy everywhere.
 
-Keel is a continuous delivery application for artifacts built by your existing CI. This repository implements the control plane, GitHub Actions ingestion, Bitbucket Pipelines publishing, Docker execution, promotion policy, rollback planning, scoped deployment secrets, self-hosted packaging, operational recovery and paginated resource navigation from [PLAN.md](PLAN.md).
+Keel is a continuous delivery application for artifacts built by your existing CI. This repository implements the control plane, GitHub Actions ingestion, Bitbucket Pipelines publishing, Docker execution, promotion policy, rollback planning, scoped deployment secrets, self-hosted packaging, operational recovery, paginated resource navigation and webhook notifications from [PLAN.md](PLAN.md).
 
 You can create projects, publish files with SHA-256 verification, create immutable releases, request deployments to staging or production, approve them from a separate identity, and inspect the audit trail. The Aurelia interface uses navy, sea teal, off-white, and small animated boats for loading states. Motion follows the operating system’s reduced-motion preference.
 
@@ -10,9 +10,11 @@ Retained Docker image archives can now deploy through Temporal and an outbound-o
 
 Resource lists and form selectors search the full collection and load 25, 50 or 100 records at a time. Page links retain search and navigation state; reconnect after reloading because tokens stay in memory. Use `npm run keel -- list projects --limit 25` for the same paginated reads in the CLI. See [resource reads](docs/api.md#paginated-resource-reads) for filters and cursor behavior.
 
+Deployment notifications send signed HTTPS webhooks with durable retries and delivery history. See [notification setup and receiver contract](docs/notifications.md).
+
 ## Run locally
 
-Use Node.js 22.12+ and Docker with Compose. The database uses port 55439, the API 4040, and the web app 5173. The dev command also starts the artifact import worker.
+Use Node.js 22.12+ and Docker with Compose. The database uses port 55439, the API 4040, and the web app 5173. The dev command also starts artifact import and notification workers.
 
 ```sh
 npm ci

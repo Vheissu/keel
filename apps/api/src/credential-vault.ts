@@ -14,13 +14,13 @@ export class CredentialVault {
 
   constructor(
     encodedKey: string,
-    private purpose: 'credentials' | 'deployment-secrets' = 'credentials',
+    private purpose: 'credentials' | 'deployment-secrets' | 'notifications' = 'credentials',
   ) {
     this.key = Buffer.from(encodedKey, 'base64');
 
     if (this.key.length !== 32 || this.key.toString('base64') !== encodedKey) {
       const variable =
-        purpose === 'credentials' ? 'KEEL_CREDENTIAL_KEY' : 'KEEL_DEPLOYMENT_SECRET_KEY';
+        purpose === 'deployment-secrets' ? 'KEEL_DEPLOYMENT_SECRET_KEY' : 'KEEL_CREDENTIAL_KEY';
 
       throw new Error(`${variable} must be a base64-encoded 32-byte key.`);
     }

@@ -1,3 +1,4 @@
+import { endpointColumns, deliveryColumns } from './notifications.js';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { FastifyInstance } from 'fastify';
@@ -31,6 +32,26 @@ const qualify = (columns: string) =>
 
 // SQL identifiers and projections come only from this registry, never from query parameters.
 const resources: Record<string, Resource> = {
+  'notification-endpoints': {
+    table: 'notification_endpoints',
+    columns: qualify(endpointColumns),
+    search: ['t.name', 't.origin'],
+    filters: ['project_id', 'environment_id'],
+  },
+  'notification-deliveries': {
+    table: 'notification_deliveries',
+    columns: `${qualify(deliveryColumns)}, n.name AS endpoint_name`,
+    joins:
+      'JOIN notification_endpoints n ON n.organisation_id=t.organisation_id AND n.id=t.endpoint_id',
+    search: ['n.name', 't.status', 't.deployment_id::text', 't.last_code'],
+    filters: ['status', 'deployment_id', 'endpoint_id'],
+  },
+  'notification-attempts': {
+    table: 'notification_attempts',
+    columns: 't.*',
+    search: ['t.code', 't.delivery_id::text'],
+    filters: ['delivery_id'],
+  },
   projects: { table: 'projects', columns: 't.*', search: ['t.name', 't.slug', 't.description'] },
   environments: {
     table: 'environments',
@@ -130,6 +151,9 @@ const querySchema = z
       .optional(),
     cursor: z.string().max(2048).optional(),
     q: z.string().trim().max(200).optional(),
+    endpoint_id: z.string().uuid().optional(),
+    delivery_id: z.string().uuid().optional(),
+    deployment_id: z.string().uuid().optional(),
     project_id: z.string().uuid().optional(),
     environment_id: z.string().uuid().optional(),
     connection_id: z.string().uuid().optional(),

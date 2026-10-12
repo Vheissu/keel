@@ -1,3 +1,4 @@
+import { NotificationsPanel } from './notifications-panel';
 import { PageControls } from './page-controls';
 import { ResourcePicker } from './resource-picker';
 import Aurelia from 'aurelia';
@@ -13,6 +14,7 @@ import { SVGAnalyzer } from '@aurelia/runtime-html';
 import './styles.css';
 
 Aurelia.register(
+  NotificationsPanel,
   PageControls,
   ResourcePicker,
   BoatMark,

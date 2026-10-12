@@ -106,6 +106,9 @@ async function until(check: () => Promise<boolean>, timeout = 90000) {
   throw new Error('Timed out waiting for packaged service recovery.');
 }
 
+// The reserved .invalid domain exercises durable network failure without a live receiver.
+process.env.KEEL_NOTIFICATION_ORIGINS = 'https://notifications.invalid';
+
 await mkdir(root, { recursive: true, mode: 0o700 });
 
 try {
@@ -171,6 +174,13 @@ try {
     process: deploymentProcess(),
   });
 
+  const destination = await api('/notifications/endpoints', {
+    name: 'Recovery alerts',
+    url: 'https://notifications.invalid/keel',
+    signing_secret: randomBytes(32).toString('hex'),
+    statuses: ['queued', 'failed'],
+  });
+
   // Keep work queued to prove the backup barrier fails and admission resumes.
   await compose(original, installation, ['stop', 'workflow-worker']);
 
@@ -189,6 +199,13 @@ try {
         ?.status === 'failed',
   );
 
+  await until(async () =>
+    (await api('/resources/notification-deliveries')).items.some(
+      (row: { attempt_count: number; last_code: string }) =>
+        row.attempt_count > 0 && row.last_code === 'NETWORK_ERROR',
+    ),
+  );
+
   const beforeRestart = await api('/snapshot');
 
   assert.equal(beforeRestart.deployments[0].result_code, 'UNSUPPORTED_PROCESS');
@@ -200,6 +217,7 @@ try {
     'temporal',
     'api',
     'artifact-worker',
+    'notification-worker',
     'workflow-worker',
     'agent-gateway',
   ]);
@@ -274,6 +292,7 @@ try {
 
   assert.equal(verified.artifacts, 1);
   assert.equal(verified.secret_versions, 1);
+  assert.equal(verified.notification_endpoints, 1);
   console.log('Backing up and testing wrong-key and corruption rejection.');
   await stop(original, installation);
   const key = randomBytes(32);
@@ -321,6 +340,20 @@ try {
 
   assert.equal(history.workflowExecutionInfo.status, 'WORKFLOW_EXECUTION_STATUS_COMPLETED');
   assert.deepEqual((await http(`/api/v1/artifacts/${artifact.id}/download`)).bytes, bytes);
+  const restoredDestination = await api(`/resources/notification-endpoints/${destination.id}`);
+
+  assert.equal(restoredDestination.enabled, false);
+  const restoredNotifications = await api('/resources/notification-deliveries');
+
+  assert.equal(restoredNotifications.total, 2);
+
+  assert.ok(
+    restoredNotifications.items.every(
+      (row: { status: string; last_code: string }) =>
+        row.status === 'cancelled' && row.last_code === 'RESTORE_QUARANTINE',
+    ),
+  );
+
   const after = await api('/snapshot');
 
   assert.deepEqual(after.deployments, beforeRestart.deployments);

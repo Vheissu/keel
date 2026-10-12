@@ -54,7 +54,7 @@ export async function health(db: Database, service: string) {
       socket.on('error', reject);
       socket.on('timeout', () => socket.destroy(new OperationError('Gateway timed out.')));
     });
-  } else if (['artifact-worker', 'workflow-worker'].includes(service)) {
+  } else if (['artifact-worker', 'workflow-worker', 'notification-worker'].includes(service)) {
     const file = await stat(process.env.KEEL_HEALTH_FILE!);
 
     if (Date.now() - file.mtimeMs > 300000) {

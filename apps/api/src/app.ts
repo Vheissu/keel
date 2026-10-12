@@ -1,3 +1,4 @@
+import { registerNotificationRoutes } from './notifications.js';
 import { registerResourceReads } from './resource-reads.js';
 import Fastify, { type FastifyRequest, type FastifyServerOptions } from 'fastify';
 import type { ServerOptions } from 'node:https';
@@ -62,7 +63,9 @@ export async function createApp(
   );
 
   app.setErrorHandler((error: Error & { code?: string; statusCode?: number }, req, reply) => {
-    const secretRequest = req.routeOptions.url?.startsWith('/api/v1/secrets');
+    const secretRequest =
+      req.routeOptions.url?.startsWith('/api/v1/secrets') ||
+      req.routeOptions.url?.startsWith('/api/v1/notifications');
 
     if (error instanceof DomainError) {
       return reply
@@ -272,6 +275,7 @@ export async function createApp(
       await registerExecutionRoutes(api, new ExecutionService(service));
       await registerDeliveryRoutes(api, service);
       await registerSecretRoutes(api, service);
+      await registerNotificationRoutes(api, service);
 
       api.get('/providers', async () => ({ providers }));
 

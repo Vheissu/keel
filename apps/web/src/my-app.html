@@ -55,7 +55,7 @@
       <div class="header-actions" if.bind="data">
         <button
           class="button secondary"
-          if.bind="page !== 'Integrations' && page !== 'Targets'"
+          if.bind="page !== 'Integrations' && page !== 'Targets' && page !== 'Notifications'"
           click.trigger="refresh()"
           disabled.bind="loading || busy"
         >
@@ -508,6 +508,11 @@
         can-write.bind="canWrite"
         refresh-workspace.bind="() => refresh()"
       ></integrations-panel>
+      <notifications-panel
+        if.bind="page === 'Notifications'"
+        api.bind="api"
+        can-write.bind="canWrite"
+      ></notifications-panel>
       <template if.bind="page === 'Audit log'">
         <div class="table-wrap">
           <table>

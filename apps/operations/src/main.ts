@@ -7,7 +7,14 @@ import { verify, quiescent, quarantine } from './recovery.js';
 import { health } from './health.js';
 import { OperationError } from './operation-error.js';
 
-const services = ['api', 'artifact-worker', 'workflow-worker', 'agent-gateway'];
+const services = [
+  'api',
+  'artifact-worker',
+  'notification-worker',
+  'workflow-worker',
+  'agent-gateway',
+];
+
 const tasks = ['provision', 'migrate', 'verify', 'quiescent', 'quarantine', 'health'];
 const command = process.argv[2];
 

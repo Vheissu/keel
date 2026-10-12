@@ -7,6 +7,7 @@ const paths: Record<string, string> = {
   Releases: 'M3 4h9l9 9-8 8-10-10V4Zm5 4h.01',
   Deployments: 'm7 4 14 8-14 8V4Z',
   Environments: 'M4 4h16v5H4V4Zm0 11h16v5H4v-5Zm4-8h.01M8 18h.01',
+  Notifications: 'M6 8a6 6 0 0 1 12 0v8l3 3H3l3-3V8Zm4 14h4',
   Secrets: 'M6 10h12v11H6V10Zm2 0V6a4 4 0 0 1 8 0v4m-4 5v2',
   Targets: 'M3 4h18v12H3V4Zm4 16h10M12 16v4M6 8h.01M6 12h.01',
   Integrations:

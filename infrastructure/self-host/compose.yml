@@ -142,6 +142,7 @@ services:
       API_TLS_CERT: /run/secrets/server_cert
       API_TLS_KEY: /run/secrets/server_key
       API_TLS_CA: /run/secrets/ca_cert
+      KEEL_NOTIFICATION_ORIGINS: ${KEEL_NOTIFICATION_ORIGINS:-}
       API_TLS_SERVER_NAME: ${KEEL_HOSTNAME:-localhost}
       KEEL_CREDENTIAL_KEY_FILE: /run/secrets/credential_key
       KEEL_DEPLOYMENT_SECRET_KEY_FILE: /run/secrets/deployment_secret_key
@@ -175,6 +176,20 @@ services:
     healthcheck:
       <<: *health
       test: [CMD, node, apps/operations/dist/main.js, health, artifact-worker]
+
+  notification-worker:
+    <<: *app
+    command: [notification-worker]
+    environment:
+      <<: *runtime
+      KEEL_CREDENTIAL_KEY_FILE: /run/secrets/credential_key
+      KEEL_NOTIFICATION_ORIGINS: ${KEEL_NOTIFICATION_ORIGINS:-}
+    secrets: [keel_runtime_password, credential_key]
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      <<: *health
+      test: [CMD, node, apps/operations/dist/main.js, health, notification-worker]
 
   workflow-worker:
     <<: *app

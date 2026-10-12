@@ -1,3 +1,4 @@
+import { enqueueNotifications } from './notifications.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
@@ -326,6 +327,8 @@ export class ControlPlane {
     deployment: Deployment,
     context: Record<string, unknown> = {},
   ) {
+    const eventId = randomUUID();
+
     await tx.query(
       `
         INSERT INTO
@@ -339,8 +342,10 @@ export class ControlPlane {
         VALUES
           ($1, $2, $3, $4, $5)
       `,
-      [randomUUID(), p.organisation_id, deployment.id, deployment.status, p.actor_id],
+      [eventId, p.organisation_id, deployment.id, deployment.status, p.actor_id],
     );
+
+    await enqueueNotifications(tx, deployment, eventId);
 
     // The dispatcher starts each queued deployment with a stable Temporal workflow ID.
     await tx.query('INSERT INTO outbox(id,organisation_id,topic,payload) VALUES($1,$2,$3,$4)', [

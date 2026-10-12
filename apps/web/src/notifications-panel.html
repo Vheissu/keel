@@ -1,0 +1,201 @@
+<div class="section-title">
+  <h2>Deployment notifications</h2>
+  <div class="header-actions">
+    <button class="button secondary" click.trigger="refresh()" disabled.bind="busy">
+      Refresh notifications
+    </button>
+    <button
+      class="button primary"
+      if.bind="canWrite"
+      click.trigger="open()"
+      disabled.bind="!configured || busy"
+    >
+      Add destination
+    </button>
+  </div>
+</div>
+<p class="muted">
+  Send deployment events to signed HTTPS webhooks. Failed sends retry automatically; deployment
+  execution continues independently.
+</p>
+<p class="alert" if.bind="!configured">
+  Configure KEEL_CREDENTIAL_KEY and KEEL_NOTIFICATION_ORIGINS on the API and notification worker to
+  enable delivery.
+</p>
+<p class="alert error" role="alert" if.bind="error">${error}</p>
+<p class="alert success" role="status" if.bind="notice">${notice}</p>
+<form class="target-form" if.bind="form && canWrite" submit.trigger:prevent="save()">
+  <h3>Add webhook destination</h3>
+  <label>
+    Destination name
+    <input ref="nameInput" value.bind="name" required maxlength="100" />
+  </label>
+  <label>
+    Webhook URL
+    <input type="url" value.bind="url" required maxlength="2048" autocomplete="off" />
+  </label>
+  <p class="muted">Allowed origins: ${origins.join(', ')}</p>
+  <label>
+    Signing secret
+    <input
+      type="password"
+      value.bind="secret"
+      required
+      minlength="32"
+      maxlength="256"
+      autocomplete="new-password"
+    />
+  </label>
+  <p class="muted">
+    Use a random secret of at least 32 characters and save it in your receiver. Keel never returns
+    it. To replace a URL or secret, disable this destination and create a new one.
+  </p>
+  <resource-picker
+    api.bind="api"
+    resource="projects"
+    label="Notification project (optional)"
+    input-id="notification-project"
+    value.bind="projectId"
+    optional.bind="true"
+  ></resource-picker>
+  <resource-picker
+    api.bind="api"
+    resource="environments"
+    label="Notification environment (optional)"
+    input-id="notification-environment"
+    value.bind="environmentId"
+    optional.bind="true"
+  ></resource-picker>
+  <p class="muted">An empty scope includes all projects or environments in this workspace.</p>
+  <fieldset>
+    <legend>Deployment states</legend>
+    <label class="check-label" repeat.for="state of states">
+      <input type="checkbox" value.bind="state" checked.bind="statuses" />
+      ${state}
+    </label>
+  </fieldset>
+  <div class="header-actions">
+    <button class="button primary" type="submit" disabled.bind="busy || !statuses.length">
+      Save destination
+    </button>
+    <button class="button secondary" type="button" click.trigger="close()" disabled.bind="busy">
+      Cancel
+    </button>
+  </div>
+</form>
+<h3>Destinations</h3>
+<page-controls pager.bind="endpoints" label="Notification destinations"></page-controls>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Notification destinations table">
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Status</th>
+        <th>Origin</th>
+        <th>States</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr repeat.for="endpoint of endpoints.items; key: id">
+        <td>${endpoint.name}</td>
+        <td>${endpoint.enabled ? 'Enabled' : 'Disabled'}</td>
+        <td>${endpoint.origin}</td>
+        <td>${endpoint.statuses.join(', ')}</td>
+        <td>
+          <button
+            class="button small secondary"
+            if.bind="canWrite"
+            disabled.bind="busy"
+            click.trigger="state(endpoint)"
+          >
+            ${endpoint.enabled ? 'Disable' : 'Enable'}
+          </button>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+<p class="muted" if.bind="!endpoints.loading && !endpoints.items.length">
+  No notification destinations.
+</p>
+<h3>Delivery history</h3>
+<page-controls pager.bind="deliveries" label="Notification deliveries"></page-controls>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Notification delivery history">
+  <table>
+    <thead>
+      <tr>
+        <th>Destination</th>
+        <th>Status</th>
+        <th>Attempts</th>
+        <th>Deployment</th>
+        <th>Last result</th>
+        <th>Timing</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr repeat.for="delivery of deliveries.items; key: id">
+        <td>${delivery.endpoint_name}</td>
+        <td>${delivery.status}</td>
+        <td>${delivery.attempt_count}</td>
+        <td>
+          <code title.bind="delivery.deployment_id">${delivery.deployment_id.slice(0, 8)}</code>
+        </td>
+        <td>${delivery.last_code || 'Not attempted'} ${delivery.last_http_status || ''}</td>
+        <td>
+          <span if.bind="delivery.status === 'pending' || delivery.status === 'retrying'">
+            Next: ${date(delivery.next_attempt_at)}
+          </span>
+          <span if.bind="delivery.delivered_at">Delivered: ${date(delivery.delivered_at)}</span>
+        </td>
+        <td>
+          <button class="button small secondary" click.trigger="inspect(delivery)">
+            View attempts
+          </button>
+          <button
+            class="button small secondary"
+            if.bind="canWrite && (delivery.status === 'failed' || delivery.status === 'cancelled')"
+            disabled.bind="busy"
+            click.trigger="retry(delivery)"
+          >
+            Retry delivery
+          </button>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+<p class="muted" if.bind="!deliveries.loading && !deliveries.items.length">
+  No notification deliveries. Matching deployment events will appear here.
+</p>
+<section if.bind="attempts" aria-label="Delivery attempts">
+  <h3>Attempts for ${selectedDelivery}</h3>
+  <page-controls
+    pager.bind="attempts"
+    label="Notification attempts"
+    searchable.bind="false"
+  ></page-controls>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Notification attempt history">
+    <table>
+      <thead>
+        <tr>
+          <th>Attempt</th>
+          <th>Result</th>
+          <th>HTTP status</th>
+          <th>Started</th>
+          <th>Completed</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr repeat.for="attempt of attempts.items; key: id">
+          <td>${attempt.attempt}</td>
+          <td>${attempt.code}</td>
+          <td>${attempt.http_status || '—'}</td>
+          <td>${date(attempt.created_at)}</td>
+          <td>${attempt.completed_at ? date(attempt.completed_at) : 'In progress'}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>

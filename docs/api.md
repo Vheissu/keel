@@ -166,3 +166,17 @@ Secret managers also require `read`. Responses contain metadata only and disable
 Process environment entries may contain `secrets: { "APP_PASSWORD": { "secret": "DATABASE_PASSWORD" } }`, with at most 32 references. `/releases/:id/promotion` includes `secret_bindings` with `{variable, name, version, available}` and reports ineligible if a reference is missing or disabled. Deployment admission pins current versions transactionally. `/rollback-plans` includes its reviewed `secret_bindings`; a change before request invalidates the plan.
 
 Gateway polling accepts `{ "capabilities": ["deployment-secrets-v1"] }`. Omission remains valid for older agents, which cannot claim secret-bearing deployments. Jobs include `secret_count`, never values. `POST /agent/v1/secrets` accepts the ordinary lease fields and returns `{ "values": { "APP_PASSWORD": "..." } }` only for that agent's running deployment. Cleanup assignments, cancelled work, expired leases and revoked versions are denied. Responses set `Cache-Control: no-store` and `Pragma: no-cache`. `SECRET_UNAVAILABLE` is a fixed failure code; agents cannot submit arbitrary error text. See [deployment secrets](deployment-secrets.md) for pinning, rotation and exposure boundaries.
+
+## Deployment notifications
+
+| Method and path                            | Permission | Input / result                                                                                         |
+| ------------------------------------------ | ---------- | ------------------------------------------------------------------------------------------------------ |
+| `GET /notifications/configuration`         | read       | Credential-key configuration status and allowed origins                                                |
+| `POST /notifications/endpoints`            | write      | `{name, url, signing_secret, statuses, project_id?, environment_id?}`; encrypted immutable destination |
+| `POST /notifications/endpoints/:id/state`  | write      | `{enabled, expected_revision}`; toggle future delivery and cancel pending jobs on disable              |
+| `POST /notifications/deliveries/:id/retry` | write      | Empty body; retry a failed or cancelled job to an enabled destination                                  |
+| `GET /resources/notification-endpoints`    | read       | Destination metadata; optional `project_id`, `environment_id` filters                                  |
+| `GET /resources/notification-deliveries`   | read       | Delivery metadata; optional `endpoint_id`, `deployment_id`, `status` filters                           |
+| `GET /resources/notification-attempts`     | read       | Attempt history; optional `delivery_id` filter                                                         |
+
+All writes require an idempotency key. Resource collections support ordinary pagination, search and scoped `/:id` lookups. Destination creation accepts at most 8 KiB and returns neither the URL path/query nor signing secret. Delivery status is `pending`, `sending`, `retrying`, `delivered`, `failed` or `cancelled`. See [notification setup, signatures and retry semantics](notifications.md).
