@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { parse } from 'dotenv';
-import { database } from '../packages/database/src/index.js';
+import { database, transaction } from '../packages/database/src/index.js';
 import { migrate } from '../packages/database/src/migrate.js';
 import { sha256 } from '../apps/api/src/artifact-store.js';
 
@@ -53,10 +53,8 @@ const db = database(env.DATABASE_URL);
 
 try {
   await migrate(db);
-  const tx = await db.connect();
 
-  try {
-    await tx.query('BEGIN');
+  await transaction(db, async (tx) => {
     const org = '00000000-0000-4000-8000-000000000001';
 
     await tx.query('INSERT INTO organisations(id,name) VALUES($1,$2) ON CONFLICT DO NOTHING', [
@@ -103,7 +101,7 @@ try {
         [id, sha256(token)],
       );
 
-      await tx.query(
+      const inserted = await tx.query(
         `
           INSERT INTO
             api_tokens (
@@ -115,10 +113,20 @@ try {
             )
           VALUES
             ($1, $2, $3, $4, $5)
-          ON CONFLICT (token_hash) DO NOTHING
+          ON CONFLICT (token_hash) DO UPDATE
+          SET
+            revoked_at = NULL,
+            permissions = EXCLUDED.permissions
+          WHERE
+            api_tokens.actor_id = EXCLUDED.actor_id
         `,
         [randomUUID(), org, id, sha256(token), permissions],
       );
+
+      // Reusing a previous token restores it; a token held by another actor is rejected.
+      if (!inserted.rowCount) {
+        throw new Error(`The ${label} token in .env belongs to another identity.`);
+      }
     }
 
     for (const [label, slug, approval] of [
@@ -161,14 +169,7 @@ try {
         [randomUUID(), org, label, slug, approval],
       );
     }
-
-    await tx.query('COMMIT');
-  } catch (error) {
-    await tx.query('ROLLBACK');
-    throw error;
-  } finally {
-    tx.release();
-  }
+  });
 
   console.log(
     'Keel is ready. Run npm run dev, open http://127.0.0.1:5173, and connect with KEEL_OPERATOR_TOKEN from .env. Use KEEL_APPROVER_TOKEN in a separate session to approve production requests.',
