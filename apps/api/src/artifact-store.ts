@@ -1,0 +1,84 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdir, writeFile, readFile, link, unlink } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { DomainError } from '../../../packages/domain/src/index.js';
+
+export const sha256 = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex');
+
+export interface ArtifactStore {
+  put(organisation: string, digest: string, bytes: Buffer): Promise<void>;
+  get(organisation: string, digest: string): Promise<Buffer>;
+}
+
+// Local evaluation adapter. Blobs are published atomically and never overwritten.
+export class LocalArtifactStore implements ArtifactStore {
+  constructor(private root: string) {
+    this.root = resolve(root);
+  }
+
+  private path(organisation: string, digest: string) {
+    if (!/^[a-f0-9-]{36}$/.test(organisation) || !/^[a-f0-9]{64}$/.test(digest)) {
+      throw new DomainError('INVALID_BLOB', 'Invalid blob reference.');
+    }
+
+    return join(this.root, organisation, digest);
+  }
+
+  async put(organisation: string, digest: string, bytes: Buffer) {
+    if (sha256(bytes) !== digest) {
+      throw new DomainError(
+        'DIGEST_MISMATCH',
+        'Artifact bytes do not match the supplied SHA-256 digest.',
+      );
+    }
+
+    const destination = this.path(organisation, digest);
+
+    await mkdir(join(this.root, organisation), { recursive: true, mode: 0o700 });
+    const temporary = `${destination}.${randomUUID()}.tmp`;
+
+    await writeFile(temporary, bytes, { flag: 'wx', mode: 0o600 });
+
+    try {
+      try {
+        await link(temporary, destination);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+          throw error;
+        }
+      }
+
+      await this.get(organisation, digest);
+    } finally {
+      await unlink(temporary);
+    }
+  }
+
+  async get(organisation: string, digest: string) {
+    let bytes: Buffer;
+
+    try {
+      bytes = await readFile(this.path(organisation, digest));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new DomainError(
+          'ARTIFACT_UNAVAILABLE',
+          'The retained artifact is missing. Restore it before deploying.',
+          409,
+        );
+      }
+
+      throw error;
+    }
+
+    if (sha256(bytes) !== digest) {
+      throw new DomainError(
+        'ARTIFACT_CORRUPT',
+        'The retained artifact failed SHA-256 verification.',
+        409,
+      );
+    }
+
+    return bytes;
+  }
+}

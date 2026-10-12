@@ -1,0 +1,52 @@
+{
+  "name": "keel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "setup": "tsx scripts/setup.ts",
+    "infra:up": "docker compose -f infrastructure/docker/compose.yml up -d --wait",
+    "infra:down": "docker compose -f infrastructure/docker/compose.yml down",
+    "db:migrate": "tsx --env-file=.env packages/database/src/migrate.ts",
+    "dev": "concurrently -k -n api,web 'npm run dev -w @keel/api' 'npm run dev -w @keel/web'",
+    "build": "npm run typecheck && npm run build -w @keel/web && esbuild apps/api/src/server.ts --bundle --platform=node --packages=external --format=esm --outfile=apps/api/dist/server.js --sourcemap",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "check": "npm run typecheck && npm test && npm run build",
+    "start": "node --env-file=.env apps/api/dist/server.js",
+    "keel": "tsx apps/cli/src/main.ts",
+    "format": "eslint . --fix && prettier --write apps packages scripts tests examples infrastructure docs .github *.json *.ts *.mjs README.md && tsx scripts/format-sql.ts",
+    "format:check": "npm run lint && prettier --check apps packages scripts tests examples infrastructure docs .github *.json *.ts *.mjs README.md && tsx scripts/format-sql.ts --check",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@aurelia/vite-plugin": "^2.0.0-rc.2",
+    "@axe-core/playwright": "^4.13.0",
+    "@playwright/test": "^1.64.0",
+    "@stylistic/eslint-plugin": "^5.10.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^26.6.5",
+    "@types/pg": "^8.23.1",
+    "@typescript-eslint/parser": "^8.71.1",
+    "concurrently": "^10.0.6",
+    "dotenv": "^18.0.7",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.12.0",
+    "prettier": "^3.9.10",
+    "sql-formatter": "^15.9.0",
+    "tailwindcss": "^4.3.3",
+    "tslib": "^2.8.1",
+    "tsx": "^4.23.15",
+    "typescript": "~5.9.3",
+    "vite": "^8.3.4",
+    "vitest": "^4.1.11"
+  }
+}

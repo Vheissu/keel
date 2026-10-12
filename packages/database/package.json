@@ -1,0 +1,10 @@
+{
+  "name": "@keel/database",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "pg": "^8.23.1"
+  }
+}

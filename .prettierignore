@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.data/
+output/
+test-results/
+playwright-report/
+package-lock.json
+PLAN.md

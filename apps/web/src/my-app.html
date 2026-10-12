@@ -1,0 +1,666 @@
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="app-shell">
+  <aside class="sidebar">
+    <a class="brand" href="#overview" aria-label="Keel overview">
+      <boat-mark></boat-mark>
+      <span>Keel</span>
+    </a>
+    <div class="workspace">
+      <span class="workspace-avatar">K</span>
+      <span>
+        ${data ? data.organisation.name : 'Local workspace'}
+        <small>Continuous delivery</small>
+      </span>
+    </div>
+    <nav aria-label="Main navigation">
+      <a
+        repeat.for="item of pages"
+        href.bind="'#' + path(item)"
+        class="nav-item ${page === item ? 'active' : ''}"
+        aria-current.bind="page === item ? 'page' : null"
+      >
+        <nav-icon name.bind="item"></nav-icon>
+        ${item}
+        <span class="nav-count" if.bind="item === 'Deployments' && data.awaiting_approval">
+          ${data.awaiting_approval}
+        </span>
+      </a>
+    </nav>
+    <div class="sidebar-bottom">
+      <div class="foundation">
+        <span></span>
+        Development foundation
+      </div>
+      <p>
+        Build anywhere.
+        <br />
+        Deploy everywhere.
+      </p>
+      <button if.bind="data" class="disconnect" click.trigger="disconnect()">
+        Disconnect ${data.principal.name}
+      </button>
+    </div>
+  </aside>
+  <main id="main" tabindex="-1">
+    <div class="breadcrumb">
+      Workspace
+      <span>/</span>
+      <strong>${page}</strong>
+    </div>
+    <header class="page-header">
+      <div>
+        <h1>${heading}</h1>
+        <p>${subtitle}</p>
+      </div>
+      <div class="header-actions" if.bind="data">
+        <button class="button secondary" click.trigger="refresh()" disabled.bind="loading || busy">
+          <span aria-hidden="true">↻</span>
+          Refresh
+        </button>
+        <button
+          class="button primary"
+          if.bind="canWrite && (page === 'Overview' || page === 'Projects')"
+          click.trigger="open('project')"
+        >
+          <span aria-hidden="true">＋</span>
+          New project
+        </button>
+        <button
+          class="button primary"
+          if.bind="canWrite && page === 'Artifacts'"
+          disabled.bind="!data.projects.length"
+          click.trigger="open('artifact')"
+        >
+          Publish artifact
+        </button>
+        <button
+          class="button primary"
+          if.bind="canWrite && page === 'Releases'"
+          disabled.bind="!data.artifacts.length"
+          click.trigger="open('release')"
+        >
+          Create release
+        </button>
+        <button
+          class="button primary"
+          if.bind="canWrite && page === 'Deployments'"
+          disabled.bind="!data.releases.length"
+          click.trigger="open('deploy')"
+        >
+          Request deployment
+        </button>
+      </div>
+    </header>
+    <div class="alert error" role="alert" if.bind="error && !form">${error}</div>
+    <div class="alert success" role="status" if.bind="notice && data">
+      ${notice}
+      <button aria-label="Dismiss notification" click.trigger="notice = ''">×</button>
+    </div>
+    <section class="connect-panel" if.bind="!data">
+      <boat-mark animated.bind="loading"></boat-mark>
+      <h2>Connect to your workspace</h2>
+      <p>Use your Keel API token to manage artifacts and releases.</p>
+      <form submit.trigger="connect()">
+        <label for="token">API token</label>
+        <input
+          id="token"
+          type="password"
+          value.bind="token"
+          required
+          autocomplete="off"
+          placeholder="keel_…"
+          disabled.bind="loading"
+        />
+        <button class="button primary" type="submit" disabled.bind="loading">
+          ${loading ? 'Connecting…' : 'Connect workspace'}
+        </button>
+      </form>
+      <p class="help">
+        For local development, run
+        <code>npm run setup</code>
+        and use
+        <code>KEEL_OPERATOR_TOKEN</code>
+        from your
+        <code>.env</code>
+        file. Tokens stay in memory for this session.
+      </p>
+    </section>
+    <div class="loading-inline" role="status" if.bind="loading && data">
+      <boat-mark animated.bind="true"></boat-mark>
+      <span>Loading workspace…</span>
+    </div>
+    <template if.bind="data">
+      <template if.bind="page === 'Overview'">
+        <section class="metrics" aria-label="Workspace summary">
+          <div>
+            <span>Projects</span>
+            <strong>${data.totals.projects}</strong>
+          </div>
+          <div>
+            <span>Retained artifacts</span>
+            <strong>${data.totals.artifacts}</strong>
+          </div>
+          <div>
+            <span>Releases</span>
+            <strong>${data.totals.releases}</strong>
+          </div>
+          <div>
+            <span>Awaiting approval</span>
+            <strong>${data.awaiting_approval}</strong>
+          </div>
+        </section>
+        <section class="pipeline">
+          <div class="section-heading">
+            <h2>Your delivery pipeline</h2>
+            <span>Staging → Production</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Project</th>
+                  <th>Staging</th>
+                  <th>Production</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr repeat.for="project of data.projects">
+                  <td>
+                    <strong>${project.name}</strong>
+                    <small>${project.slug}</small>
+                  </td>
+                  <td>${environmentState(project.id, 'staging')}</td>
+                  <td>${environmentState(project.id, 'production')}</td>
+                  <td class="muted">${date(project.created_at)}</td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="empty-state" if.bind="!data.projects.length">
+              <boat-mark></boat-mark>
+              <h3>Your first release starts here.</h3>
+              <p>Add a project, publish an artifact, and create an immutable release.</p>
+              <button class="button primary" if.bind="canWrite" click.trigger="open('project')">
+                Create project
+              </button>
+            </div>
+          </div>
+        </section>
+        <div class="overview-bottom">
+          <section>
+            <h2>Recent activity</h2>
+            <div class="activity-empty" if.bind="!data.audit.length">
+              <span class="empty-rule" aria-hidden="true"></span>
+              <h3>No activity yet.</h3>
+              <p>Changes to releases, deployments, and approvals will appear here.</p>
+            </div>
+            <ol class="activity-list" if.bind="data.audit.length">
+              <li repeat.for="event of data.audit.slice(0, 5)">
+                <span class="activity-dot"></span>
+                <div>
+                  <strong>${event.action.replaceAll('.', ' ')}</strong>
+                  <small>${date(event.created_at)}</small>
+                </div>
+              </li>
+            </ol>
+            <a class="text-link" if.bind="data.audit.length" href="#audit-log">View audit log →</a>
+          </section>
+          <section>
+            <h2>Get started</h2>
+            <ol class="getting-started">
+              <li>
+                <span>1</span>
+                <div>
+                  <a href="#projects">Create a project</a>
+                  <p>Group the applications and services you deliver.</p>
+                </div>
+              </li>
+              <li>
+                <span>2</span>
+                <div>
+                  <a href="#artifacts">Publish an artifact</a>
+                  <p>Retain a verified copy of your build output.</p>
+                </div>
+              </li>
+              <li>
+                <span>3</span>
+                <div>
+                  <a href="#releases">Create a release</a>
+                  <p>Capture the artifact and deployment process together.</p>
+                </div>
+              </li>
+            </ol>
+          </section>
+        </div>
+      </template>
+      <div
+        class="list-toolbar"
+        if.bind="page !== 'Overview' && page !== 'Environments' && page !== 'Audit log'"
+      >
+        <label class="search-label" for="search">Search ${page.toLowerCase()}</label>
+        <input
+          id="search"
+          class="search"
+          type="search"
+          value.bind="query"
+          placeholder.bind="'Filter ' + page.toLowerCase() + '…'"
+        />
+      </div>
+      <p class="help" if.bind="hasMore">
+        Showing the latest ${data.limit} records. Older records remain stored in PostgreSQL.
+      </p>
+      <template if.bind="page === 'Projects'">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Project</th>
+                <th>Description</th>
+                <th>Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr repeat.for="project of projects">
+                <td>
+                  <strong>${project.name}</strong>
+                  <small>${project.slug}</small>
+                </td>
+                <td>${project.description || '—'}</td>
+                <td>${date(project.created_at)}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="empty-state" if.bind="!projects.length">
+            <boat-mark></boat-mark>
+            <h3>${query ? 'No matching projects.' : 'A place for your next release.'}</h3>
+            <p>
+              ${query ? 'Try a different search.' : 'Create a project to start publishing build
+              outputs.'}
+            </p>
+          </div>
+        </div>
+      </template>
+      <template if.bind="page === 'Artifacts'">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Artifact</th>
+                <th>Project</th>
+                <th>SHA-256</th>
+                <th>Size</th>
+                <th>Published</th>
+                <th><span class="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr repeat.for="artifact of artifacts">
+                <td>
+                  <strong>${artifact.name}</strong>
+                  <small>${artifact.version}</small>
+                </td>
+                <td>${projectName(artifact.project_id)}</td>
+                <td><code title.bind="artifact.digest">${short(artifact.digest)}…</code></td>
+                <td>${size(artifact.size)}</td>
+                <td>${date(artifact.created_at)}</td>
+                <td>
+                  <button
+                    class="text-button"
+                    click.trigger="download(artifact.id)"
+                    aria-label.bind="'Download ' + artifact.name"
+                  >
+                    Download
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="empty-state" if.bind="!artifacts.length">
+            <boat-mark></boat-mark>
+            <h3>${query ? 'No matching artifacts.' : 'Keep your build outputs within reach.'}</h3>
+            <p>
+              Publish an artifact from your existing CI or upload a file. Up to 25 MB per artifact.
+            </p>
+          </div>
+        </div>
+      </template>
+      <template if.bind="page === 'Releases'">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Release</th>
+                <th>Project</th>
+                <th>Artifact digest</th>
+                <th>Created</th>
+                <th><span class="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr repeat.for="release of releases">
+                <td>
+                  <button class="text-button strong" click.trigger="inspect(release)">
+                    ${release.version}
+                  </button>
+                </td>
+                <td>${projectName(release.project_id)}</td>
+                <td>
+                  <code title.bind="release.manifest.artifact.digest">
+                    ${short(release.manifest.artifact.digest)}…
+                  </code>
+                </td>
+                <td>${date(release.created_at)}</td>
+                <td>
+                  <button
+                    class="button small secondary"
+                    if.bind="canWrite"
+                    click.trigger="open('deploy', release)"
+                  >
+                    Deploy
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="empty-state" if.bind="!releases.length">
+            <boat-mark></boat-mark>
+            <h3>${query ? 'No matching releases.' : 'Build once. Promote the same release.'}</h3>
+            <p>Publish an artifact, then capture it in an immutable release manifest.</p>
+          </div>
+        </div>
+      </template>
+      <template if.bind="page === 'Deployments'">
+        <div class="execution-note">
+          <span class="brass-dot"></span>
+          <p>
+            Deployment execution is not connected yet. Approved requests stay queued until the agent
+            integration is implemented.
+          </p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Release / project</th>
+                <th>Environment</th>
+                <th>Status</th>
+                <th>Requested</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr repeat.for="deployment of deployments">
+                <td>
+                  <strong>${releaseVersion(deployment.release_id)}</strong>
+                  <small>${projectName(deployment.project_id)}</small>
+                </td>
+                <td>${environmentName(deployment.environment_id)}</td>
+                <td>
+                  <span class="status ${deployment.status}">${statusLabel(deployment.status)}</span>
+                </td>
+                <td>${date(deployment.created_at)}</td>
+                <td class="row-actions">
+                  <template
+                    if.bind="canApprove && deployment.status === 'awaiting_approval' && deployment.requested_by !== data.principal.actor_id"
+                  >
+                    <button
+                      class="button small primary"
+                      disabled.bind="busy"
+                      click.trigger="action(deployment, 'approve')"
+                    >
+                      Approve
+                    </button>
+                    <button
+                      class="text-button danger"
+                      disabled.bind="busy"
+                      click.trigger="action(deployment, 'reject')"
+                    >
+                      Reject
+                    </button>
+                  </template>
+                  <button
+                    class="text-button"
+                    if.bind="canWrite && (deployment.status === 'queued' || deployment.status === 'awaiting_approval')"
+                    disabled.bind="busy"
+                    click.trigger="action(deployment, 'cancel')"
+                  >
+                    Cancel
+                  </button>
+                  <span
+                    class="muted"
+                    if.bind="deployment.status === 'rejected' || deployment.status === 'cancelled'"
+                  >
+                    Closed
+                  </span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="empty-state" if.bind="!deployments.length">
+            <boat-mark></boat-mark>
+            <h3>
+              ${query ? 'No matching deployments.' : 'Your release, ready for its next
+              environment.'}
+            </h3>
+            <p>Create a release, then request a deployment to staging or production.</p>
+          </div>
+        </div>
+      </template>
+      <template if.bind="page === 'Environments'">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Environment</th>
+                <th>Approval policy</th>
+                <th>Execution</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr repeat.for="environment of data.environments">
+                <td>
+                  <strong>${environment.name}</strong>
+                  <small>${environment.slug}</small>
+                </td>
+                <td>
+                  ${environment.requires_approval ? 'Required · separate approver' : 'No environment
+                  approval required'}
+                </td>
+                <td class="muted">Agent integration pending</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="help">
+          A release process can add approval requirements. It cannot remove an environment’s
+          protection.
+        </p>
+      </template>
+      <template if.bind="page === 'Audit log'">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Event</th>
+                <th>Actor</th>
+                <th>Resource</th>
+                <th>Time · your timezone</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr repeat.for="event of data.audit">
+                <td><strong>${event.action}</strong></td>
+                <td><code title.bind="event.actor_id">${short(event.actor_id)}…</code></td>
+                <td><code title.bind="event.resource_id">${short(event.resource_id)}…</code></td>
+                <td>${date(event.created_at)}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="empty-state" if.bind="!data.audit.length">
+            <boat-mark></boat-mark>
+            <h3>No changes recorded yet.</h3>
+            <p>Your first project, artifact, or release will start the audit trail.</p>
+          </div>
+        </div>
+      </template>
+      <footer class="page-footer">
+        <span>
+          Keel
+          <span class="muted">/</span>
+          Build anywhere. Deploy everywhere.
+        </span>
+        <span>Local development · v0.1</span>
+      </footer>
+    </template>
+  </main>
+</div>
+<dialog
+  ref="dialog"
+  class="form-dialog"
+  cancel.trigger="cancelDialog()"
+  aria-labelledby="dialog-title"
+>
+  <div class="dialog-heading">
+    <div>
+      <p class="eyebrow">${inspected ? 'Immutable manifest' : 'Workspace'}</p>
+      <h2 id="dialog-title">
+        ${inspected ? 'Release ' + inspected.version : form === 'project' ? 'Create a project' :
+        form === 'artifact' ? 'Publish an artifact' : form === 'release' ? 'Create a release' :
+        'Request a deployment'}
+      </h2>
+    </div>
+    <button
+      class="icon-button"
+      click.trigger="close()"
+      aria-label="Close dialog"
+      disabled.bind="busy"
+    >
+      ×
+    </button>
+  </div>
+  <pre class="manifest" if.bind="inspected">${manifestText}</pre>
+  <form if.bind="form" submit.trigger="submit()">
+    <div class="alert error" role="alert" if.bind="error">${error}</div>
+    <fieldset disabled.bind="busy">
+      <template if.bind="form === 'project'">
+        <label for="project-name">Project name</label>
+        <input
+          id="project-name"
+          value.bind="name"
+          input.trigger="nameChanged()"
+          required
+          maxlength="100"
+          placeholder="e.g. Customer portal"
+        />
+        <label for="project-slug">Project slug</label>
+        <input
+          id="project-slug"
+          value.bind="slug"
+          required
+          pattern="[a-z0-9][a-z0-9\-]{0,62}"
+          maxlength="63"
+        />
+        <label for="description">
+          Description
+          <span class="muted">(optional)</span>
+        </label>
+        <textarea id="description" value.bind="description" maxlength="500" rows="3"></textarea>
+      </template>
+      <template if.bind="form !== 'project'">
+        <label for="project">Project</label>
+        <select id="project" value.bind="projectId" change.trigger="projectChanged()" required>
+          <option repeat.for="project of data.projects" model.bind="project.id">
+            ${project.name}
+          </option>
+        </select>
+      </template>
+      <template if.bind="form === 'artifact'">
+        <label for="artifact-name">Artifact name</label>
+        <input
+          id="artifact-name"
+          value.bind="name"
+          required
+          maxlength="100"
+          placeholder="application"
+        />
+        <label for="artifact-version">Artifact version</label>
+        <input
+          id="artifact-version"
+          value.bind="version"
+          required
+          pattern="[a-zA-Z0-9][a-zA-Z0-9._+\-]{0,99}"
+          placeholder="1.0.0"
+        />
+        <label for="artifact-file">Artifact file</label>
+        <input id="artifact-file" type="file" files.bind="files" required />
+        <p class="help">
+          Keel calculates SHA-256 in your browser and verifies the received bytes. Files are
+          retained locally. Maximum 25 MB.
+        </p>
+      </template>
+      <template if.bind="form === 'release'">
+        <label for="artifact">Artifact</label>
+        <select id="artifact" value.bind="artifactId" change.trigger="resetProcess()" required>
+          <option value="">Choose an artifact</option>
+          <option repeat.for="artifact of projectArtifacts" model.bind="artifact.id">
+            ${artifact.name} · ${artifact.version}
+          </option>
+        </select>
+        <label for="release-version">Release version</label>
+        <input
+          id="release-version"
+          value.bind="version"
+          required
+          pattern="[a-zA-Z0-9][a-zA-Z0-9._+\-]{0,99}"
+          placeholder="1.0.0"
+        />
+        <label for="process">Deployment process · YAML</label>
+        <textarea
+          id="process"
+          class="code-editor"
+          value.bind="process"
+          required
+          rows="12"
+          spellcheck="false"
+        ></textarea>
+        <p class="help">
+          The artifact digest and this process are fixed when you create the release.
+        </p>
+      </template>
+      <template if.bind="form === 'deploy'">
+        <label for="release">Release</label>
+        <select id="release" value.bind="releaseId" required>
+          <option value="">Choose a release</option>
+          <option repeat.for="release of projectReleases" model.bind="release.id">
+            ${release.version}
+          </option>
+        </select>
+        <label for="environment">Environment</label>
+        <select id="environment" value.bind="environmentId" required>
+          <option repeat.for="environment of data.environments" model.bind="environment.id">
+            ${environment.name}${environment.requires_approval ? ' · approval required' : ''}
+          </option>
+        </select>
+        <div class="execution-note">
+          <p>
+            This creates a deployment request. Execution will wait for an agent integration.
+            Production requires a separate approver.
+          </p>
+        </div>
+      </template>
+    </fieldset>
+    <div class="dialog-actions">
+      <span class="saving" role="status" if.bind="busy">
+        <boat-mark animated.bind="true"></boat-mark>
+        Saving…
+      </span>
+      <button type="button" class="button secondary" click.trigger="close()" disabled.bind="busy">
+        Cancel
+      </button>
+      <button type="submit" class="button primary" disabled.bind="busy">
+        ${form === 'project' ? 'Create project' : form === 'artifact' ? 'Publish artifact' : form
+        === 'release' ? 'Create release' : 'Request deployment'}
+      </button>
+    </div>
+  </form>
+</dialog>

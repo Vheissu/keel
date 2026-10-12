@@ -1,0 +1,18 @@
+apiVersion: keel.dev/v1alpha1
+kind: DeploymentProcess
+metadata:
+  name: application
+spec:
+  artifact:
+    source: release
+    name: application
+  environments:
+    staging:
+      strategy: rolling
+      targetSelector:
+        labels: { tier: staging }
+    production:
+      strategy: rolling
+      requiresApproval: true
+      targetSelector:
+        labels: { tier: production }

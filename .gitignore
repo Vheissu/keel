@@ -147,3 +147,9 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# Local Keel state and browser verification
+.data/
+output/
+test-results/
+playwright-report/
