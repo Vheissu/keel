@@ -10,6 +10,19 @@ export interface ArtifactStore {
   get(organisation: string, digest: string): Promise<Buffer>;
 }
 
+// Report filesystem failures (ENOSPC, EIO, EACCES) the same way the S3 store reports outages.
+function storageUnavailable(cause: unknown) {
+  const error = new DomainError(
+    'STORAGE_UNAVAILABLE',
+    'Artifact storage is unavailable. Retry the request.',
+    503,
+  );
+
+  error.cause = cause;
+
+  return error;
+}
+
 // Local evaluation adapter. Blobs are published atomically and never overwritten.
 export class LocalArtifactStore implements ArtifactStore {
   constructor(private root: string) {
@@ -33,13 +46,12 @@ export class LocalArtifactStore implements ArtifactStore {
     }
 
     const destination = this.path(organisation, digest);
-
-    await mkdir(join(this.root, organisation), { recursive: true, mode: 0o700 });
     const temporary = `${destination}.${randomUUID()}.tmp`;
 
-    await writeFile(temporary, bytes, { flag: 'wx', mode: 0o600 });
-
     try {
+      await mkdir(join(this.root, organisation), { recursive: true, mode: 0o700 });
+      await writeFile(temporary, bytes, { flag: 'wx', mode: 0o600 });
+
       try {
         await link(temporary, destination);
       } catch (error) {
@@ -47,11 +59,13 @@ export class LocalArtifactStore implements ArtifactStore {
           throw error;
         }
       }
-
-      await this.get(organisation, digest);
+    } catch (error) {
+      throw storageUnavailable(error);
     } finally {
-      await unlink(temporary);
+      await unlink(temporary).catch(() => {});
     }
+
+    await this.get(organisation, digest);
   }
 
   async get(organisation: string, digest: string) {
@@ -68,7 +82,7 @@ export class LocalArtifactStore implements ArtifactStore {
         );
       }
 
-      throw error;
+      throw storageUnavailable(error);
     }
 
     if (sha256(bytes) !== digest) {

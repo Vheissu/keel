@@ -114,9 +114,8 @@ export class S3ArtifactStore implements ArtifactStore {
         throw error;
       }
 
-      if (
-        (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 404
-      ) {
+      // A missing bucket also returns 404; only a missing key means the blob is gone.
+      if ((error as Error).name === 'NoSuchKey') {
         throw new DomainError(
           'ARTIFACT_UNAVAILABLE',
           'The retained artifact is missing. Restore it before deploying.',
