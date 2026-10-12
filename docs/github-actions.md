@@ -12,7 +12,7 @@ Keel imports completed build outputs. Your workflow stays in GitHub Actions; Kee
 
 Publish the named artifact with a current `actions/upload-artifact` action that supplies SHA-256 metadata. A successful run on the configured branch queues one import. Manual imports work without a public webhook endpoint: choose **Import run**, enter the run ID and current attempt number, then refresh to inspect its progress.
 
-The worker accepts `push`, `workflow_dispatch`, `schedule` and `release` events when all configured repository, workflow and branch checks match. Pull-request events, fork sources, failed runs, expired artifacts and missing provider digests are rejected. Re-running a workflow increments its attempt number. If another attempt starts before import completes, import the new successful attempt.
+The worker accepts `push`, `workflow_dispatch`, `schedule` and `release` events when all configured repository, workflow and branch checks match. Pull-request events, fork sources, failed runs, expired artifacts and missing provider digests are rejected. Re-running a workflow increments its attempt number. If another attempt starts before import completes, import the new successful attempt. A manual import of a run that is still queued or running waits for it to finish, polling for up to 24 hours without using retry attempts.
 
 Keel retains the original ZIP archive, verifies its digest, and records the source commit/run. The import worker does not extract the archive. Maximum size is 25 MiB. After an import reaches **Retained**, open Artifacts or Releases to create an immutable release. GitHub artifact expiry cannot remove the retained copy.
 

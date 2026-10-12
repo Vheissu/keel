@@ -12,6 +12,19 @@ import {
 import { verifyBitbucketRun } from './bitbucket-publishing.js';
 
 const maximumAttempts = 5;
+
+// Unfinished runs are polled for up to a day without consuming retry attempts.
+function awaitCompletion(job: ImportJob, message: string): never {
+  if (Date.now() - new Date(job.created_at).getTime() >= 24 * 60 * 60 * 1000) {
+    throw new ProviderError(
+      'RUN_WAIT_EXPIRED',
+      'The run did not complete within 24 hours of the import request. Start a new run.',
+    );
+  }
+
+  throw new ProviderError('RUN_AWAITING_COMPLETION', message, true, 30);
+}
+
 const leaseSeconds = 120;
 
 export class ArtifactImportWorker {
@@ -164,11 +177,7 @@ export class ArtifactImportWorker {
     }
 
     if (run.status === 'queued' || run.status === 'running') {
-      throw new ProviderError(
-        'RUN_NOT_COMPLETE',
-        'The GitHub run has not completed. The import will retry.',
-        true,
-      );
+      awaitCompletion(job, 'Waiting for the GitHub workflow run to complete.');
     }
 
     if (run.status !== 'succeeded') {
@@ -294,19 +303,7 @@ export class ArtifactImportWorker {
     verifyBitbucketRun(connection, run, job.candidate_commit);
 
     if (run.status === 'running' || run.status === 'queued') {
-      if (Date.now() - new Date(job.created_at).getTime() >= 24 * 60 * 60 * 1000) {
-        throw new ProviderError(
-          'RUN_WAIT_EXPIRED',
-          'The pipeline did not complete within 24 hours of publishing. Start a new pipeline.',
-        );
-      }
-
-      throw new ProviderError(
-        'RUN_AWAITING_COMPLETION',
-        'Waiting for the full Bitbucket pipeline to succeed.',
-        true,
-        30,
-      );
+      awaitCompletion(job, 'Waiting for the full Bitbucket pipeline to succeed.');
     }
 
     const step = await adapter.getStep(job.run_id, job.candidate_step_id);
