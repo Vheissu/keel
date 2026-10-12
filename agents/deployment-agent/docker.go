@@ -10,8 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os/exec"
+	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -60,22 +63,45 @@ func (a *Agent) cleanup(ctx context.Context, j Job) error {
 	}
 
 	label, err := a.docker(ctx, nil, "container", "inspect", "--format", `{{index .Config.Labels "keel.target"}}`, containerName(j))
-	if err != nil || strings.TrimSpace(string(label)) != j.TargetID {
+	if err != nil {
+		return errors.New("cannot inspect target container ownership")
+	}
+
+	if strings.TrimSpace(string(label)) != j.TargetID {
 		return errors.New("container ownership mismatch")
 	}
 
 	fence, err := a.docker(ctx, nil, "container", "inspect", "--format", `{{index .Config.Labels "keel.fence"}}`, containerName(j))
-	currentFence, parseErr := strconv.Atoi(strings.TrimSpace(string(fence)))
-	if err != nil || parseErr != nil || currentFence > j.Fence {
+	if err != nil {
+		return errors.New("cannot inspect target container fence")
+	}
+
+	currentFence, err := strconv.Atoi(strings.TrimSpace(string(fence)))
+	if err != nil {
+		return errors.New("target container has no valid fence")
+	}
+
+	if currentFence > j.Fence {
 		return errors.New("target fence is newer than this lease")
 	}
+
 	_, err = a.docker(ctx, nil, "container", "rm", "--force", "--volumes", containerName(j))
 	return err
+}
+
+// archiveName normalises an entry name to the path Docker resolves after extraction.
+func archiveName(name string) (string, bool) {
+	if path.IsAbs(name) || slices.Contains(strings.Split(name, "/"), "..") {
+		return "", false
+	}
+
+	return path.Clean(name), true
 }
 
 // Read metadata without extracting any paths from the publisher's archive.
 func verifyImageArchive(data []byte, imageID string) error {
 	reader := tar.NewReader(bytes.NewReader(data))
+	types := map[string]byte{}
 	files := map[string]string{}
 	var manifest []byte
 	for {
@@ -88,23 +114,57 @@ func verifyImageArchive(data []byte, imageID string) error {
 			return errors.New("invalid image archive")
 		}
 
+		name, ok := archiveName(header.Name)
+		if !ok {
+			return errors.New("unsafe image archive entry")
+		}
+
+		// docker save writes directories, regular files and, in the legacy layout,
+		// links that deduplicate layers. Anything else cannot be a genuine export.
+		switch header.Typeflag {
+		case tar.TypeXGlobalHeader:
+			continue
+		case tar.TypeDir:
+			if name == "." {
+				continue
+			}
+		case tar.TypeReg, tar.TypeSymlink, tar.TypeLink:
+			if name == "." {
+				return errors.New("unsafe image archive entry")
+			}
+		default:
+			return errors.New("unsupported image archive entry")
+		}
+
+		// Names are compared after normalisation so that "./manifest.json" or a link
+		// cannot shadow the entry that was hashed.
+		if _, duplicate := types[name]; duplicate {
+			return errors.New("duplicate image archive entry")
+		}
+
+		types[name] = header.Typeflag
 		if header.Typeflag != tar.TypeReg {
 			continue
 		}
 
-		if _, duplicate := files[header.Name]; duplicate {
-			return errors.New("duplicate image archive entry")
-		}
-
-		content, err := io.ReadAll(io.LimitReader(reader, 25*1024*1024+1))
-		if err != nil || len(content) > 25*1024*1024 {
+		content, err := io.ReadAll(io.LimitReader(reader, archiveLimit+1))
+		if err != nil || len(content) > archiveLimit {
 			return errors.New("invalid image archive entry")
 		}
 
 		digest := sha256.Sum256(content)
-		files[header.Name] = "sha256:" + hex.EncodeToString(digest[:])
-		if header.Name == "manifest.json" {
+		files[name] = "sha256:" + hex.EncodeToString(digest[:])
+		if name == "manifest.json" {
 			manifest = content
+		}
+	}
+
+	// An entry below a link or file could resolve somewhere other than the hashed entry.
+	for name := range types {
+		for dir := path.Dir(name); dir != "."; dir = path.Dir(dir) {
+			if kind, ok := types[dir]; ok && kind != tar.TypeDir {
+				return errors.New("image archive entry is nested under a non-directory")
+			}
 		}
 	}
 
@@ -112,7 +172,12 @@ func verifyImageArchive(data []byte, imageID string) error {
 		Config string `json:"Config"`
 	}
 
-	if json.Unmarshal(manifest, &images) != nil || len(images) != 1 || files[images[0].Config] != imageID {
+	if json.Unmarshal(manifest, &images) != nil || len(images) != 1 {
+		return errors.New("archive must contain one image matching the release image ID")
+	}
+
+	config, ok := archiveName(images[0].Config)
+	if !ok || files[config] != imageID {
 		return errors.New("archive must contain one image matching the release image ID")
 	}
 
@@ -122,17 +187,31 @@ func verifyImageArchive(data []byte, imageID string) error {
 func (a *Agent) deploy(ctx context.Context, j Job, t Target) string {
 	a.progress(ctx, j, "downloading")
 	artifact, err := a.request(ctx, "artifact", j.Lease)
+	if leaseRejected(err) {
+		log.Printf("Artifact download for attempt %s was refused (%v)", j.AttemptID, err)
+		return abortedCode
+	}
+
 	if err != nil {
+		// No result code describes a failed transfer, so this keeps ARTIFACT_INVALID.
+		// The log separates it from artifacts that were received but failed verification.
+		log.Printf("Artifact download for attempt %s failed: %v", j.AttemptID, err)
 		return "ARTIFACT_INVALID"
 	}
 
 	digest := sha256.Sum256(artifact)
 	if int64(len(artifact)) != j.Size || hex.EncodeToString(digest[:]) != j.Digest {
+		log.Printf("Artifact for attempt %s does not match the release size and digest", j.AttemptID)
 		return "ARTIFACT_INVALID"
 	}
 
 	artifact, err = imageArchive(artifact, j.ArchivePath)
-	if err != nil || verifyImageArchive(artifact, j.ImageID) != nil {
+	if err == nil {
+		err = verifyImageArchive(artifact, j.ImageID)
+	}
+
+	if err != nil {
+		log.Printf("Artifact for attempt %s failed verification: %v", j.AttemptID, err)
 		return "ARTIFACT_INVALID"
 	}
 
@@ -147,8 +226,13 @@ func (a *Agent) deploy(ctx context.Context, j Job, t Target) string {
 	}
 
 	// Recheck immediately before replacing the target. Heartbeats also cancel in-flight work.
-	action, err := a.heartbeat(ctx, j)
-	if err != nil || action != "continue" {
+	action, err := a.confirmLease(ctx, j)
+	if err != nil {
+		log.Printf("Lease for attempt %s could not be confirmed before replacing the target: %v", j.AttemptID, err)
+		return abortedCode
+	}
+
+	if action != "continue" {
 		return "CANCELLED"
 	}
 
@@ -195,7 +279,7 @@ func (a *Agent) deploy(ctx context.Context, j Job, t Target) string {
 	defer client.CloseIdleConnections()
 	for tries := 0; tries < 30; tries++ {
 		if ctx.Err() != nil {
-			return "CANCELLED"
+			return abortCode(ctx)
 		}
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d%s", t.HostPort, j.HealthPath), nil)
@@ -217,7 +301,7 @@ func (a *Agent) deploy(ctx context.Context, j Job, t Target) string {
 
 		select {
 		case <-ctx.Done():
-			return "CANCELLED"
+			return abortCode(ctx)
 		case <-time.After(time.Second):
 		}
 	}

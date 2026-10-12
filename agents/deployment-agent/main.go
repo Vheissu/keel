@@ -91,14 +91,33 @@ func run(configPath string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	log.Print("Deployment agent polling gateway")
+	var pollFailure string
+	var pollLogged time.Time
 	for ctx.Err() == nil {
 		body, err := agent.request(ctx, "poll", struct{}{})
-		if err == nil {
-			var reply struct {
-				Job *Job `json:"job"`
+		var reply struct {
+			Job *Job `json:"job"`
+		}
+
+		if err == nil && json.Unmarshal(body, &reply) != nil {
+			err = errors.New("invalid poll response")
+		}
+
+		switch {
+		case ctx.Err() != nil:
+		case err != nil:
+			// Log a changed failure at once and a persistent one at most once a minute.
+			if err.Error() != pollFailure || time.Since(pollLogged) >= time.Minute {
+				log.Printf("Gateway poll failed: %v", err)
+				pollFailure, pollLogged = err.Error(), time.Now()
+			}
+		default:
+			if pollFailure != "" {
+				log.Print("Gateway poll recovered")
+				pollFailure = ""
 			}
 
-			if json.Unmarshal(body, &reply) == nil && reply.Job != nil {
+			if reply.Job != nil {
 				agent.execute(ctx, *reply.Job)
 			}
 		}
