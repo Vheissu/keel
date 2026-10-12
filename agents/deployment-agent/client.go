@@ -48,6 +48,9 @@ func (a *Agent) request(ctx context.Context, path string, input any) ([]byte, er
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, artifactTimeout)
 		defer cancel()
+	} else if path == "secrets" {
+		// JSON escaping can expand each byte to six characters.
+		limit = 32 * (8192*6 + 128)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.config.Gateway+"/agent/v1/"+path, bytes.NewReader(body))

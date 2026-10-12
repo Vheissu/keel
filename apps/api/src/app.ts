@@ -1,4 +1,4 @@
-import Fastify, { type FastifyRequest } from 'fastify';
+import Fastify, { type FastifyRequest, type FastifyServerOptions } from 'fastify';
 import rateLimit from '@fastify/rate-limit';
 import { z } from 'zod';
 import {
@@ -23,6 +23,7 @@ import {
 import { ExecutionService } from './execution-service.js';
 import { registerExecutionRoutes } from './execution-routes.js';
 import { registerDeliveryRoutes } from './delivery-routes.js';
+import { registerSecretRoutes } from './secret-routes.js';
 import { sha256 } from './artifact-store.js';
 import { IntegrationService } from './integration-service.js';
 import { registerIntegrationRoutes } from './integration-routes.js';
@@ -38,11 +39,13 @@ declare module 'fastify' {
 
 export async function createApp(
   service: ControlPlane,
-  logger = false,
+  logger: FastifyServerOptions['logger'] = false,
   integrations = new IntegrationService(service),
 ) {
   const app = Fastify({
-    logger: logger ? { redact: ['req.headers.authorization'] } : false,
+    logger: logger
+      ? { ...(typeof logger === 'object' ? logger : {}), redact: ['req.headers.authorization'] }
+      : false,
     bodyLimit: 25 * 1024 * 1024,
     requestTimeout: 30000,
   });
@@ -55,6 +58,8 @@ export async function createApp(
   );
 
   app.setErrorHandler((error: Error & { code?: string; statusCode?: number }, req, reply) => {
+    const secretRequest = req.routeOptions.url?.startsWith('/api/v1/secrets');
+
     if (error instanceof DomainError) {
       return reply
         .code(error.status)
@@ -74,7 +79,11 @@ export async function createApp(
     const conflict = error.code === '23505';
 
     if (!conflict && (!error.statusCode || error.statusCode >= 500)) {
-      req.log.error(error);
+      if (secretRequest) {
+        req.log.error({ code: 'SECRET_OPERATION_FAILED' }, 'Secret operation failed.');
+      } else {
+        req.log.error(error);
+      }
     }
 
     let status = 500;
@@ -88,7 +97,7 @@ export async function createApp(
     } else if (error.statusCode && error.statusCode < 500) {
       status = error.statusCode;
       code = 'INVALID_REQUEST';
-      message = error.message;
+      message = secretRequest ? 'Invalid secret request.' : error.message;
     }
 
     return reply.code(status).send({
@@ -214,6 +223,7 @@ export async function createApp(
       await registerIntegrationRoutes(api, integrations);
       await registerExecutionRoutes(api, new ExecutionService(service));
       await registerDeliveryRoutes(api, service);
+      await registerSecretRoutes(api, service);
 
       api.get('/providers', async () => ({ providers }));
 

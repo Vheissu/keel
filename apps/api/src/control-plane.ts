@@ -17,6 +17,8 @@ import {
 import { parseProcess, requiresApproval } from '../../../packages/deployment-schema/src/index.js';
 import { sha256, type ArtifactStore } from './artifact-store.js';
 import { DeliveryPolicy } from './delivery-policy.js';
+import { DeploymentSecrets } from './deployment-secrets.js';
+import type { CredentialVault } from './credential-vault.js';
 
 const uuid = z.string().uuid();
 const name = z.string().trim().min(1).max(100);
@@ -39,11 +41,15 @@ export const deploymentInput = z.object({ release_id: uuid, environment_id: uuid
 
 export class ControlPlane {
   readonly delivery = new DeliveryPolicy(this);
+  readonly secrets: DeploymentSecrets;
 
   constructor(
     public db: Database,
     public store: ArtifactStore,
-  ) {}
+    secretVault?: CredentialVault,
+  ) {
+    this.secrets = new DeploymentSecrets(this, secretVault);
+  }
 
   async authenticate(token: string): Promise<Principal> {
     const result = await this.db.query(
@@ -436,6 +442,14 @@ export class ControlPlane {
         rollbackPlanId,
       ],
     );
+
+    const secretBindings = await this.secrets.bind(tx, result.rows[0], config.secrets);
+
+    if (secretBindings.length) {
+      await this.audit(tx, p, 'deployment.secrets_bound', result.rows[0].id, {
+        bindings: secretBindings,
+      });
+    }
 
     await this.deploymentEvent(tx, p, result.rows[0]);
 

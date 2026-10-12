@@ -36,7 +36,11 @@ export class Api {
         ? (bodyDigest ?? (await sha256Hex(body as ArrayBuffer)))
         : JSON.stringify(body ?? {});
 
-      fingerprint = `${token}:${method}:${path}:${content}`;
+      // Hash the fingerprint so request bodies such as secret values are not kept in memory.
+      fingerprint = await sha256Hex(
+        new TextEncoder().encode(`${token}:${method}:${path}:${content}`),
+      );
+
       key = this.pending.get(fingerprint) ?? crypto.randomUUID();
       this.pending.set(fingerprint, key);
     }

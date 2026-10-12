@@ -52,6 +52,13 @@
         <dt>Request by</dt>
         <dd>${date(plan.expires_at)}</dd>
       </div>
+      <div if.bind="plan.secret_bindings.length">
+        <dt>Secret versions for this rollback</dt>
+        <dd repeat.for="binding of plan.secret_bindings">
+          <code>${binding.variable}</code>
+          ← ${binding.name} · version ${binding.version}
+        </dd>
+      </div>
     </dl>
     <p class="execution-note">${plan.warning}</p>
     <form submit.trigger:prevent="request()">

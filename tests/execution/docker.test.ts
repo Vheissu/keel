@@ -111,7 +111,13 @@ beforeAll(async () => {
   await admin.query(`CREATE SCHEMA ${schema}`);
   await migrate(db);
   root = await mkdtemp(join(tmpdir(), 'keel-docker-'));
-  control = new ControlPlane(db, new LocalArtifactStore(join(root, 'artifacts')));
+
+  control = new ControlPlane(
+    db,
+    new LocalArtifactStore(join(root, 'artifacts')),
+    new CredentialVault(randomBytes(32).toString('base64'), 'deployment-secrets'),
+  );
+
   execution = new ExecutionService(control);
   tls = await certificates(root);
   gateway = await createGateway(execution, tls.server);
@@ -204,6 +210,28 @@ it('deploys a retained GitHub ZIP after provider expiry and recovers a crashed a
     control.project(tx, p, { name: 'Retained Docker application', slug: 'web', description: '' }),
   );
 
+  const stagingSecretValue = `staging-private-${randomUUID()} = # $ " Unicode λ `;
+  const rotatedSecretValue = `staging-rotated-${randomUUID()}`;
+  const productionSecretValue = `production-private-${randomUUID()}`;
+
+  const stagingSecret = await mutate<{ id: string }>((tx) =>
+    control.secrets.create(tx, p, {
+      project_id: project.id,
+      environment_id: f.environments.staging,
+      name: 'APPLICATION_PASSWORD',
+      value: stagingSecretValue,
+    }),
+  );
+
+  await mutate((tx) =>
+    control.secrets.create(tx, p, {
+      project_id: project.id,
+      environment_id: f.environments.production,
+      name: 'APPLICATION_PASSWORD',
+      value: productionSecretValue,
+    }),
+  );
+
   const target = await mutate<{ id: string }>((tx) =>
     execution.registerTarget(tx, p, {
       name: 'Test Docker target',
@@ -221,7 +249,7 @@ it('deploys a retained GitHub ZIP after provider expiry and recovers a crashed a
 
   await writeFile(
     join(root, 'Dockerfile'),
-    'FROM busybox:1.37.0\nCOPY index.html /www/index.html\nUSER 65532:65532\nEXPOSE 8080\nCMD ["httpd", "-f", "-p", "8080", "-h", "/www"]\n',
+    `FROM busybox:1.37.0\nCOPY index.html /www/index.html\nUSER 65532:65532\nEXPOSE 8080\nCMD ${JSON.stringify(['sh', '-c', 'test -n "$APP_PASSWORD" && exec httpd -f -p 8080 -h /www'])}\n`,
   );
 
   const built = await run('docker', ['build', '--quiet', root], { timeout: 90000 });
@@ -289,7 +317,11 @@ it('deploys a retained GitHub ZIP after provider expiry and recovers a crashed a
   });
 
   for (const environment of Object.values(processDefinition.spec.environments)) {
-    Object.assign(environment, { strategy: 'recreate', verify: { http: { path: '/' } } });
+    Object.assign(environment, {
+      strategy: 'recreate',
+      verify: { http: { path: '/' } },
+      secrets: { APP_PASSWORD: { secret: 'APPLICATION_PASSWORD' } },
+    });
   }
 
   const release = await mutate<{ id: string }>((tx) =>
@@ -326,6 +358,14 @@ it('deploys a retained GitHub ZIP after provider expiry and recovers a crashed a
 
   const deployment = await mutate<{ id: string }>((tx) =>
     control.deploy(tx, p, { release_id: release.id, environment_id: f.environments.staging }),
+  );
+
+  // Rotation after admission must not change this request's pinned version.
+  await mutate((tx) =>
+    control.secrets.rotate(tx, p, stagingSecret.id, {
+      value: rotatedSecretValue,
+      expected_revision: 1,
+    }),
   );
 
   workflowID = `deployment-${deployment.id}`;
@@ -376,6 +416,21 @@ it('deploys a retained GitHub ZIP after provider expiry and recovers a crashed a
 
   await until(() => completed(deployment.id));
   expect(await (await fetch(`http://127.0.0.1:${hostPort}`)).text()).toBe(content);
+
+  const environment = async (id: string) =>
+    JSON.parse(
+      (
+        await run('docker', [
+          'container',
+          'inspect',
+          '--format',
+          '{{json .Config.Env}}',
+          `keel-target-${id}`,
+        ])
+      ).stdout,
+    ) as string[];
+
+  expect(await environment(target.id)).toContain(`APP_PASSWORD=${stagingSecretValue}`);
   await client.workflow.getHandle(workflowID).result();
 
   const first = (
@@ -560,6 +615,7 @@ it('deploys a retained GitHub ZIP after provider expiry and recovers a crashed a
   await until(() => completed(rollbackDeployment.id));
   await client.workflow.getHandle(workflowID).result();
   expect(await (await fetch(`http://127.0.0.1:${hostPort}`)).text()).toBe(content);
+  expect(await environment(target.id)).toContain(`APP_PASSWORD=${rotatedSecretValue}`);
 
   // Promote the exact retained release to a second target, preserving the approval gate.
   const approver = await control.authenticate(f.approver.token);
@@ -625,6 +681,7 @@ it('deploys a retained GitHub ZIP after provider expiry and recovers a crashed a
   await until(() => completed(promoted.id));
   await client.workflow.getHandle(workflowID).result();
   expect(await (await fetch(`http://127.0.0.1:${productionPort}`)).text()).toBe(content);
+  expect(await environment(productionTarget.id)).toContain(`APP_PASSWORD=${productionSecretValue}`);
 
   expect(
     (
@@ -634,5 +691,78 @@ it('deploys a retained GitHub ZIP after provider expiry and recovers a crashed a
     ).rows[0].current_release_id,
   ).toBe(release.id);
 
+  // Revocation before delivery must leave the previously verified container running.
+  const beforeRevocation = await run('docker', [
+    'container',
+    'inspect',
+    '--format',
+    '{{.Id}}',
+    `keel-target-${target.id}`,
+  ]);
+
+  const paused = new Promise<void>((resolve) => agent!.once('exit', () => resolve()));
+
+  agent!.kill('SIGTERM');
+  await paused;
+  agent = undefined;
+
+  const revokedDeployment = await mutate<{ id: string }>((tx) =>
+    control.deploy(tx, p, {
+      release_id: release.id,
+      environment_id: f.environments.staging,
+    }),
+  );
+
+  await mutate((tx) => control.secrets.revoke(tx, p, stagingSecret.id, 2));
+  workflowID = `deployment-${revokedDeployment.id}`;
+  await dispatchOutbox(db, client, queue);
+  startAgent();
+
+  await until(
+    async () =>
+      (await db.query('SELECT status FROM deployments WHERE id=$1', [revokedDeployment.id])).rows[0]
+        .status === 'failed',
+  );
+
+  await client.workflow.getHandle(workflowID).result();
+
+  expect(
+    (await db.query('SELECT result_code FROM deployments WHERE id=$1', [revokedDeployment.id]))
+      .rows[0].result_code,
+  ).toBe('SECRET_UNAVAILABLE');
+
+  const afterRevocation = await run('docker', [
+    'container',
+    'inspect',
+    '--format',
+    '{{.Id}}',
+    `keel-target-${target.id}`,
+  ]);
+
+  expect(afterRevocation.stdout).toBe(beforeRevocation.stdout);
+  expect(await (await fetch(`http://127.0.0.1:${hostPort}`)).text()).toBe(content);
   expect(agentOutput).not.toContain('token');
+
+  const histories = await Promise.all(
+    [again.id, interrupted.id, rollbackDeployment.id, promoted.id, revokedDeployment.id].map((id) =>
+      client.workflow.getHandle(`deployment-${id}`).fetchHistory(),
+    ),
+  );
+
+  const historyText = JSON.stringify(histories, (_key, value) => {
+    if (value instanceof Uint8Array) {
+      return Buffer.from(value).toString('utf8');
+    }
+
+    if (value?.type === 'Buffer' && Array.isArray(value.data)) {
+      return Buffer.from(value.data).toString('utf8');
+    }
+
+    return value;
+  });
+
+  for (const secretValue of [stagingSecretValue, rotatedSecretValue, productionSecretValue]) {
+    expect(agentOutput).not.toContain(secretValue);
+    expect(historyText).not.toContain(secretValue);
+  }
 }, 150000);

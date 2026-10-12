@@ -17,7 +17,7 @@ npm run keel -- deployment promotion --release <release-uuid> --environment <env
 npm run keel -- deployment request --release <release-uuid> --environment <environment-uuid>
 ```
 
-The promotion check reports policy eligibility only. Artifact availability and target execution have their own checks; an eligible response is not a reservation or a promise that a deployment can succeed.
+The promotion check reports prerequisite eligibility and availability of declared secrets. Artifact availability and target execution have their own checks; an eligible response is not a reservation or a promise that a deployment can succeed.
 
 ## Plan a rollback
 
@@ -28,6 +28,8 @@ Choose a release and select **Review rollback plan**. Keel verifies the retained
 Review application compatibility before selecting **Request rollback**. Docker recreate causes downtime. Redeploying application code does not restore databases, undo migrations, remove data written by a newer version, or reverse external effects. Keel cannot determine that compatibility for you; the request records your acknowledgement of this boundary.
 
 A plan can be requested once, within 15 minutes. At request time Keel rechecks retained bytes, target history, environment locks, promotion policy and the policy revision. New target work or changed policy requires a new review. The request follows the ordinary approval flow, with immutable links to its plan and prerequisite evidence. Expiry limits when a request can be created; it does not expire a request already awaiting approval.
+
+The planner reviews the current [secret versions](deployment-secrets.md) needed by the retained release. It does not resurrect historical credentials. A secret rotation or revocation between review and request requires a new plan. Once accepted, the rollback pins its secret versions as an ordinary deployment does.
 
 The workflow is pinned to the reviewed target and fence. It will not silently redirect the rollback to another matching target. The private agent then runs the retained process with a fresh lease and fence, and only HTTP verification can mark it successful. Cancellation, lease expiry and certificate recovery use the same cleanup rules as other deployments.
 

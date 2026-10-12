@@ -50,6 +50,7 @@ export const resultInput = leaseInput
       'DOCKER_FAILED',
       'HEALTH_FAILED',
       'ARTIFACT_INVALID',
+      'SECRET_UNAVAILABLE',
       'CANCELLED',
       'RECONCILED',
       'TARGET_NOT_ALLOWED',
@@ -620,7 +621,7 @@ export class ExecutionService {
     });
   }
 
-  async claim(agent: AgentIdentity) {
+  async claim(agent: AgentIdentity, supportsSecrets = false) {
     return transaction(this.control.db, async (tx) => {
       await this.lockAgent(tx, agent);
 
@@ -642,6 +643,18 @@ export class ExecutionService {
                 a.state = 'ready'
                 AND d.status = 'queued'
                 AND $3 = 'active'
+                AND (
+                  $4::boolean
+                  OR NOT EXISTS (
+                    SELECT
+                      1
+                    FROM
+                      deployment_secret_bindings b
+                    WHERE
+                      b.organisation_id = d.organisation_id
+                      AND b.deployment_id = d.id
+                  )
+                )
               )
             )
           ORDER BY
@@ -651,7 +664,7 @@ export class ExecutionService {
           FOR UPDATE OF
             d SKIP LOCKED
         `,
-        [agent.organisation_id, agent.id, agent.state],
+        [agent.organisation_id, agent.id, agent.state, supportsSecrets],
       );
 
       const d = candidates.rows[0] as Deployment | undefined;
@@ -759,6 +772,9 @@ export class ExecutionService {
         image_id: process.spec.artifact.dockerImageId,
         archive_path: process.spec.artifact.dockerArchivePath ?? '',
         health_path: process.spec.environments[env.slug].verify?.http.path,
+        secret_count: cleanup
+          ? 0
+          : Object.keys(process.spec.environments[env.slug].secrets ?? {}).length,
       };
     });
   }
@@ -923,6 +939,18 @@ export class ExecutionService {
     });
 
     return this.control.store.get(agent.organisation_id, digest);
+  }
+
+  async secrets(agent: AgentIdentity, input: Lease) {
+    return transaction(this.control.db, async (tx) => {
+      const { d, a } = await this.lockedLease(tx, agent, input);
+
+      if (d.status !== 'running' || a.state !== 'running') {
+        throw new DomainError('STALE_LEASE', 'This lease cannot retrieve deployment secrets.', 409);
+      }
+
+      return this.control.secrets.deliver(tx, d);
+    });
   }
 
   async complete(agent: AgentIdentity, input: z.infer<typeof resultInput>) {

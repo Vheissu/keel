@@ -225,6 +225,13 @@ func (a *Agent) deploy(ctx context.Context, j Job, t Target) string {
 		return "ARTIFACT_INVALID"
 	}
 
+	// Fetch only after local target and image validation, before any destructive action.
+	secretInput, err := a.deploymentSecrets(ctx, j)
+	if err != nil {
+		return "SECRET_UNAVAILABLE"
+	}
+	defer clear(secretInput)
+
 	// Recheck immediately before replacing the target. Heartbeats also cancel in-flight work.
 	action, err := a.confirmLease(ctx, j)
 	if err != nil {
@@ -256,10 +263,18 @@ func (a *Agent) deploy(ctx context.Context, j Job, t Target) string {
 		"--pids-limit", "64",
 		"--restart", "no",
 		"--publish", fmt.Sprintf("127.0.0.1:%d:%d", t.HostPort, t.ContainerPort),
-		j.ImageID,
 	}
 
-	if _, err = a.docker(ctx, nil, args...); err != nil {
+	var environment io.Reader
+	if j.SecretCount > 0 {
+		// Docker reads the env file from an anonymous pipe. Values never enter argv,
+		// the agent's environment, a temporary file, or the persisted job contract.
+		args = append(args, "--env-file", "/dev/stdin")
+		environment = bytes.NewReader(secretInput)
+	}
+	args = append(args, j.ImageID)
+
+	if _, err = a.docker(ctx, environment, args...); err != nil {
 		return "DOCKER_FAILED"
 	}
 

@@ -69,9 +69,19 @@ export async function createGateway(execution: ExecutionService, tls: ServerOpti
   });
 
   app.post('/agent/v1/poll', async (req) => {
-    z.object({}).strict().parse(req.body);
+    const input = z
+      .object({
+        capabilities: z.array(z.literal('deployment-secrets-v1')).max(1).default([]),
+      })
+      .strict()
+      .parse(req.body);
 
-    return { job: await execution.claim(identities.get(req)!) };
+    return {
+      job: await execution.claim(
+        identities.get(req)!,
+        input.capabilities.includes('deployment-secrets-v1'),
+      ),
+    };
   });
 
   app.post('/agent/v1/heartbeat', async (req) =>
@@ -91,6 +101,13 @@ export async function createGateway(execution: ExecutionService, tls: ServerOpti
       .header('Cache-Control', 'no-store')
       .type('application/octet-stream')
       .send(await execution.download(identities.get(req)!, leaseInput.parse(req.body))),
+  );
+
+  app.post('/agent/v1/secrets', async (req, reply) =>
+    reply
+      .header('Cache-Control', 'no-store')
+      .header('Pragma', 'no-cache')
+      .send(await execution.secrets(identities.get(req)!, leaseInput.parse(req.body))),
   );
 
   return app;

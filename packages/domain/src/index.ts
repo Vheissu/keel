@@ -1,4 +1,4 @@
-export type Permission = 'read' | 'write' | 'approve';
+export type Permission = 'read' | 'write' | 'approve' | 'manage_secrets';
 
 export interface Principal {
   organisation_id: string;

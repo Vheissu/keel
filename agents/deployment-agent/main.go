@@ -94,7 +94,9 @@ func run(configPath string) error {
 	var pollFailure string
 	var pollLogged time.Time
 	for ctx.Err() == nil {
-		body, err := agent.request(ctx, "poll", struct{}{})
+		body, err := agent.request(ctx, "poll", struct {
+			Capabilities []string `json:"capabilities"`
+		}{[]string{"deployment-secrets-v1"}})
 		var reply struct {
 			Job *Job `json:"job"`
 		}

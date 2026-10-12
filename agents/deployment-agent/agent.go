@@ -92,7 +92,8 @@ func (a *Agent) execute(parent context.Context, j Job) {
 		}
 	}
 
-	if code != "HTTP_VERIFIED" {
+	// Secret preflight happens before replacement; keep the existing application running.
+	if code != "HTTP_VERIFIED" && code != "SECRET_UNAVAILABLE" {
 		cleanupContext, stop := context.WithTimeout(context.Background(), 30*time.Second)
 		a.progress(cleanupContext, j, "cleaning_up")
 		err := a.cleanup(cleanupContext, j)

@@ -18,6 +18,8 @@ const options = {
     environment: { type: 'string' },
     from: { type: 'string' },
     candidate: { type: 'string' },
+    revision: { type: 'string' },
+    'value-stdin': { type: 'boolean' },
     'acknowledge-data-not-restored': { type: 'boolean' },
     connection: { type: 'string' },
     run: { type: 'string' },
@@ -69,6 +71,11 @@ const help = `Keel · publish existing build outputs and create immutable releas
   npm run keel -- deployment rollback-candidates <deployment-uuid>
   npm run keel -- rollback plan --from <deployment-uuid> --candidate <prior-deployment-uuid>
   npm run keel -- rollback request <plan-uuid> --acknowledge-data-not-restored
+  npm run keel -- secret list --project <uuid> --environment <uuid>
+  npm run keel -- secret create --project <uuid> --environment <uuid> --name DATABASE_PASSWORD --value-stdin
+  npm run keel -- secret rotate <secret-uuid> --revision <number> --value-stdin
+  npm run keel -- secret revoke <secret-uuid> --revision <number>
+  npm run keel -- deployment secret-bindings <deployment-uuid>
   npm run keel -- validate <process.yaml>
   npm run keel -- status --json
 
@@ -77,6 +84,8 @@ Connection creation and rotation use KEEL_GITHUB_TOKEN and KEEL_GITHUB_WEBHOOK_S
 Bitbucket uses KEEL_BITBUCKET_TOKEN and KEEL_PUBLISH_SECRET; publishing needs only KEEL_PUBLISH_SECRET.
 For retryable CI steps, pass a stable --idempotency-key (8–128 characters).
 Results are JSON. Review a rollback plan before requesting it. Approvals remain available in the UI and API.
+Secret writes require manage_secrets permission. Pipe the exact single-line value on stdin, with no trailing newline.
+Secret values are never returned. Revocation cannot recall credentials already delivered to a container.
 `;
 
 function required(key: keyof typeof values): string {
@@ -149,6 +158,50 @@ async function request(path: string, body?: unknown) {
   return result;
 }
 
+async function readSecret() {
+  if (!values['value-stdin'] || process.stdin.isTTY) {
+    throw new Error(
+      'Pipe a secret value on stdin and pass --value-stdin. Values are not accepted as arguments.',
+    );
+  }
+
+  const chunks: Buffer[] = [];
+  let length = 0;
+
+  try {
+    for await (const chunk of process.stdin) {
+      const bytes = Buffer.from(chunk);
+
+      length += bytes.length;
+
+      if (length > 8192) {
+        bytes.fill(0);
+        throw new Error('Secret values must fit within 8192 UTF-8 bytes.');
+      }
+
+      chunks.push(bytes);
+    }
+
+    const bytes = Buffer.concat(chunks);
+
+    try {
+      const value = bytes.toString('utf8');
+
+      if (!value || /[\x00\r\n]/.test(value) || !Buffer.from(value, 'utf8').equals(bytes)) {
+        throw new Error('Use a non-empty UTF-8 value without NUL or newline characters.');
+      }
+
+      return value;
+    } finally {
+      bytes.fill(0);
+    }
+  } finally {
+    for (const chunk of chunks) {
+      chunk.fill(0);
+    }
+  }
+}
+
 try {
   const [command, subcommand, file] = positionals;
 
@@ -162,6 +215,44 @@ try {
     print({ valid: true, process: parseProcess(await readFile(subcommand, 'utf8')) });
   } else if (command === 'status') {
     print(await request('/snapshot'));
+  } else if (command === 'secret' && subcommand === 'list') {
+    const query = new URLSearchParams({
+      project_id: required('project'),
+      environment_id: required('environment'),
+    });
+
+    print(await request(`/secrets?${query}`));
+  } else if (command === 'secret' && subcommand === 'create') {
+    const input = {
+      project_id: required('project'),
+      environment_id: required('environment'),
+      name: required('name'),
+      value: await readSecret(),
+    };
+
+    print(await request('/secrets', input));
+  } else if (command === 'secret' && ['rotate', 'revoke'].includes(subcommand)) {
+    if (!file) {
+      throw new Error('Provide a secret UUID.');
+    }
+
+    const input = {
+      expected_revision: Number(required('revision')),
+      ...(subcommand === 'rotate' ? { value: await readSecret() } : {}),
+    };
+
+    print(
+      await request(
+        `/secrets/${encodeURIComponent(file)}/${subcommand === 'rotate' ? 'versions' : 'revoke'}`,
+        input,
+      ),
+    );
+  } else if (command === 'deployment' && subcommand === 'secret-bindings') {
+    if (!file) {
+      throw new Error('Provide a deployment UUID.');
+    }
+
+    print(await request(`/deployments/${encodeURIComponent(file)}/secret-bindings`));
   } else if (command === 'deployment' && ['promotion', 'request'].includes(subcommand)) {
     const input = { release_id: required('release'), environment_id: required('environment') };
 

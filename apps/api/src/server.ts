@@ -13,7 +13,11 @@ if (!process.env.DATABASE_URL) {
 
 const db = database(process.env.DATABASE_URL);
 
-const control = new ControlPlane(db, artifactStore());
+const secretVault = process.env.KEEL_DEPLOYMENT_SECRET_KEY
+  ? new CredentialVault(process.env.KEEL_DEPLOYMENT_SECRET_KEY, 'deployment-secrets')
+  : undefined;
+
+const control = new ControlPlane(db, artifactStore(), secretVault);
 
 const vault = process.env.KEEL_CREDENTIAL_KEY
   ? new CredentialVault(process.env.KEEL_CREDENTIAL_KEY)

@@ -1,6 +1,6 @@
 # Implementation status
 
-The control-plane foundation, GitHub ingestion, Bitbucket publishing and Docker execution, agent recovery, promotion policy and rollback planning stages are implemented. PLAN.md remains the product roadmap.
+The control-plane foundation, GitHub ingestion, Bitbucket publishing and Docker execution, agent recovery, promotion policy, rollback planning and scoped deployment secrets are implemented. PLAN.md remains the product roadmap.
 
 ## Implemented
 
@@ -28,10 +28,12 @@ The control-plane foundation, GitHub ingestion, Bitbucket publishing and Docker 
 - Approver-managed promotion prerequisites with exact-release verification evidence, cycle prevention and immutable admission snapshots.
 - Retained-release rollback plans with target/fence pinning, expiry, byte verification, data-boundary acknowledgement and ordinary approvals.
 - Promotion and rollback review in the UI and CLI.
+- Encrypted, versioned deployment secrets scoped to a project and environment, with separate management permission, admission-time pinning and revocation.
+- Lease-scoped secret delivery to capable agents through mutual TLS and Docker stdin, with metadata-only UI/CLI responses and fixed-code execution reporting.
 
 ## Next increment
 
-Add scoped deployment secrets and their delivery/redaction rules, followed by self-hosted packaging and operational recovery checks. SSH, additional deployment strategies, notifications and automated rollback remain later work.
+Add self-hosted packaging and operational recovery checks. SSH, additional deployment strategies, notifications and automated rollback remain later work.
 
 ## Decisions and constraints
 
@@ -43,7 +45,7 @@ SQL queries scope every organisation-owned API read, and composite foreign keys 
 
 The local bootstrap is not a hosted identity system. There is no invitation flow, token-management UI, token expiry, SSO, session cookie, or custom-role editor. Tokens are permission-scoped, but not yet project- or environment-scoped. Keep the development services bound to loopback. The browser does not persist credentials.
 
-Deployment outbox entries are delivered by the Temporal worker. Artifact ingestion retains its separate PostgreSQL-backed worker. Redis, deployment secrets management, runbooks, tenants, scheduled releases, and production packaging remain unimplemented. See [Docker agent setup and limits](deployment-agents.md), including the 25 MiB archive cap and same-host certificate recovery and the absence of force-unlock or host reassignment. Production defaults to requiring verified staging of the exact release before admission. Approvers can edit prerequisites; accepted requests retain their admission snapshot. See [promotion and rollback](promotion-and-rollback.md) for policy and recovery boundaries.
+Deployment outbox entries are delivered by the Temporal worker. Artifact ingestion retains its separate PostgreSQL-backed worker. Redis, runbooks, tenants, scheduled releases, and production packaging remain unimplemented. See [Docker agent setup and limits](deployment-agents.md), including the 25 MiB archive cap and same-host certificate recovery and the absence of force-unlock or host reassignment. Production defaults to requiring verified staging of the exact release before admission. Approvers can edit prerequisites; accepted requests retain their admission snapshot. See [promotion and rollback](promotion-and-rollback.md) and [deployment secrets](deployment-secrets.md) for policy, key management and recovery boundaries.
 
 The dashboard shows the newest request per environment, including its pending/cancelled state. It does not claim that this is the currently deployed version. The latest 200 records per resource are loaded; pagination is a follow-up before supporting larger installations.
 

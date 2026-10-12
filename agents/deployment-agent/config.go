@@ -41,6 +41,7 @@ type Job struct {
 	ImageID     string `json:"image_id"`
 	HealthPath  string `json:"health_path"`
 	ArchivePath string `json:"archive_path"`
+	SecretCount int    `json:"secret_count"`
 }
 
 type Result struct {
@@ -95,7 +96,7 @@ func validateJob(j Job) error {
 		return nil
 	}
 
-	if j.Mode != "deploy" || !digestPattern.MatchString(j.Digest) || !imagePattern.MatchString(j.ImageID) || j.Size < 1 || j.Size > archiveLimit {
+	if j.Mode != "deploy" || !digestPattern.MatchString(j.Digest) || !imagePattern.MatchString(j.ImageID) || j.Size < 1 || j.Size > archiveLimit || j.SecretCount < 0 || j.SecretCount > 32 {
 		return errors.New("invalid artifact contract")
 	}
 

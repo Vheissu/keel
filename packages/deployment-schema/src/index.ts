@@ -2,11 +2,17 @@ import { z } from 'zod';
 import { parseDocument } from 'yaml';
 import { DomainError } from '../../domain/src/index.js';
 
+export const secretName = z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/);
+
 const environment = z
   .object({
     strategy: z.enum(['recreate', 'rolling']),
     targetSelector: z.object({ labels: z.record(z.string().min(1), z.string().min(1)) }).strict(),
     requiresApproval: z.boolean().optional(),
+    secrets: z
+      .record(secretName, z.object({ secret: secretName }).strict())
+      .refine((value) => Object.keys(value).length <= 32, 'Use at most 32 secret references.')
+      .optional(),
     verify: z
       .object({
         http: z

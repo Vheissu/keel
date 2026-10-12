@@ -4,6 +4,7 @@ import { artifactStore } from '../../api/src/storage-config.js';
 import { ControlPlane } from '../../api/src/control-plane.js';
 import { ExecutionService } from '../../api/src/execution-service.js';
 import { createGateway } from './gateway.js';
+import { CredentialVault } from '../../api/src/credential-vault.js';
 
 for (const name of ['DATABASE_URL', 'AGENT_TLS_CERT', 'AGENT_TLS_KEY', 'AGENT_TLS_CA']) {
   if (!process.env[name]) {
@@ -12,7 +13,12 @@ for (const name of ['DATABASE_URL', 'AGENT_TLS_CERT', 'AGENT_TLS_KEY', 'AGENT_TL
 }
 
 const db = database(process.env.DATABASE_URL!);
-const execution = new ExecutionService(new ControlPlane(db, artifactStore()));
+
+const secretVault = process.env.KEEL_DEPLOYMENT_SECRET_KEY
+  ? new CredentialVault(process.env.KEEL_DEPLOYMENT_SECRET_KEY, 'deployment-secrets')
+  : undefined;
+
+const execution = new ExecutionService(new ControlPlane(db, artifactStore(), secretVault));
 
 const app = await createGateway(execution, {
   cert: await readFile(process.env.AGENT_TLS_CERT!),

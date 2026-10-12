@@ -431,6 +431,13 @@
                   >
                     Plan rollback
                   </button>
+                  <button
+                    class="text-button"
+                    disabled.bind="busy"
+                    click.trigger="inspectSecretVersions(deployment)"
+                  >
+                    Secret versions
+                  </button>
                   <template
                     if.bind="canApprove && deployment.status === 'awaiting_approval' && deployment.requested_by !== data.principal.actor_id"
                   >
@@ -495,6 +502,13 @@
         can-approve.bind="canApprove"
         refresh-workspace.bind="() => refresh()"
       ></environment-policies>
+      <secrets-panel
+        if.bind="page === 'Secrets'"
+        api.bind="api"
+        projects.bind="data.projects"
+        environments.bind="data.environments"
+        can-manage.bind="data.principal.permissions.includes('manage_secrets')"
+      ></secrets-panel>
       <integrations-panel
         if.bind="page === 'Integrations'"
         api.bind="api"
@@ -550,9 +564,9 @@
     <div>
       <p class="eyebrow">${inspected ? 'Immutable manifest' : 'Workspace'}</p>
       <h2 id="dialog-title">
-        ${inspected ? 'Release ' + inspected.version : form === 'project' ? 'Create a project' :
-        form === 'artifact' ? 'Publish an artifact' : form === 'release' ? 'Create a release' :
-        'Request a deployment'}
+        ${secretInspection ? 'Deployment secret versions' : inspected ? 'Release ' +
+        inspected.version : form === 'project' ? 'Create a project' : form === 'artifact' ? 'Publish
+        an artifact' : form === 'release' ? 'Create a release' : 'Request a deployment'}
       </h2>
     </div>
     <button
@@ -565,6 +579,18 @@
     </button>
   </div>
   <pre class="manifest" if.bind="inspected">${manifestText}</pre>
+  <template if.bind="secretInspection">
+    <p class="help">
+      Versions pinned when this request was accepted. Revoked versions cannot be delivered again.
+    </p>
+    <ul if.bind="secretInspection.length">
+      <li repeat.for="binding of secretInspection">
+        <code>${binding.variable}</code>
+        ← ${binding.name} · version ${binding.version}${binding.revoked_at ? ' · revoked' : ''}
+      </li>
+    </ul>
+    <p if.bind="!secretInspection.length">This deployment has no secret references.</p>
+  </template>
   <form if.bind="form" submit.trigger:prevent="submit()">
     <div class="alert error" role="alert" if.bind="error">${error}</div>
     <fieldset disabled.bind="busy">
@@ -693,6 +719,19 @@
             </p>
           </template>
         </div>
+        <template if.bind="promotion && promotion.secret_bindings.length">
+          <h3>Secret references</h3>
+          <p class="help">
+            These versions will be checked and pinned when the request is accepted.
+          </p>
+          <ul>
+            <li repeat.for="binding of promotion.secret_bindings">
+              <code>${binding.variable}</code>
+              ← ${binding.name} · ${binding.available ? 'version ' + binding.version : 'missing or
+              revoked'}
+            </li>
+          </ul>
+        </template>
       </template>
     </fieldset>
     <div class="dialog-actions">

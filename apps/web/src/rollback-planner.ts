@@ -22,6 +22,7 @@ interface Plan {
   warning: string;
   expires_at: string;
   health_path: string;
+  secret_bindings: { variable: string; name: string; version: number }[];
 }
 
 export class RollbackPlanner {

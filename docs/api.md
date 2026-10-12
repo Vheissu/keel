@@ -1,6 +1,6 @@
 # API foundation
 
-The API prefix is `/api/v1`. Every resource route requires `Authorization: Bearer <token>`. Organisation and actor IDs come from the token, never from a caller-supplied organisation header or body. Public `GET /health` checks database connectivity and reports that execution is not configured.
+The API prefix is `/api/v1`. Every resource route requires `Authorization: Bearer <token>`. Organisation and actor IDs come from the token, never from a caller-supplied organisation header or body. Public `GET /health` checks database connectivity and reports `agent-protocol-available`; this does not confirm that a worker or agent is running.
 
 Resource mutations require an `Idempotency-Key` header: 8–128 letters, numbers, dots, colons, underscores, or hyphens. Keys are scoped to organisation and actor. The request method, URL, and body are fingerprinted. Retrying the same request returns its saved response; reusing a key for a different request returns `409`. Keys currently have no expiry.
 
@@ -99,7 +99,7 @@ Provider capability responses include `artifactIngestion`: `provider-download` f
 
 These mutations require idempotency keys. Target bindings are immutable in this increment. A target's `current_release_id` is present only when `current_state` is `verified`. `reconciliation_required` and `cancel_requested` deployments continue holding their environment and target locks. Result codes contain no agent-provided text.
 
-The separate HTTPS gateway provides `POST /agent/v1/poll`, `/heartbeat`, `/artifact` and `/result`. All require a registered trusted client certificate. Poll returns one assigned job or `null`. Other requests include `{attempt_id, fence, token}`; result also includes an allowed outcome/code pair. Artifact access is limited to that active deployment's retained blob. Revocation, cancellation, expiry and superseded fences are checked server-side. [Protocol, setup and recovery limits](deployment-agents.md).
+The separate HTTPS gateway provides `POST /agent/v1/poll`, `/heartbeat`, `/artifact`, `/secrets` and `/result`. All require a registered trusted client certificate. Poll returns one assigned job or `null`. Other requests include `{attempt_id, fence, token}`; result also includes an allowed outcome/code pair. Artifact and secret access are limited to the active deployment. Revocation, cancellation, expiry and superseded fences are checked server-side. [Protocol, setup and recovery limits](deployment-agents.md).
 
 ### Agent certificate recovery and progress
 
@@ -116,3 +116,19 @@ The private mTLS gateway accepts `POST /agent/v1/progress` with the current leas
 - `POST /api/v1/rollback-plans/:id/request` requires **write** permission and `{ "acknowledge_data_not_restored": true }`. It rechecks the plan and creates one ordinary deployment with `kind: "rollback"`; approval is not bypassed.
 
 All writes require an idempotency key. Deployments expose `kind`, `policy_snapshot`, `promotion_source_deployment_id` and `rollback_plan_id`. These admission fields cannot be edited. Policy changes apply to new requests. Normal `/deployments` requests cannot supply rollback or promotion evidence fields. See [policy and rollback semantics](promotion-and-rollback.md).
+
+## Deployment secrets
+
+| Method and path                                        | Permission     | Input / result                                                      |
+| ------------------------------------------------------ | -------------- | ------------------------------------------------------------------- |
+| `GET /secrets?project_id=<uuid>&environment_id=<uuid>` | read           | Secret metadata in the exact scope; no values                       |
+| `POST /secrets`                                        | manage_secrets | `{project_id, environment_id, name, value}`; creates version 1      |
+| `POST /secrets/:id/versions`                           | manage_secrets | `{value, expected_revision}`; adds a version and enables new use    |
+| `POST /secrets/:id/revoke`                             | manage_secrets | `{expected_revision}`; disables the secret and revokes all versions |
+| `GET /deployments/:id/secret-bindings`                 | read           | `{variable, name, version, revoked_at}` records pinned at admission |
+
+Secret managers also require `read`. Responses contain metadata only and disable caching. Names and container variable names match `[A-Z][A-Z0-9_]{0,63}`. Values contain 1–8192 UTF-8 bytes without NUL, CR or LF. Secret create/rotate bodies are capped at 64 KiB to allow JSON escaping. There is no value-read endpoint. Creation and rotation use keyed HMAC request fingerprints; idempotent responses never contain values.
+
+Process environment entries may contain `secrets: { "APP_PASSWORD": { "secret": "DATABASE_PASSWORD" } }`, with at most 32 references. `/releases/:id/promotion` includes `secret_bindings` with `{variable, name, version, available}` and reports ineligible if a reference is missing or disabled. Deployment admission pins current versions transactionally. `/rollback-plans` includes its reviewed `secret_bindings`; a change before request invalidates the plan.
+
+Gateway polling accepts `{ "capabilities": ["deployment-secrets-v1"] }`. Omission remains valid for older agents, which cannot claim secret-bearing deployments. Jobs include `secret_count`, never values. `POST /agent/v1/secrets` accepts the ordinary lease fields and returns `{ "values": { "APP_PASSWORD": "..." } }` only for that agent's running deployment. Cleanup assignments, cancelled work, expired leases and revoked versions are denied. Responses set `Cache-Control: no-store` and `Pragma: no-cache`. `SECRET_UNAVAILABLE` is a fixed failure code; agents cannot submit arbitrary error text. See [deployment secrets](deployment-secrets.md) for pinning, rotation and exposure boundaries.

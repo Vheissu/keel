@@ -35,7 +35,12 @@ test.beforeAll(async () => {
   await admin.query(`CREATE SCHEMA ${schema}`);
   await migrate(db);
   root = await mkdtemp(join(tmpdir(), 'keel-e2e-'));
-  control = new ControlPlane(db, new LocalArtifactStore(root));
+
+  control = new ControlPlane(
+    db,
+    new LocalArtifactStore(root),
+    new CredentialVault(randomBytes(32).toString('base64'), 'deployment-secrets'),
+  );
 
   const integrations = new IntegrationService(
     control,
@@ -640,6 +645,188 @@ test('enforces promotion policy and reviews a retained-release rollback with a s
   await expect(approver.getByRole('row').filter({ hasText: 'Application rollback' })).toContainText(
     'Waiting for agent',
   );
+
+  await context.close();
+});
+
+test('manages scoped secrets and reviews pinned versions without disclosing values', async ({
+  page,
+  browser,
+}) => {
+  const manager = randomUUID();
+  const managerToken = randomBytes(32).toString('hex');
+
+  await db.query('INSERT INTO actors(id,organisation_id,name) VALUES($1,$2,$3)', [
+    manager,
+    f.org,
+    'Secret manager',
+  ]);
+
+  await db.query(
+    `
+      INSERT INTO
+        api_tokens (
+          id,
+          organisation_id,
+          actor_id,
+          token_hash,
+          permissions
+        )
+      VALUES
+        ($1, $2, $3, $4, $5)
+    `,
+    [randomUUID(), f.org, manager, sha256(managerToken), ['read', 'manage_secrets']],
+  );
+
+  const post = async (path: string, payload: unknown) => {
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/v1${path}`,
+      headers: {
+        authorization: `Bearer ${f.operator.token}`,
+        'idempotency-key': randomUUID(),
+        'content-type': Buffer.isBuffer(payload) ? 'application/octet-stream' : 'application/json',
+      },
+      payload: payload as never,
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+
+    return response.json();
+  };
+
+  const project = await post('/projects', { name: 'Secret application', slug: 'secret-app' });
+  const bytes = Buffer.from('secret application image');
+
+  const artifact = await post(
+    `/artifacts?${new URLSearchParams({ project_id: project.id, name: 'application', version: '1', digest: sha256(bytes) })}`,
+    bytes,
+  );
+
+  const process = deploymentProcess();
+
+  for (const environment of Object.values(process.spec.environments)) {
+    Object.assign(environment, { secrets: { APP_PASSWORD: { secret: 'DATABASE_PASSWORD' } } });
+  }
+
+  await post('/releases', {
+    project_id: project.id,
+    artifact_id: artifact.id,
+    version: '1.0.0',
+    process,
+  });
+
+  await connect(page, managerToken);
+  await page.getByRole('link', { name: 'Secrets', exact: true }).click();
+  await page.getByLabel('Secret environment').selectOption({ label: 'Staging' });
+  await page.getByRole('button', { name: 'Add secret', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Add a deployment secret' })).toBeFocused();
+  await page.getByLabel('Secret name', { exact: true }).fill('DATABASE_PASSWORD');
+  const secretValue = `browser-private-${randomUUID()}`;
+
+  await page.getByLabel('Secret value', { exact: true }).fill(secretValue);
+
+  await expect(page.getByLabel('Secret value', { exact: true })).toHaveAttribute(
+    'type',
+    'password',
+  );
+
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+
+  const saveResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith('/api/v1/secrets') && response.request().method() === 'POST',
+  );
+
+  await page.getByRole('button', { name: 'Save secret', exact: true }).click();
+  expect(await (await saveResponse).text()).not.toContain(secretValue);
+
+  await expect(
+    page.getByRole('status').filter({ hasText: 'DATABASE_PASSWORD saved' }),
+  ).toBeVisible();
+
+  await expect(page.getByRole('row').filter({ hasText: 'DATABASE_PASSWORD' })).toContainText(
+    'Available',
+  );
+
+  await expect(page.getByRole('button', { name: 'Add secret', exact: true })).toBeFocused();
+  expect(await page.content()).not.toContain(secretValue);
+
+  const context = await browser.newContext();
+  const operator = await context.newPage();
+
+  operator.on('pageerror', (error) => errors.push(error.message));
+  await connect(operator);
+  await operator.getByRole('link', { name: 'Secrets', exact: true }).click();
+  await expect(operator.getByRole('button', { name: 'Add secret', exact: true })).toHaveCount(0);
+  await operator.getByRole('link', { name: 'Releases', exact: true }).click();
+
+  await operator
+    .getByRole('button', { name: 'Deploy 1.0.0 of Secret application', exact: true })
+    .click();
+
+  await operator
+    .getByLabel('Environment', { exact: true })
+    .selectOption({ label: 'Production · approval required' });
+
+  await expect(operator.getByRole('dialog')).toContainText(
+    'A referenced secret is missing or revoked',
+  );
+
+  await expect(
+    operator.getByRole('button', { name: 'Request deployment', exact: true }).last(),
+  ).toBeDisabled();
+
+  await operator.getByLabel('Environment', { exact: true }).selectOption({ label: 'Staging' });
+  await expect(operator.getByRole('dialog')).toContainText('DATABASE_PASSWORD · version 1');
+
+  await operator
+    .getByRole('dialog')
+    .getByRole('button', { name: 'Request deployment', exact: true })
+    .click();
+
+  await expect(operator.getByRole('heading', { name: 'Deployments', exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Rotate DATABASE_PASSWORD', exact: true }).click();
+  await page.getByLabel('Secret value', { exact: true }).fill('browser-rotated-value');
+  await page.getByRole('button', { name: 'Save secret', exact: true }).click();
+
+  await expect(page.getByRole('row').filter({ hasText: 'DATABASE_PASSWORD' })).toContainText(
+    'Revision 2',
+  );
+
+  await operator.getByRole('button', { name: 'Secret versions', exact: true }).click();
+  await expect(operator.getByRole('dialog')).toContainText('DATABASE_PASSWORD · version 1');
+  expect((await new AxeBuilder({ page: operator }).analyze()).violations).toEqual([]);
+  await operator.getByRole('button', { name: 'Close dialog' }).click();
+
+  await page.getByRole('button', { name: 'Revoke DATABASE_PASSWORD', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Revoke all versions' })).toBeDisabled();
+  await page.getByLabel('Revoke every version and block pending deployments').check();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.screenshot({ path: 'output/playwright/secrets-desktop.png', fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.screenshot({ path: 'output/playwright/secrets-mobile.png', fullPage: true });
+  await page.getByRole('button', { name: 'Revoke all versions' }).click();
+
+  await expect(page.getByRole('row').filter({ hasText: 'DATABASE_PASSWORD' })).toContainText(
+    'Revoked',
+  );
+
+  await operator.getByRole('button', { name: 'Secret versions', exact: true }).click();
+  await expect(operator.getByRole('dialog')).toContainText('version 1 · revoked');
+
+  expect(
+    await page.evaluate(() =>
+      JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }),
+    ),
+  ).not.toContain(secretValue);
 
   await context.close();
 });

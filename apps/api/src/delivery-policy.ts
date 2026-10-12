@@ -169,6 +169,14 @@ export class DeliveryPolicy {
         let evidence: string | null = null;
         let reason: string | null = null;
 
+        const secretBindings = await this.control.secrets.inspect(
+          tx,
+          org,
+          release.project_id,
+          environment.id,
+          config.secrets,
+        );
+
         try {
           evidence = await this.evidence(tx, org, release, environment);
         } catch (error) {
@@ -179,6 +187,10 @@ export class DeliveryPolicy {
           reason = error.message;
         }
 
+        if (!reason && secretBindings.some((binding) => !binding.available)) {
+          reason = 'A referenced secret is missing or revoked in this project and environment.';
+        }
+
         return {
           eligible: !reason,
           reason,
@@ -187,6 +199,7 @@ export class DeliveryPolicy {
           source_deployment_id: evidence,
           requires_approval: requiresApproval(environment, config),
           digest: release.manifest.artifact.digest,
+          secret_bindings: secretBindings,
         };
       },
       readOnlySnapshot,

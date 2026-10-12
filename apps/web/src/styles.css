@@ -1224,7 +1224,8 @@ targets-panel > p {
 }
 
 rollback-planner,
-environment-policies {
+environment-policies,
+secrets-panel {
   display: block;
 }
 .rollback-plan form {
@@ -1249,4 +1250,13 @@ environment-policies {
 }
 .plan-details code {
   white-space: normal;
+}
+.secret-scope {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 1rem;
+  margin: 1rem 0;
+}
+secrets-panel > .button {
+  margin-bottom: 1rem;
 }

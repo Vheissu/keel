@@ -54,6 +54,34 @@ describe('deployment process contract', () => {
     expect(parseProcess(process).spec.artifact.dockerArchivePath).toBe('dist/application.tar');
   });
 
+  it('accepts named environment secret references and rejects inline values and excess bindings', () => {
+    const process = deploymentProcess();
+
+    Object.assign(process.spec.environments.staging, {
+      secrets: { APP_PASSWORD: { secret: 'DATABASE_PASSWORD' } },
+    });
+
+    expect(parseProcess(process).spec.environments.staging.secrets).toEqual({
+      APP_PASSWORD: { secret: 'DATABASE_PASSWORD' },
+    });
+
+    for (const secrets of [
+      { APP_PASSWORD: 'inline-value' },
+      { APP_PASSWORD: { secret: 'DATABASE_PASSWORD', value: 'inline-value' } },
+      { APP_PASSWORD: { secret: 'another-project/SECRET' } },
+      { '--env': { secret: 'DATABASE_PASSWORD' } },
+      Object.fromEntries(
+        Array.from({ length: 33 }, (_, index) => [
+          `SECRET_${index}`,
+          { secret: 'DATABASE_PASSWORD' },
+        ]),
+      ),
+    ]) {
+      Object.assign(process.spec.environments.staging, { secrets });
+      expect(() => parseProcess(process)).toThrow();
+    }
+  });
+
   it('rejects duplicate YAML keys, aliases, oversized documents and missing environments', () => {
     expect(() => parseProcess('kind: DeploymentProcess\nkind: DeploymentProcess')).toThrow(
       'Invalid YAML',

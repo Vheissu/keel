@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHmac, randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { DomainError } from '../../../packages/domain/src/index.js';
 
@@ -12,11 +12,17 @@ const envelope = z.object({
 export class CredentialVault {
   private key: Buffer;
 
-  constructor(encodedKey: string) {
+  constructor(
+    encodedKey: string,
+    private purpose: 'credentials' | 'deployment-secrets' = 'credentials',
+  ) {
     this.key = Buffer.from(encodedKey, 'base64');
 
     if (this.key.length !== 32 || this.key.toString('base64') !== encodedKey) {
-      throw new Error('KEEL_CREDENTIAL_KEY must be a base64-encoded 32-byte key.');
+      const variable =
+        purpose === 'credentials' ? 'KEEL_CREDENTIAL_KEY' : 'KEEL_DEPLOYMENT_SECRET_KEY';
+
+      throw new Error(`${variable} must be a base64-encoded 32-byte key.`);
     }
   }
 
@@ -24,7 +30,7 @@ export class CredentialVault {
     const nonce = randomBytes(12);
     const cipher = createCipheriv('aes-256-gcm', this.key, nonce);
 
-    cipher.setAAD(Buffer.from(`keel:credentials:v1:${organisation}:${connection}`));
+    cipher.setAAD(Buffer.from(`keel:${this.purpose}:v1:${organisation}:${connection}`));
 
     const ciphertext = Buffer.concat([
       cipher.update(JSON.stringify(value), 'utf8'),
@@ -52,7 +58,7 @@ export class CredentialVault {
 
       const decipher = createDecipheriv('aes-256-gcm', this.key, nonce, { authTagLength: 16 });
 
-      decipher.setAAD(Buffer.from(`keel:credentials:v1:${organisation}:${connection}`));
+      decipher.setAAD(Buffer.from(`keel:${this.purpose}:v1:${organisation}:${connection}`));
       decipher.setAuthTag(tag);
 
       const bytes = Buffer.concat([
@@ -68,5 +74,12 @@ export class CredentialVault {
         503,
       );
     }
+  }
+
+  fingerprint(value: string) {
+    // A database-only attacker cannot test guesses for a low-entropy secret using request hashes.
+    return createHmac('sha256', this.key)
+      .update(`keel:${this.purpose}:request:v1:${value}`)
+      .digest('hex');
   }
 }

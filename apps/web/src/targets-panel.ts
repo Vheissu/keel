@@ -206,11 +206,13 @@ export class TargetsPanel {
       DOCKER_FAILED:
         'Check the local Docker socket, available resources and target port before retrying.',
       HEALTH_FAILED: 'Check the application’s HTTP path and container port before retrying.',
+      SECRET_UNAVAILABLE:
+        'Check pinned secret versions and the gateway encryption key. Secret preflight failed before container replacement; submit a new request after resolving it.',
       RECONCILED:
         'Cleanup confirmed. The interrupted release did not succeed; request a new deployment when ready.',
       CANCELLED: 'Cancellation cleanup confirmed.',
       AGENT_UNAVAILABLE:
-        'The agent did not claim this deployment. Check its connection, certificate and draining state.',
+        'The agent did not claim this deployment. Check its connection, certificate, draining state and support for deployment secrets.',
     };
 
     return (

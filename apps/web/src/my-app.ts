@@ -10,6 +10,7 @@ const pages = [
   'Releases',
   'Deployments',
   'Environments',
+  'Secrets',
   'Targets',
   'Integrations',
   'Audit log',
@@ -24,6 +25,14 @@ interface Promotion {
   source_deployment_id: string | null;
   requires_approval: boolean;
   digest: string;
+  secret_bindings: { variable: string; name: string; version: number | null; available: boolean }[];
+}
+
+interface SecretBinding {
+  variable: string;
+  name: string;
+  version: number;
+  revoked_at: string | null;
 }
 
 export class MyApp {
@@ -57,6 +66,7 @@ export class MyApp {
   files: FileList | null = null;
   process = '';
   inspected: Release | null = null;
+  secretInspection: SecretBinding[] | null = null;
   private returnFocus: HTMLElement | null = null;
   private refreshRevision = 0;
   private hashChange = () => this.readHash();
@@ -118,6 +128,7 @@ export class MyApp {
       Releases: 'Immutable snapshots. The same artifact in every environment.',
       Deployments: 'Review approvals and track deployment requests.',
       Environments: 'Choose where releases go and who approves them.',
+      Secrets: 'Manage credentials for one project and environment at a time.',
       Targets: 'Private agents, target state and verified deployment results.',
       Integrations: 'Connect existing CI workflows and retain their build artifacts.',
       'Audit log': 'A record of changes and the people behind them.',
@@ -285,6 +296,7 @@ export class MyApp {
   }
 
   open(form: typeof this.form, release?: Release) {
+    this.secretInspection = null;
     this.form = form;
     this.error = '';
     this.inspected = null;
@@ -361,6 +373,7 @@ export class MyApp {
   }
 
   inspect(release: Release) {
+    this.secretInspection = null;
     this.inspected = release;
     this.form = '';
     this.returnFocus = document.activeElement as HTMLElement;
@@ -376,12 +389,35 @@ export class MyApp {
     this.promotionError = '';
     this.form = '';
     this.inspected = null;
+    this.secretInspection = null;
 
     if (wasOpen) {
       this.returnFocus?.focus();
     }
 
     this.returnFocus = null;
+  }
+
+  async inspectSecretVersions(deployment: Deployment) {
+    const focus = document.activeElement as HTMLElement;
+
+    this.busy = true;
+    this.error = '';
+
+    try {
+      this.secretInspection = await this.api.request<SecretBinding[]>(
+        `/deployments/${deployment.id}/secret-bindings`,
+      );
+
+      this.inspected = null;
+      this.form = '';
+      this.returnFocus = focus;
+      this.dialog.showModal();
+    } catch (error) {
+      this.handleError(error);
+    } finally {
+      this.busy = false;
+    }
   }
 
   // Escape fires `cancel`; prevent the native close so a busy request keeps the dialog open.

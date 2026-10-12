@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import type { Transaction } from '../../../packages/database/src/index.js';
 import {
@@ -44,6 +45,7 @@ interface Plan {
   policy_revision: number;
   expires_at: string;
   expired: boolean;
+  secret_bindings: { variable: string; name: string; version: number }[];
 }
 
 export class RollbackService {
@@ -294,6 +296,14 @@ export class RollbackService {
     await this.control.store.get(org, release.manifest.artifact.digest);
     const evidence = await this.control.delivery.evidence(tx, org, release, environment);
 
+    const secrets = await this.control.secrets.resolve(
+      tx,
+      org,
+      source.project_id,
+      environment.id,
+      config.secrets,
+    );
+
     return {
       environment,
       target,
@@ -301,6 +311,11 @@ export class RollbackService {
       release,
       config,
       evidence,
+      secrets: secrets.map(({ variable, secret }) => ({
+        variable,
+        name: secret.name,
+        version: secret.current_version,
+      })),
       agentName: matches.rows[0].agent_name,
     };
   }
@@ -332,10 +347,11 @@ export class RollbackService {
               target_id,
               expected_fence,
               policy_revision,
+              secret_bindings,
               created_by
             )
           VALUES
-            ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
           RETURNING
             *
         `,
@@ -350,6 +366,7 @@ export class RollbackService {
           target.id,
           source.fence,
           environment.policy_revision,
+          JSON.stringify(checked.secrets),
           p.actor_id,
         ],
       )
@@ -428,11 +445,12 @@ export class RollbackService {
       checked.environment.policy_revision !== plan.policy_revision ||
       checked.target.id !== plan.target_id ||
       checked.target.fence !== plan.expected_fence ||
-      checked.release.id !== plan.release_id
+      checked.release.id !== plan.release_id ||
+      !isDeepStrictEqual(checked.secrets, plan.secret_bindings)
     ) {
       throw new DomainError(
         'STALE_ROLLBACK',
-        'The target or policy changed. Review a new rollback plan.',
+        'The target, policy or secret versions changed. Review a new rollback plan.',
         409,
       );
     }
