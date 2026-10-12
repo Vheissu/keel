@@ -1,13 +1,12 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { requirePermission } from '../../../packages/domain/src/index.js';
 import {
   ExecutionService,
   agentInput,
   targetInput,
   certificateInput,
 } from './execution-service.js';
-import { sha256 } from './artifact-store.js';
+import { idempotentMutation } from './idempotent-mutation.js';
 
 export async function registerExecutionRoutes(api: FastifyInstance, execution: ExecutionService) {
   api.get('/execution', async (req) => {
@@ -76,54 +75,43 @@ export async function registerExecutionRoutes(api: FastifyInstance, execution: E
   });
 
   api.post('/agents', async (req) => {
-    requirePermission(req.principal, 'write');
     const input = agentInput.parse(req.body);
 
-    return execution.control.mutate(
-      req.principal,
-      String(req.headers['idempotency-key'] ?? ''),
-      sha256(`agent:${JSON.stringify(input)}`),
-      (tx) => execution.registerAgent(tx, req.principal, input),
+    return idempotentMutation(execution.control, req, `agent:${JSON.stringify(input)}`, (tx) =>
+      execution.registerAgent(tx, req.principal, input),
     );
   });
 
   api.post<{ Params: { id: string } }>('/agents/:id/state', async (req) => {
-    requirePermission(req.principal, 'write');
-
     const input = z
       .object({ state: z.enum(['active', 'draining', 'revoked']) })
       .strict()
       .parse(req.body);
 
-    return execution.control.mutate(
-      req.principal,
-      String(req.headers['idempotency-key'] ?? ''),
-      sha256(`agent:${req.params.id}:${input.state}`),
+    return idempotentMutation(
+      execution.control,
+      req,
+      `agent:${req.params.id}:${input.state}`,
       (tx) => execution.agentState(tx, req.principal, req.params.id, input.state),
     );
   });
 
   api.post<{ Params: { id: string } }>('/agents/:id/certificate', async (req) => {
-    requirePermission(req.principal, 'write');
     const input = certificateInput.parse(req.body);
 
-    return execution.control.mutate(
-      req.principal,
-      String(req.headers['idempotency-key'] ?? ''),
-      sha256(`agent-certificate:${req.params.id}:${JSON.stringify(input)}`),
+    return idempotentMutation(
+      execution.control,
+      req,
+      `agent-certificate:${req.params.id}:${JSON.stringify(input)}`,
       (tx) => execution.replaceCertificate(tx, req.principal, req.params.id, input),
     );
   });
 
   api.post('/targets', async (req) => {
-    requirePermission(req.principal, 'write');
     const input = targetInput.parse(req.body);
 
-    return execution.control.mutate(
-      req.principal,
-      String(req.headers['idempotency-key'] ?? ''),
-      sha256(`target:${JSON.stringify(input)}`),
-      (tx) => execution.registerTarget(tx, req.principal, input),
+    return idempotentMutation(execution.control, req, `target:${JSON.stringify(input)}`, (tx) =>
+      execution.registerTarget(tx, req.principal, input),
     );
   });
 }

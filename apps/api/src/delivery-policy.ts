@@ -1,12 +1,16 @@
 import { z } from 'zod';
-import type { Transaction } from '../../../packages/database/src/index.js';
+import {
+  readOnlySnapshot,
+  transaction,
+  type Transaction,
+} from '../../../packages/database/src/index.js';
 import {
   DomainError,
   type Environment,
   type Principal,
   type Release,
 } from '../../../packages/domain/src/index.js';
-import { parseProcess } from '../../../packages/deployment-schema/src/index.js';
+import { parseProcess, requiresApproval } from '../../../packages/deployment-schema/src/index.js';
 import type { ControlPlane } from './control-plane.js';
 
 export const policyInput = z
@@ -132,67 +136,60 @@ export class DeliveryPolicy {
   }
 
   async inspect(org: string, releaseId: string, environmentId: string) {
-    const tx = await this.control.db.connect();
+    return transaction(
+      this.control.db,
+      async (tx) => {
+        const release = (
+          await tx.query<Release>('SELECT * FROM releases WHERE organisation_id=$1 AND id=$2', [
+            org,
+            releaseId,
+          ])
+        ).rows[0];
 
-    try {
-      await tx.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+        const environment = (
+          await tx.query<Environment>(
+            'SELECT * FROM environments WHERE organisation_id=$1 AND id=$2',
+            [org, environmentId],
+          )
+        ).rows[0];
 
-      const release = (
-        await tx.query<Release>('SELECT * FROM releases WHERE organisation_id=$1 AND id=$2', [
-          org,
-          releaseId,
-        ])
-      ).rows[0];
-
-      const environment = (
-        await tx.query<Environment>(
-          'SELECT * FROM environments WHERE organisation_id=$1 AND id=$2',
-          [org, environmentId],
-        )
-      ).rows[0];
-
-      if (!release || !environment) {
-        throw new DomainError('NOT_FOUND', 'Release or environment not found.', 404);
-      }
-
-      const config = parseProcess(release.manifest.process).spec.environments[environment.slug];
-
-      if (!config) {
-        throw new DomainError(
-          'ENVIRONMENT_NOT_CONFIGURED',
-          'This release has no process for the selected environment.',
-        );
-      }
-
-      let evidence: string | null = null;
-      let reason: string | null = null;
-
-      try {
-        evidence = await this.evidence(tx, org, release, environment);
-      } catch (error) {
-        if (!(error instanceof DomainError) || error.code !== 'PROMOTION_REQUIRED') {
-          throw error;
+        if (!release || !environment) {
+          throw new DomainError('NOT_FOUND', 'Release or environment not found.', 404);
         }
 
-        reason = error.message;
-      }
+        const config = parseProcess(release.manifest.process).spec.environments[environment.slug];
 
-      await tx.query('COMMIT');
+        if (!config) {
+          throw new DomainError(
+            'ENVIRONMENT_NOT_CONFIGURED',
+            'This release has no process for the selected environment.',
+          );
+        }
 
-      return {
-        eligible: !reason,
-        reason,
-        policy_revision: environment.policy_revision,
-        promotion_from_environment_id: environment.promotion_from_environment_id,
-        source_deployment_id: evidence,
-        requires_approval: environment.requires_approval || !!config.requiresApproval,
-        digest: release.manifest.artifact.digest,
-      };
-    } catch (error) {
-      await tx.query('ROLLBACK');
-      throw error;
-    } finally {
-      tx.release();
-    }
+        let evidence: string | null = null;
+        let reason: string | null = null;
+
+        try {
+          evidence = await this.evidence(tx, org, release, environment);
+        } catch (error) {
+          if (!(error instanceof DomainError) || error.code !== 'PROMOTION_REQUIRED') {
+            throw error;
+          }
+
+          reason = error.message;
+        }
+
+        return {
+          eligible: !reason,
+          reason,
+          policy_revision: environment.policy_revision,
+          promotion_from_environment_id: environment.promotion_from_environment_id,
+          source_deployment_id: evidence,
+          requires_approval: requiresApproval(environment, config),
+          digest: release.manifest.artifact.digest,
+        };
+      },
+      readOnlySnapshot,
+    );
   }
 }

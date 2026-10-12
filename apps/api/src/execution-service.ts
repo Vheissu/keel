@@ -1,12 +1,15 @@
 import { randomUUID, randomBytes } from 'node:crypto';
 import { z } from 'zod';
-import type { Transaction } from '../../../packages/database/src/index.js';
+import { transaction, type Transaction } from '../../../packages/database/src/index.js';
 import {
   DomainError,
   type Deployment,
   type Principal,
 } from '../../../packages/domain/src/index.js';
-import { parseProcess } from '../../../packages/deployment-schema/src/index.js';
+import {
+  parseProcess,
+  supportsDockerRecreate,
+} from '../../../packages/deployment-schema/src/index.js';
 import { ControlPlane } from './control-plane.js';
 import { sha256 } from './artifact-store.js';
 
@@ -86,24 +89,6 @@ const terminal = new Set(['succeeded', 'failed', 'cancelled', 'rejected']);
 
 export class ExecutionService {
   constructor(public control: ControlPlane) {}
-
-  async transaction<T>(work: (tx: Transaction) => Promise<T>): Promise<T> {
-    const tx = await this.control.db.connect();
-
-    try {
-      await tx.query('BEGIN');
-      const value = await work(tx);
-
-      await tx.query('COMMIT');
-
-      return value;
-    } catch (error) {
-      await tx.query('ROLLBACK');
-      throw error;
-    } finally {
-      tx.release();
-    }
-  }
 
   async registerAgent(tx: Transaction, p: Principal, input: z.infer<typeof agentInput>) {
     const result = await tx.query(
@@ -423,7 +408,7 @@ export class ExecutionService {
 
   // Temporal retries this transaction. Assignment and state transitions are idempotent.
   async tick(org: string, id: string): Promise<boolean> {
-    return this.transaction(async (tx) => {
+    return transaction(this.control.db, async (tx) => {
       const d = (
         await tx.query<Deployment & { queue_expired: boolean }>(
           `
@@ -471,7 +456,8 @@ export class ExecutionService {
               UPDATE deployment_attempts
               SET
                 state = 'failed',
-                result_code = 'AGENT_UNAVAILABLE'
+                result_code = 'AGENT_UNAVAILABLE',
+                updated_at = clock_timestamp()
               WHERE
                 id = $1
             `,
@@ -541,12 +527,7 @@ export class ExecutionService {
       const process = parseProcess(release.manifest.process);
       const config = process.spec.environments[env.slug];
 
-      if (
-        config.strategy !== 'recreate' ||
-        !process.spec.artifact.dockerImageId ||
-        !config.verify ||
-        Object.keys(config.targetSelector.labels).length === 0
-      ) {
+      if (!supportsDockerRecreate(process, config)) {
         await this.event(tx, d, 'failed', 'UNSUPPORTED_PROCESS');
 
         return true;
@@ -640,7 +621,7 @@ export class ExecutionService {
   }
 
   async claim(agent: AgentIdentity) {
-    return this.transaction(async (tx) => {
+    return transaction(this.control.db, async (tx) => {
       await this.lockAgent(tx, agent);
 
       // Lock deployment before attempt everywhere, including cancellation and completion.
@@ -868,7 +849,7 @@ export class ExecutionService {
   }
 
   async progress(agent: AgentIdentity, input: z.infer<typeof progressInput>) {
-    return this.transaction(async (tx) => {
+    return transaction(this.control.db, async (tx) => {
       const { d, a } = await this.lockedLease(tx, agent, input);
 
       if (
@@ -900,7 +881,7 @@ export class ExecutionService {
   }
 
   async heartbeat(agent: AgentIdentity, input: Lease) {
-    return this.transaction(async (tx) => {
+    return transaction(this.control.db, async (tx) => {
       const { d, a } = await this.lockedLease(tx, agent, input);
 
       await tx.query(
@@ -926,7 +907,7 @@ export class ExecutionService {
   }
 
   async download(agent: AgentIdentity, input: Lease) {
-    const digest = await this.transaction(async (tx) => {
+    const digest = await transaction(this.control.db, async (tx) => {
       const { d, a } = await this.lockedLease(tx, agent, input);
 
       if (d.status !== 'running' || a.state !== 'running') {
@@ -945,7 +926,7 @@ export class ExecutionService {
   }
 
   async complete(agent: AgentIdentity, input: z.infer<typeof resultInput>) {
-    return this.transaction(async (tx) => {
+    return transaction(this.control.db, async (tx) => {
       const { d, a } = await this.lockedLease(tx, agent, input);
 
       if (

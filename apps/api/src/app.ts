@@ -2,6 +2,11 @@ import Fastify, { type FastifyRequest } from 'fastify';
 import rateLimit from '@fastify/rate-limit';
 import { z } from 'zod';
 import {
+  readOnlySnapshot,
+  transaction,
+  type Transaction,
+} from '../../../packages/database/src/index.js';
+import {
   DomainError,
   requirePermission,
   type Principal,
@@ -23,6 +28,7 @@ import { IntegrationService } from './integration-service.js';
 import { registerIntegrationRoutes } from './integration-routes.js';
 import { registerBitbucketPublishing } from './bitbucket-publishing.js';
 import { registerGitHubWebhook } from './github-webhook.js';
+import { idempotentMutation } from './idempotent-mutation.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -120,74 +126,72 @@ export async function createApp(
         requirePermission(req.principal, 'read');
       });
 
-      const mutation = async (
+      const mutation = <T>(
         req: FastifyRequest,
-        work: Parameters<ControlPlane['mutate']>[3],
+        work: (tx: Transaction) => Promise<T>,
         permission: 'write' | 'approve' = 'write',
       ) => {
-        requirePermission(req.principal, permission);
-
         const body = Buffer.isBuffer(req.body)
           ? sha256(req.body)
           : JSON.stringify(req.body ?? null);
 
-        return service.mutate(
-          req.principal,
-          String(req.headers['idempotency-key'] ?? ''),
-          sha256(`${req.method}:${req.url}:${body}`),
+        return idempotentMutation(
+          service,
+          req,
+          `${req.method}:${req.url}:${body}`,
           work,
+          permission,
         );
       };
 
       api.get('/snapshot', async (req) => {
         const p = req.principal;
-        const client = await service.db.connect();
 
-        try {
-          await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+        return transaction(
+          service.db,
+          async (tx) => {
+            const result: Record<string, unknown> = {
+              principal: p,
+              execution: 'agent-protocol-available',
+              limit: 200,
+            };
 
-          const result: Record<string, unknown> = {
-            principal: p,
-            execution: 'agent-protocol-available',
-            limit: 200,
-          };
+            result.organisation = (
+              await tx.query('SELECT * FROM organisations WHERE id=$1', [p.organisation_id])
+            ).rows[0];
 
-          result.organisation = (
-            await client.query('SELECT * FROM organisations WHERE id=$1', [p.organisation_id])
-          ).rows[0];
+            const totals: Record<string, number> = {};
 
-          const totals: Record<string, number> = {};
+            for (const table of [
+              'projects',
+              'environments',
+              'artifacts',
+              'releases',
+              'deployments',
+              'audit_events',
+            ]) {
+              result[table === 'audit_events' ? 'audit' : table] = (
+                await tx.query(
+                  `SELECT * FROM ${table} WHERE organisation_id=$1 ORDER BY created_at DESC,id DESC LIMIT 200`,
+                  [p.organisation_id],
+                )
+              ).rows;
 
-          for (const table of [
-            'projects',
-            'environments',
-            'artifacts',
-            'releases',
-            'deployments',
-            'audit_events',
-          ]) {
-            result[table === 'audit_events' ? 'audit' : table] = (
-              await client.query(
-                `SELECT * FROM ${table} WHERE organisation_id=$1 ORDER BY created_at DESC,id DESC LIMIT 200`,
-                [p.organisation_id],
-              )
-            ).rows;
+              totals[table] = Number(
+                (
+                  await tx.query(`SELECT count(*) FROM ${table} WHERE organisation_id=$1`, [
+                    p.organisation_id,
+                  ])
+                ).rows[0].count,
+              );
+            }
 
-            totals[table] = Number(
+            result.totals = totals;
+
+            result.awaiting_approval = Number(
               (
-                await client.query(`SELECT count(*) FROM ${table} WHERE organisation_id=$1`, [
-                  p.organisation_id,
-                ])
-              ).rows[0].count,
-            );
-          }
-
-          result.totals = totals;
-
-          result.awaiting_approval = Number(
-            (
-              await client.query(
-                `
+                await tx.query(
+                  `
                   SELECT
                     count(*)
                   FROM
@@ -196,20 +200,15 @@ export async function createApp(
                     organisation_id = $1
                     AND status = 'awaiting_approval'
                 `,
-                [p.organisation_id],
-              )
-            ).rows[0].count,
-          );
+                  [p.organisation_id],
+                )
+              ).rows[0].count,
+            );
 
-          await client.query('COMMIT');
-
-          return result;
-        } catch (error) {
-          await client.query('ROLLBACK');
-          throw error;
-        } finally {
-          client.release();
-        }
+            return result;
+          },
+          readOnlySnapshot,
+        );
       });
 
       await registerIntegrationRoutes(api, integrations);

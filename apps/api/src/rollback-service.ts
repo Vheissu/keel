@@ -8,7 +8,11 @@ import {
   type Principal,
   type Release,
 } from '../../../packages/domain/src/index.js';
-import { parseProcess } from '../../../packages/deployment-schema/src/index.js';
+import {
+  parseProcess,
+  requiresApproval,
+  supportsDockerRecreate,
+} from '../../../packages/deployment-schema/src/index.js';
 import type { ControlPlane } from './control-plane.js';
 
 export const rollbackPlanInput = z
@@ -252,13 +256,7 @@ export class RollbackService {
     const process = parseProcess(release.manifest.process);
     const config = process.spec.environments[environment.slug];
 
-    if (
-      !config ||
-      config.strategy !== 'recreate' ||
-      !config.verify ||
-      !process.spec.artifact.dockerImageId ||
-      !Object.keys(config.targetSelector.labels).length
-    ) {
+    if (!supportsDockerRecreate(process, config)) {
       throw new DomainError(
         'UNSUPPORTED_PROCESS',
         'This retained release does not support the Docker recreate executor.',
@@ -373,10 +371,10 @@ export class RollbackService {
       target_name: target.name,
       agent_name: checked.agentName,
       environment_name: environment.name,
-      requires_approval: environment.requires_approval || !!checked.config.requiresApproval,
+      requires_approval: requiresApproval(environment, checked.config),
       promotion_source_deployment_id: checked.evidence,
       strategy: 'recreate',
-      health_path: checked.config.verify!.http.path,
+      health_path: checked.config.verify.http.path,
       warning:
         'This redeploys application code and causes downtime. It does not restore databases, undo migrations or reverse external side effects. Check compatibility before proceeding.',
     };

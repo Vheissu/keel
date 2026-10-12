@@ -1,12 +1,8 @@
 import { WorkflowExecutionAlreadyStartedError, type Client } from '@temporalio/client';
-import type { Database } from '../../../packages/database/src/index.js';
+import { transaction, type Database } from '../../../packages/database/src/index.js';
 
 export async function dispatchOutbox(db: Database, client: Client, taskQueue: string) {
-  const tx = await db.connect();
-
-  try {
-    await tx.query('BEGIN');
-
+  return transaction(db, async (tx) => {
     const rows = await tx.query(`
       SELECT
         *
@@ -43,13 +39,6 @@ export async function dispatchOutbox(db: Database, client: Client, taskQueue: st
       await tx.query('UPDATE outbox SET delivered_at=clock_timestamp() WHERE id=$1', [row.id]);
     }
 
-    await tx.query('COMMIT');
-
     return rows.rowCount;
-  } catch (error) {
-    await tx.query('ROLLBACK');
-    throw error;
-  } finally {
-    tx.release();
-  }
+  });
 }

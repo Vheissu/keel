@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual, randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { transaction } from '../../../packages/database/src/index.js';
 import { DomainError, type Principal } from '../../../packages/domain/src/index.js';
 import { sha256 } from './artifact-store.js';
 import { IntegrationService, type ProviderConnectionRecord } from './integration-service.js';
@@ -97,13 +98,10 @@ export async function registerGitHubWebhook(app: FastifyInstance, service: Integ
           }
         }
 
-        const tx = await service.control.db.connect();
         const hash = sha256(req.body);
         const outcome = run ? 'accepted' : 'ignored';
 
-        try {
-          await tx.query('BEGIN');
-
+        const delivery = await transaction(service.control.db, async (tx) => {
           // Disabling or rotating a connection invalidates requests verified with its old credentials.
           const current = await tx.query(
             `
@@ -185,9 +183,7 @@ export async function registerGitHubWebhook(app: FastifyInstance, service: Integ
               );
             }
 
-            await tx.query('COMMIT');
-
-            return reply.code(202).send({ outcome: previous.outcome, duplicate: true });
+            return { outcome: previous.outcome, duplicate: true };
           }
 
           if (run) {
@@ -204,15 +200,10 @@ export async function registerGitHubWebhook(app: FastifyInstance, service: Integ
             });
           }
 
-          await tx.query('COMMIT');
+          return { outcome, duplicate: false };
+        });
 
-          return reply.code(202).send({ outcome, duplicate: false });
-        } catch (error) {
-          await tx.query('ROLLBACK');
-          throw error;
-        } finally {
-          tx.release();
-        }
+        return reply.code(202).send(delivery);
       },
     );
   });

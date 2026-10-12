@@ -1,8 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { requirePermission } from '../../../packages/domain/src/index.js';
+import { transaction } from '../../../packages/database/src/index.js';
 import type { ControlPlane } from './control-plane.js';
-import { sha256 } from './artifact-store.js';
+import { idempotentMutation } from './idempotent-mutation.js';
 import { policyInput } from './delivery-policy.js';
 import { RollbackService, rollbackPlanInput, rollbackRequestInput } from './rollback-service.js';
 
@@ -21,58 +21,42 @@ export async function registerDeliveryRoutes(api: FastifyInstance, control: Cont
   });
 
   api.post<{ Params: { id: string } }>('/environments/:id/promotion-policy', async (req) => {
-    requirePermission(req.principal, 'approve');
     const id = uuid.parse(req.params.id);
     const input = policyInput.parse(req.body);
 
-    return control.mutate(
-      req.principal,
-      String(req.headers['idempotency-key'] ?? ''),
-      sha256(`promotion-policy:${id}:${JSON.stringify(input)}`),
+    return idempotentMutation(
+      control,
+      req,
+      `promotion-policy:${id}:${JSON.stringify(input)}`,
       (tx) => control.delivery.update(tx, req.principal, id, input),
+      'approve',
     );
   });
 
   api.get<{ Params: { id: string } }>('/deployments/:id/rollback-candidates', async (req) => {
     const id = uuid.parse(req.params.id);
-    const tx = await control.db.connect();
 
-    try {
-      await tx.query('BEGIN');
-      const result = await rollback.candidates(tx, req.principal.organisation_id, id);
-
-      await tx.query('COMMIT');
-
-      return result;
-    } catch (error) {
-      await tx.query('ROLLBACK');
-      throw error;
-    } finally {
-      tx.release();
-    }
+    return transaction(control.db, (tx) =>
+      rollback.candidates(tx, req.principal.organisation_id, id),
+    );
   });
 
   api.post('/rollback-plans', async (req) => {
-    requirePermission(req.principal, 'write');
     const input = rollbackPlanInput.parse(req.body);
 
-    return control.mutate(
-      req.principal,
-      String(req.headers['idempotency-key'] ?? ''),
-      sha256(`rollback-plan:${JSON.stringify(input)}`),
-      (tx) => rollback.create(tx, req.principal, input),
+    return idempotentMutation(control, req, `rollback-plan:${JSON.stringify(input)}`, (tx) =>
+      rollback.create(tx, req.principal, input),
     );
   });
 
   api.post<{ Params: { id: string } }>('/rollback-plans/:id/request', async (req) => {
-    requirePermission(req.principal, 'write');
     const id = uuid.parse(req.params.id);
     const input = rollbackRequestInput.parse(req.body);
 
-    return control.mutate(
-      req.principal,
-      String(req.headers['idempotency-key'] ?? ''),
-      sha256(`rollback-request:${id}:${JSON.stringify(input)}`),
+    return idempotentMutation(
+      control,
+      req,
+      `rollback-request:${id}:${JSON.stringify(input)}`,
       (tx) => rollback.request(tx, req.principal, id),
     );
   });

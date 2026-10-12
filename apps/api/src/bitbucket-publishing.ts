@@ -1,6 +1,7 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { transaction } from '../../../packages/database/src/index.js';
 import { DomainError, type Principal } from '../../../packages/domain/src/index.js';
 import type { BitbucketRun } from '../../../packages/integrations/src/bitbucket-pipelines.js';
 import { sha256 } from './artifact-store.js';
@@ -87,25 +88,23 @@ export async function registerBitbucketPublishing(
         digest: req.headers['x-artifact-sha256'],
       });
 
-      if (!Buffer.isBuffer(req.body) || !req.body.length) {
+      const bytes = req.body;
+
+      if (!Buffer.isBuffer(bytes) || !bytes.length) {
         throw new DomainError(
           'INVALID_ARTIFACT',
           'Send a non-empty artifact as application/octet-stream.',
         );
       }
 
-      if (sha256(req.body) !== input.digest) {
+      if (sha256(bytes) !== input.digest) {
         throw new DomainError(
           'DIGEST_MISMATCH',
           'Artifact bytes do not match the supplied SHA-256 digest.',
         );
       }
 
-      const tx = await service.control.db.connect();
-
-      try {
-        await tx.query('BEGIN');
-
+      const submission = await transaction(service.control.db, async (tx) => {
         // Serialise submissions for this connection, including duplicate pipeline uploads.
         const current = await tx.query(
           `
@@ -159,11 +158,7 @@ export async function registerBitbucketPublishing(
             );
           }
 
-          await tx.query('COMMIT');
-
-          return reply
-            .code(202)
-            .send({ id: previous.id, status: previous.status, duplicate: true });
+          return { id: previous.id, status: previous.status, duplicate: true };
         }
 
         const adapter = service.bitbucketAdapter(connection);
@@ -180,7 +175,7 @@ export async function registerBitbucketPublishing(
           );
         }
 
-        await service.control.store.put(connection.organisation_id, input.digest, req.body);
+        await service.control.store.put(connection.organisation_id, input.digest, bytes);
         const id = randomUUID();
 
         const result = await tx.query(
@@ -231,15 +226,10 @@ export async function registerBitbucketPublishing(
           authentication: 'connection-publish-secret',
         });
 
-        await tx.query('COMMIT');
+        return { ...result.rows[0], duplicate: false };
+      });
 
-        return reply.code(202).send({ ...result.rows[0], duplicate: false });
-      } catch (error) {
-        await tx.query('ROLLBACK');
-        throw error;
-      } finally {
-        tx.release();
-      }
+      return reply.code(202).send(submission);
     },
   );
 }

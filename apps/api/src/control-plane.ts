@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { type Database, type Transaction } from '../../../packages/database/src/index.js';
+import {
+  transaction,
+  type Database,
+  type Transaction,
+} from '../../../packages/database/src/index.js';
 import {
   DomainError,
   approveDeployment,
@@ -10,7 +14,7 @@ import {
   type Environment,
   type Deployment,
 } from '../../../packages/domain/src/index.js';
-import { parseProcess } from '../../../packages/deployment-schema/src/index.js';
+import { parseProcess, requiresApproval } from '../../../packages/deployment-schema/src/index.js';
 import { sha256, type ArtifactStore } from './artifact-store.js';
 import { DeliveryPolicy } from './delivery-policy.js';
 
@@ -80,11 +84,7 @@ export class ControlPlane {
       );
     }
 
-    const tx = await this.db.connect();
-
-    try {
-      await tx.query('BEGIN');
-
+    return transaction(this.db, async (tx) => {
       await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
         `${principal.organisation_id}:${principal.actor_id}:${key}`,
       ]);
@@ -112,9 +112,7 @@ export class ControlPlane {
           );
         }
 
-        await tx.query('COMMIT');
-
-        return previous.rows[0].response;
+        return previous.rows[0].response as T;
       }
 
       const result = await work(tx);
@@ -135,15 +133,8 @@ export class ControlPlane {
         [principal.organisation_id, principal.actor_id, key, fingerprint, JSON.stringify(result)],
       );
 
-      await tx.query('COMMIT');
-
       return result;
-    } catch (error) {
-      await tx.query('ROLLBACK');
-      throw error;
-    } finally {
-      tx.release();
-    }
+    });
   }
 
   async audit(
@@ -405,7 +396,7 @@ export class ControlPlane {
     const policy = {
       revision: environment.policy_revision,
       promotion_from_environment_id: environment.promotion_from_environment_id,
-      requires_approval: environment.requires_approval || !!config.requiresApproval,
+      requires_approval: requiresApproval(environment, config),
     };
 
     const status = policy.requires_approval ? 'awaiting_approval' : 'queued';

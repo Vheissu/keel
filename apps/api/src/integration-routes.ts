@@ -1,8 +1,8 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { requirePermission } from '../../../packages/domain/src/index.js';
+import type { Transaction } from '../../../packages/database/src/index.js';
 import { bitbucketConnectionInput, bitbucketCredentialsInput } from './bitbucket-input.js';
-import { sha256 } from './artifact-store.js';
+import { idempotentMutation } from './idempotent-mutation.js';
 import {
   adapterConnection,
   connectionColumns,
@@ -14,16 +14,13 @@ import {
 } from './integration-service.js';
 
 export async function registerIntegrationRoutes(api: FastifyInstance, service: IntegrationService) {
-  const mutate = (req: FastifyRequest, work: Parameters<typeof service.control.mutate>[3]) => {
-    requirePermission(req.principal, 'write');
-
-    return service.control.mutate(
-      req.principal,
-      String(req.headers['idempotency-key'] ?? ''),
-      sha256(`${req.method}:${req.url}:${JSON.stringify(req.body ?? null)}`),
+  const mutate = <T>(req: FastifyRequest, work: (tx: Transaction) => Promise<T>) =>
+    idempotentMutation(
+      service.control,
+      req,
+      `${req.method}:${req.url}:${JSON.stringify(req.body ?? null)}`,
       work,
     );
-  };
 
   api.get('/integrations', async (req) => {
     const connections = await service.control.db.query(

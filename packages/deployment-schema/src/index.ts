@@ -94,3 +94,26 @@ export function parseProcess(source: unknown): DeploymentProcess {
 
   return result.data;
 }
+
+export type EnvironmentProcess = DeploymentProcess['spec']['environments'][string];
+
+export function requiresApproval(
+  environment: { requires_approval: boolean },
+  config: EnvironmentProcess,
+) {
+  return environment.requires_approval || !!config.requiresApproval;
+}
+
+// The Docker agent only runs recreate deployments of a pinned image with HTTP verification.
+export function supportsDockerRecreate(
+  process: DeploymentProcess,
+  config: EnvironmentProcess | undefined,
+): config is EnvironmentProcess & { verify: NonNullable<EnvironmentProcess['verify']> } {
+  return (
+    !!config &&
+    config.strategy === 'recreate' &&
+    !!config.verify &&
+    !!process.spec.artifact.dockerImageId &&
+    Object.keys(config.targetSelector.labels).length > 0
+  );
+}
