@@ -329,9 +329,7 @@ export class ControlPlane {
       [eventId, p.organisation_id, deployment.id, deployment.status, p.actor_id],
     );
 
-    if (deployment.kind !== 'runbook') {
-      await enqueueNotifications(tx, deployment, eventId);
-    }
+    await enqueueNotifications(tx, deployment, eventId);
 
     const eventType = deployment.kind === 'runbook' ? 'runbook' : 'deployment';
 

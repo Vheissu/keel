@@ -1,6 +1,6 @@
-# Deployment notifications
+# Notifications
 
-Keel sends signed HTTPS webhooks when a deployment enters a selected state. A destination can cover the whole workspace or one project and/or environment. The event and its delivery jobs commit in the same PostgreSQL transaction. New destinations receive future events only.
+Keel sends signed HTTPS webhooks when a deployment or runbook run enters a selected state. A destination can cover the whole workspace or one project and/or environment, and chooses its event sources: deployments (including rollbacks), runbook runs or both. The event and its delivery jobs commit in the same PostgreSQL transaction. New destinations receive future events only.
 
 The Notifications screen shows destinations, delivery status, attempt history and the next retry time. Use **Refresh notifications** to fetch current state. Operators can create and disable destinations or retry a failed delivery; readers can inspect metadata. Native Slack, Teams, email and incident-management adapters are not implemented. A webhook receiver can translate Keel events for those services.
 
@@ -24,7 +24,8 @@ Create a destination in **Notifications**, or save a CLI configuration:
   "name": "Production alerts",
   "url": "https://alerts.example.com/keel",
   "environment_id": "<production-environment-uuid>",
-  "statuses": ["awaiting_approval", "reconciliation_required", "succeeded", "failed"]
+  "statuses": ["awaiting_approval", "reconciliation_required", "succeeded", "failed"],
+  "work_kinds": ["deployment", "runbook"]
 }
 ```
 
@@ -38,9 +39,9 @@ npm run keel -- notification retry <delivery-uuid>
 npm run keel -- notification disable <endpoint-uuid> --revision 1
 ```
 
-Optional `project_id` and `environment_id` must belong to the workspace. Omit them, or use JSON `null`, to include all projects or environments. Supported states are `awaiting_approval`, `queued`, `running`, `cancel_requested`, `reconciliation_required`, `succeeded`, `failed`, `cancelled` and `rejected`.
+Optional `project_id` and `environment_id` must belong to the workspace. Omit them, or use JSON `null`, to include all projects or environments. Supported states are `awaiting_approval`, `queued`, `running`, `cancel_requested`, `reconciliation_required`, `succeeded`, `failed`, `cancelled` and `rejected`; they apply to every selected source. `work_kinds` accepts `deployment` and `runbook` and defaults to `["deployment"]`, so receivers written for deployment payloads never receive runbook events unless the destination opts in. Filter delivery history by run with `--deployment <run-uuid>`.
 
-Destination URLs and signing secrets are encrypted with AES-256-GCM under a notification-specific context. Metadata responses expose the origin, never the URL path, query or signing secret. Keep the secret in the receiver too; Keel has no value-read endpoint. URLs, secrets, scopes and state rules are immutable. Disable a destination and create a replacement to change them. Disable takes a revision to reject stale edits, cancels pending retries and stops new events. An HTTP request already in progress may finish. Re-enabling receives new events; cancelled jobs require an explicit retry.
+Destination URLs and signing secrets are encrypted with AES-256-GCM under a notification-specific context. Metadata responses expose the origin, never the URL path, query or signing secret. Keep the secret in the receiver too; Keel has no value-read endpoint. URLs, secrets, scopes, sources and state rules are immutable. Disable a destination and create a replacement to change them. Disable takes a revision to reject stale edits, cancels pending retries and stops new events. An HTTP request already in progress may finish. Re-enabling receives new events; cancelled jobs require an explicit retry.
 
 ## Receiver contract
 
@@ -84,7 +85,32 @@ Payloads have this shape:
 }
 ```
 
-This is an event-time snapshot. `kind` can also be `rollback`; `result_code` can be null. Payloads exclude deployment secrets, process manifests, credentials and logs. Delivery is at least once and may arrive out of order. Use the event timestamp and event ID when building a history; fetch authoritative deployment state when a receiver needs its current status.
+Runbook run events use `runbook.<state>` types and a `runbook_run` object instead of `deployment`:
+
+```json
+{
+  "schema_version": 1,
+  "event_id": "<event-uuid>",
+  "type": "runbook.succeeded",
+  "occurred_at": "2026-10-13T00:00:00+00:00",
+  "runbook_run": {
+    "id": "<run-uuid>",
+    "status": "succeeded",
+    "project_id": "<project-uuid>",
+    "project_name": "Customer portal",
+    "environment_id": "<environment-uuid>",
+    "environment_name": "Production",
+    "runbook_id": "<runbook-uuid>",
+    "runbook_name": "Rotate caches",
+    "runbook_slug": "rotate-caches",
+    "runbook_version_id": "<version-uuid>",
+    "runbook_version": 3,
+    "result_code": null
+  }
+}
+```
+
+Dispatch on `type` and ignore unknown types. Each payload is an event-time snapshot. Deployment `kind` can also be `rollback`; `result_code` can be null in either shape. Runbook payloads exclude task commands, reviewed input values and secret bindings. Payloads exclude deployment secrets, process manifests, credentials and logs. Delivery is at least once and may arrive out of order. Use the event timestamp and event ID when building a history; fetch authoritative deployment or run state when a receiver needs its current status.
 
 ## Retries and recovery
 
@@ -94,4 +120,4 @@ Network failures, HTTP 408, 425, 429 and 5xx responses retry up to six attempts.
 
 The history records HTTP status and fixed result codes. Response bodies and network error text are not stored. `delivered` means the receiver returned a 2xx; it does not prove a downstream chat or email was received. `LEASE_EXPIRED` means Keel cannot establish whether that attempt reached the receiver.
 
-A stopped worker leaves queued work in PostgreSQL and resumes it after restart. Notification failures do not change deployment outcomes. Cold backups include notification configuration, encrypted credentials, jobs and attempts. Restore verifies that destination credentials can be decrypted, disables all destinations and cancels unfinished jobs with `RESTORE_QUARANTINE`. Reapply the origin allowlist, review delivery history and enable destinations deliberately before retrying any old job. Receivers should retain their deduplication records across a Keel restore.
+A stopped worker leaves queued work in PostgreSQL and resumes it after restart. Notification failures do not change deployment or runbook outcomes. Cold backups include notification configuration, encrypted credentials, jobs and attempts. Restore verifies that destination credentials can be decrypted, disables all destinations and cancels unfinished jobs with `RESTORE_QUARANTINE`. Reapply the origin allowlist, review delivery history and enable destinations deliberately before retrying any old job. Receivers should retain their deduplication records across a Keel restore.

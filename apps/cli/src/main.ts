@@ -128,7 +128,8 @@ Bitbucket uses KEEL_BITBUCKET_TOKEN and KEEL_PUBLISH_SECRET; publishing needs on
 For retryable CI steps, pass a stable --idempotency-key (8–128 characters).
 List resources: projects, environments, artifacts, releases, deployments, audit, agents, targets, attempts, connections, imports, secrets, notification-endpoints, notification-deliveries, notification-attempts, runbooks, runbook-versions, runbook-runs.
 Use --project, --environment, --connection, --agent, --state or --status where the resource supports that filter.
-Notification filters: --endpoint, --deployment, --delivery, --status. Creation reads KEEL_NOTIFICATION_SECRET.
+Notification filters: --endpoint, --deployment (a deployment or runbook run ID), --delivery, --status.
+Creation reads KEEL_NOTIFICATION_SECRET. Add "work_kinds": ["deployment", "runbook"] to the config for runbook events.
 Results are JSON. Review a rollback plan before requesting it. Approvals remain available in the UI and API.
 Secret writes require manage_secrets permission. Pipe the exact single-line value on stdin, with no trailing newline.
 Secret values are never returned. Revocation cannot recall credentials already delivered to a container.

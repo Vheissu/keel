@@ -63,10 +63,11 @@ The control-plane foundation, GitHub ingestion, Bitbucket publishing and local/S
 - Independent runbook definitions with immutable versions, fixed bounded commands and expiring reviews of exact targets, policy and secret versions.
 - Separate approvals, shared environment locks, capability-gated agent execution, task-only cleanup and UI/CLI history without application promotion evidence.
 - Typed runbook inputs with explicit bounds and defaults, immutable reviewed values, matching approval/history views and literal environment delivery to capable local and SSH agents.
+- Opt-in runbook run notifications through the signed webhook service, with metadata-only payloads, per-destination event sources and event types in delivery history.
 
 ## Next increment
 
-Add runbook result notifications through the existing signed webhook delivery service. Scheduling, multi-step runbooks, SAML, SCIM, non-container SSH deployments, multi-host strategies and automated rollback remain later work.
+Add scheduled runbook runs that reuse reviewed versions, targets and approval policy. Multi-step runbooks, SAML, SCIM, non-container SSH deployments, multi-host strategies and automated rollback remain later work.
 
 ## Decisions and constraints
 

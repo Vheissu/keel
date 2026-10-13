@@ -1111,8 +1111,14 @@ test('configures signed webhooks and shows failed, retried and delivered attempt
       .fill('a-random-test-signing-secret-with-32-characters');
 
     await page.getByRole('checkbox', { name: 'queued', exact: true }).check();
+    await page.getByRole('checkbox', { name: 'Runbook runs', exact: true }).check();
     await page.getByRole('button', { name: 'Save destination', exact: true }).click();
     await expect(page.getByRole('cell', { name: 'Release alerts', exact: true })).toBeVisible();
+
+    await expect(
+      page.getByRole('cell', { name: 'Deployments, Runbooks', exact: true }),
+    ).toBeVisible();
+
     const principal = await control.authenticate(f.operator.token);
     const { transaction } = await import('../../packages/database/src/index.js');
 
@@ -1154,6 +1160,7 @@ test('configures signed webhooks and shows failed, retried and delivered attempt
 
     await page.getByRole('button', { name: 'Refresh notifications', exact: true }).click();
     await expect(page.getByRole('cell', { name: 'failed', exact: true })).toBeVisible();
+    await expect(page.getByRole('cell', { name: 'deployment.queued', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'View attempts', exact: true }).click();
     await expect(page.getByRole('cell', { name: 'HTTP_ERROR', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Retry delivery', exact: true }).click();

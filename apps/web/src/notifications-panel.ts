@@ -10,11 +10,13 @@ interface Endpoint {
   enabled: boolean;
   revision: number;
   statuses: string[];
+  work_kinds: string[];
 }
 
 interface Delivery {
   id: string;
   endpoint_name: string;
+  event_type: string;
   deployment_id: string;
   status: string;
   attempt_count: number;
@@ -56,6 +58,11 @@ export class NotificationsPanel {
     'rejected',
   ];
   statuses = ['awaiting_approval', 'reconciliation_required', 'succeeded', 'failed'];
+  sources = [
+    { value: 'deployment', label: 'Deployments and rollbacks' },
+    { value: 'runbook', label: 'Runbook runs' },
+  ];
+  workKinds = ['deployment'];
   form = false;
   busy = false;
   error = '';
@@ -170,6 +177,7 @@ export class NotificationsPanel {
         project_id: this.projectId || null,
         environment_id: this.environmentId || null,
         statuses: this.statuses,
+        work_kinds: this.workKinds,
       },
       'Notification destination added.',
     );
@@ -204,6 +212,10 @@ export class NotificationsPanel {
     });
 
     void this.attempts.start();
+  }
+
+  sourceLabel(kinds: string[]) {
+    return kinds.map((kind) => (kind === 'runbook' ? 'Runbooks' : 'Deployments')).join(', ');
   }
 
   date = formatDate;

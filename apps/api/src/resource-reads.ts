@@ -69,10 +69,10 @@ const resources: Record<string, Resource> = {
   },
   'notification-deliveries': {
     table: 'notification_deliveries',
-    columns: `${qualify(deliveryColumns)}, n.name AS endpoint_name`,
+    columns: `${qualify(deliveryColumns)}, t.payload->>'type' AS event_type, n.name AS endpoint_name`,
     joins:
       'JOIN notification_endpoints n ON n.organisation_id=t.organisation_id AND n.id=t.endpoint_id',
-    search: ['n.name', 't.status', 't.deployment_id::text', 't.last_code'],
+    search: ['n.name', 't.status', 't.deployment_id::text', 't.last_code', "t.payload->>'type'"],
     filters: ['status', 'deployment_id', 'endpoint_id'],
   },
   'notification-attempts': {

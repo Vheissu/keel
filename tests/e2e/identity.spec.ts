@@ -673,7 +673,7 @@ test('manages custom roles and issues a token for selected projects', async ({ p
   await scopedPage.getByRole('link', { name: 'Notifications', exact: true }).click();
 
   await expect(
-    scopedPage.getByRole('heading', { name: 'Deployment notifications', exact: true }),
+    scopedPage.getByRole('heading', { name: 'Webhook notifications', exact: true }),
   ).toBeVisible();
 
   await expect(scopedPage.getByRole('alert').filter({ hasText: 'Could not load' })).toHaveCount(0);

@@ -123,4 +123,6 @@ Paths use the `/api/v1` prefix. Catalogue, version and run reads use `/resources
 
 Runbook definitions, versions, reviews, runs and audit records are retained in PostgreSQL. Existing backups include their artifacts and encrypted secret versions. Restore quarantines agents and invalidates the target state, so old reviews must be repeated before new work. Active or reconciling tasks block a clean backup. No retention expiry or deletion flow is provided yet.
 
-Multi-step workflows, schedules, automatic retries, task-output logs and runbook webhook notifications are not implemented. Existing deployment webhook rules do not receive runbook events. Inspect the run history and audit log for results.
+Runbook run events can be sent to signed webhook destinations that opt in with the `runbook` event source. Payloads carry run, runbook and version metadata only; they exclude task commands, reviewed input values and secret bindings. Destinations created before this option, or without it, continue to receive deployment events only. See [notifications](notifications.md).
+
+Multi-step workflows, schedules, automatic retries and task-output logs are not implemented. Inspect the run history and audit log for task results.

@@ -14,7 +14,7 @@ Optional [pre- and post-deploy hooks](docs/lifecycle-hooks.md) run from the reta
 
 Resource lists and form selectors search the full collection and load 25, 50 or 100 records at a time. Page links retain search and navigation state; manual API-token connections require reconnection after reload; account sessions persist in HttpOnly cookies. Use `npm run keel -- list projects --limit 25` for the same paginated reads in the CLI. See [resource reads](docs/api.md#paginated-resource-reads) for filters and cursor behavior.
 
-Deployment notifications send signed HTTPS webhooks with durable retries and delivery history. See [notification setup and receiver contract](docs/notifications.md).
+Deployment and runbook notifications send signed HTTPS webhooks with durable retries and delivery history. See [notification setup and receiver contract](docs/notifications.md).
 
 Invitation-only email/password accounts, built-in and custom workspace roles, and expiring API tokens with optional project restrictions are available by setting `KEEL_PUBLIC_URL`. See [identity setup](docs/identity.md) for first-owner provisioning, membership, token rotation and password recovery.
 

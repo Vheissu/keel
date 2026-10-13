@@ -1,5 +1,5 @@
 <div class="section-title">
-  <h2>Deployment notifications</h2>
+  <h2>Webhook notifications</h2>
   <div class="header-actions">
     <button class="button secondary" click.trigger="refresh()" disabled.bind="busy">
       Refresh notifications
@@ -15,8 +15,8 @@
   </div>
 </div>
 <p class="muted">
-  Send deployment events to signed HTTPS webhooks. Failed sends retry automatically; deployment
-  execution continues independently.
+  Send deployment and runbook events to signed HTTPS webhooks. Failed sends retry automatically;
+  deployments and runbook runs continue independently.
 </p>
 <p class="alert" if.bind="!configured">
   Configure KEEL_CREDENTIAL_KEY and KEEL_NOTIFICATION_ORIGINS on the API and notification worker to
@@ -70,14 +70,25 @@
     An empty scope includes all projects or environments in this workspace.
   </p>
   <fieldset>
-    <legend>Deployment states</legend>
+    <legend>Event sources</legend>
+    <label class="check-label" repeat.for="source of sources">
+      <input type="checkbox" value.bind="source.value" checked.bind="workKinds" />
+      ${source.label}
+    </label>
+  </fieldset>
+  <fieldset>
+    <legend>States</legend>
     <label class="check-label" repeat.for="state of states">
       <input type="checkbox" value.bind="state" checked.bind="statuses" />
       ${state}
     </label>
   </fieldset>
   <div class="header-actions">
-    <button class="button primary" type="submit" disabled.bind="busy || !statuses.length">
+    <button
+      class="button primary"
+      type="submit"
+      disabled.bind="busy || !statuses.length || !workKinds.length"
+    >
       Save destination
     </button>
     <button class="button secondary" type="button" click.trigger="close()" disabled.bind="busy">
@@ -94,6 +105,7 @@
         <th>Name</th>
         <th>Status</th>
         <th>Origin</th>
+        <th>Sources</th>
         <th>States</th>
         <th>Actions</th>
       </tr>
@@ -103,6 +115,7 @@
         <td>${endpoint.name}</td>
         <td>${endpoint.enabled ? 'Enabled' : 'Disabled'}</td>
         <td>${endpoint.origin}</td>
+        <td>${sourceLabel(endpoint.work_kinds)}</td>
         <td>${endpoint.statuses.join(', ')}</td>
         <td>
           <button
@@ -130,7 +143,8 @@
         <th>Destination</th>
         <th>Status</th>
         <th>Attempts</th>
-        <th>Deployment</th>
+        <th>Event</th>
+        <th>Request</th>
         <th>Last result</th>
         <th>Timing</th>
         <th>Actions</th>
@@ -141,6 +155,7 @@
         <td>${delivery.endpoint_name}</td>
         <td>${delivery.status}</td>
         <td>${delivery.attempt_count}</td>
+        <td>${delivery.event_type}</td>
         <td>
           <code title.bind="delivery.deployment_id">${delivery.deployment_id.slice(0, 8)}</code>
         </td>
@@ -169,7 +184,7 @@
   </table>
 </div>
 <p class="muted" if.bind="!deliveries.loading && !deliveries.items.length">
-  No notification deliveries. Matching deployment events will appear here.
+  No notification deliveries. Matching deployment and runbook events will appear here.
 </p>
 <section if.bind="attempts" aria-label="Delivery attempts">
   <h3>Attempts for ${selectedDelivery}</h3>

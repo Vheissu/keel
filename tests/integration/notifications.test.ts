@@ -18,6 +18,7 @@ import {
   NotificationWorker,
   type NotificationTransport,
 } from '../../apps/api/src/notification-worker.js';
+import { ExecutionService } from '../../apps/api/src/execution-service.js';
 import { quarantine } from '../../apps/operations/src/recovery.js';
 import { fixture, deploymentProcess, testDatabaseUrl } from '../fixtures.js';
 
@@ -124,6 +125,90 @@ async function deployment() {
       environment_id: f.environments.staging,
     });
   });
+}
+
+// A reviewed runbook run with a literal input value that must never reach a webhook payload.
+async function runbookRun(environment = f.environments.staging) {
+  const principal = await control.authenticate(f.operator.token);
+  const execution = new ExecutionService(control);
+  const bytes = Buffer.from('notification runbook fixture');
+  const fingerprint = randomBytes(32).toString('hex');
+
+  const { project, artifact } = await transaction(db, async (tx) => {
+    const project = await control.project(tx, principal, {
+      name: 'Operations',
+      slug: `operations-${randomUUID()}`,
+      description: '',
+    });
+
+    const artifact = await control.artifact(
+      tx,
+      principal,
+      { project_id: project.id, name: 'tasks', version: '1', digest: sha256(bytes) },
+      bytes,
+    );
+
+    await execution.registerAgent(tx, principal, {
+      name: 'Runbook agent',
+      certificate_fingerprint: fingerprint,
+    });
+
+    return { project, artifact };
+  });
+
+  const agent = await execution.authenticate(fingerprint);
+
+  const target = await transaction(db, (tx) =>
+    execution.registerTarget(tx, principal, {
+      project_id: project.id,
+      environment_id: environment,
+      agent_id: agent.id,
+      name: 'Runbook target',
+      labels: {},
+    }),
+  );
+
+  const book = (
+    await post('/runbooks', {
+      project_id: project.id,
+      environment_id: environment,
+      name: 'Rotate caches',
+      slug: 'rotate-caches',
+    })
+  ).json();
+
+  const version = (
+    await post(`/runbooks/${book.id}/versions`, {
+      artifact_id: artifact.id,
+      expected_revision: 0,
+      process: {
+        apiVersion: 'keel.dev/v1alpha1',
+        kind: 'Runbook',
+        spec: {
+          artifact: { dockerImageId: `sha256:${'a'.repeat(64)}` },
+          task: { command: ['/bin/private-task-command'], timeoutSeconds: 30 },
+          inputs: { LABEL: { type: 'string', maxLength: 64 } },
+          requiresApproval: false,
+        },
+      },
+    })
+  ).json();
+
+  const plan = await post('/runbook-plans', {
+    runbook_version_id: version.id,
+    target_id: target.id,
+    inputs: { LABEL: 'private-input-value' },
+  });
+
+  expect(plan.statusCode, plan.body).toBe(200);
+
+  const run = await post(`/runbook-plans/${plan.json().id}/request`, {
+    acknowledge_external_effects: true,
+  });
+
+  expect(run.statusCode, run.body).toBe(200);
+
+  return { book, version, run: run.json() };
 }
 
 function worker(transport: NotificationTransport = async () => ({ status: 204 })) {
@@ -473,4 +558,101 @@ it('creates, lists, disables and retries notifications through the CLI', async (
   );
 
   expect((await row()).status).toBe('cancelled');
+});
+
+it('sends runbook run events only to destinations that opt in, without task details', async () => {
+  const deploymentsOnly = await endpoint({ statuses: ['queued', 'succeeded'] });
+
+  const runbooks = await endpoint({
+    name: 'Runbook results',
+    statuses: ['queued', 'succeeded'],
+    work_kinds: ['runbook'],
+  });
+
+  expect(deploymentsOnly.work_kinds).toEqual(['deployment']);
+  expect(runbooks.work_kinds).toEqual(['runbook']);
+
+  await endpoint({
+    name: 'Production runbooks',
+    statuses: ['queued'],
+    work_kinds: ['deployment', 'runbook'],
+    environment_id: f.environments.production,
+  });
+
+  const { book, version, run } = await runbookRun();
+
+  expect(run).toMatchObject({ kind: 'runbook', status: 'queued' });
+  let job = await row();
+
+  expect(job.endpoint_id).toBe(runbooks.id);
+  expect(job.deployment_id).toBe(run.id);
+
+  expect(job.payload).toEqual({
+    schema_version: 1,
+    event_id: job.event_id,
+    type: 'runbook.queued',
+    occurred_at: expect.any(String),
+    runbook_run: {
+      id: run.id,
+      status: 'queued',
+      project_id: run.project_id,
+      project_name: 'Operations',
+      environment_id: f.environments.staging,
+      environment_name: 'Staging',
+      runbook_id: book.id,
+      runbook_name: 'Rotate caches',
+      runbook_slug: 'rotate-caches',
+      runbook_version_id: version.id,
+      runbook_version: 1,
+      result_code: null,
+    },
+  });
+
+  for (const privateValue of ['private-task-command', 'private-input-value', 'LABEL']) {
+    expect(JSON.stringify(job.payload)).not.toContain(privateValue);
+  }
+
+  await transaction(db, async (tx) =>
+    control.deploymentEvent(tx, await control.authenticate(f.operator.token), {
+      ...run,
+      status: 'succeeded',
+    }),
+  );
+
+  job = await row();
+  expect(job.payload).toMatchObject({ type: 'runbook.succeeded', runbook_run: { id: run.id } });
+  await deployment();
+
+  const page = (await get(`notification-deliveries?endpoint_id=${runbooks.id}`)).json();
+
+  expect(page.items.map((d: { event_type: string }) => d.event_type).sort()).toEqual([
+    'runbook.queued',
+    'runbook.succeeded',
+  ]);
+
+  expect(
+    (await get(`notification-deliveries?endpoint_id=${deploymentsOnly.id}`))
+      .json()
+      .items.map((d: { event_type: string }) => d.event_type),
+  ).toEqual(['deployment.queued']);
+
+  expect((await get('notification-deliveries?q=runbook.succeeded')).json().total).toBe(1);
+
+  for (const work_kinds of [[], ['release'], 'runbook']) {
+    expect(
+      (
+        await post('/notifications/endpoints', {
+          name: 'Invalid',
+          url,
+          signing_secret: secret,
+          statuses: ['queued'],
+          work_kinds,
+        })
+      ).statusCode,
+    ).toBe(400);
+  }
+
+  await expect(
+    db.query("UPDATE notification_endpoints SET work_kinds='{}' WHERE id=$1", [runbooks.id]),
+  ).rejects.toThrow();
 });

@@ -259,7 +259,7 @@ export class MyApp {
       Runbooks: 'Review and run bounded operational tasks on private targets.',
       Secrets: 'Manage credentials for one project and environment at a time.',
       Targets: 'Private agents, target state and verified deployment results.',
-      Notifications: 'Delivery history and webhook destinations for deployment events.',
+      Notifications: 'Delivery history and webhook destinations for deployment and runbook events.',
       Integrations: 'Connect existing CI workflows and retain their build artifacts.',
       'Audit log': 'A record of changes and the people behind them.',
       'Account security': 'Passkeys, authenticator protection and active browser sessions.',
