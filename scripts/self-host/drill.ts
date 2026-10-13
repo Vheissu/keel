@@ -264,13 +264,48 @@ try {
       .toLowerCase(),
   });
 
-  await api('/targets', {
+  const recoveryTarget = await api('/targets', {
     project_id: project.id,
     environment_id: staging.id,
     agent_id: agent.id,
     name: 'Recovery target',
     labels: { tier: 'staging' },
   });
+
+  const runbook = await api('/runbooks', {
+    project_id: project.id,
+    environment_id: staging.id,
+    name: 'Recovery task',
+    slug: 'recovery-task',
+  });
+
+  const runbookVersion = await api(`/runbooks/${runbook.id}/versions`, {
+    artifact_id: artifact.id,
+    expected_revision: 0,
+    process: {
+      apiVersion: 'keel.dev/v1alpha1',
+      kind: 'Runbook',
+      spec: {
+        artifact: { dockerImageId: `sha256:${'a'.repeat(64)}` },
+        task: { command: ['/bin/task'], timeoutSeconds: 10 },
+        secrets: { TASK_PASSWORD: { secret: 'PASSWORD' } },
+      },
+    },
+  });
+
+  const runbookPlan = await api('/runbook-plans', {
+    runbook_version_id: runbookVersion.id,
+    target_id: recoveryTarget.id,
+  });
+
+  const runbookRun = await api(`/runbook-plans/${runbookPlan.id}/request`, {
+    acknowledge_external_effects: true,
+  });
+
+  assert.equal(runbookRun.status, 'awaiting_approval');
+  await api(`/runbook-runs/${runbookRun.id}/cancel`, {});
+  const retainedRunbook = await api(`/resources/runbook-runs/${runbookRun.id}`);
+  const retainedBindings = await api(`/runbook-runs/${runbookRun.id}/secret-bindings`);
 
   assert.equal((await http('/agent/v1/poll', {}, token, true)).status, 200);
 
@@ -523,6 +558,12 @@ try {
 
   assert.equal(managed.status, 200);
   token = managed.json().token;
+
+  const recoveryReview = await api('/runbook-plans', {
+    runbook_version_id: runbookVersion.id,
+    target_id: recoveryTarget.id,
+  });
+
   assert.equal((await api('/snapshot')).organisation.id, snapshot.organisation.id);
 
   console.log(
@@ -785,6 +826,21 @@ try {
 
   assert.deepEqual(after.deployments, beforeRestart.deployments);
   assert.equal(after.releases[0].id, release.id);
+
+  assert.deepEqual(await api(`/resources/runbook-versions/${runbookVersion.id}`), {
+    ...runbookVersion,
+    runbook_name: 'Recovery task',
+  });
+
+  assert.deepEqual(await api(`/resources/runbook-runs/${runbookRun.id}`), retainedRunbook);
+  assert.deepEqual(await api(`/runbook-runs/${runbookRun.id}/secret-bindings`), retainedBindings);
+
+  const staleRunbook = await http(`/api/v1/runbook-plans/${recoveryReview.id}/request`, {
+    acknowledge_external_effects: true,
+  });
+
+  assert.equal(staleRunbook.status, 409);
+  assert.equal(staleRunbook.json().error.code, 'STALE_RUNBOOK_REVIEW');
   assert.ok(after.audit.some((row: { action: string }) => row.action === 'installation.restored'));
   const execution = await api('/execution');
 
@@ -805,7 +861,7 @@ try {
   );
 
   console.log(
-    'PASS: TLS, least-privilege runtime, stop barrier, durable restart, encrypted backup, corruption rejection, fresh-volume restore, retained bytes and keys, agent and identity quarantine, retained MFA, SSO configuration, passkey enrollment and quarantine, policy recovery, custom-role retention, project and environment token scope and quarantine, and recovery-code invalidation.',
+    'PASS: TLS, least-privilege runtime, stop barrier, durable restart, encrypted backup, corruption rejection, fresh-volume restore, retained bytes and keys, agent and identity quarantine, retained MFA, SSO configuration, passkey enrollment and quarantine, policy recovery, custom-role retention, project and environment token scope and quarantine, recovery-code invalidation, and runbook version, review, run and secret-binding retention.',
   );
 } finally {
   for (const [directory, project] of [

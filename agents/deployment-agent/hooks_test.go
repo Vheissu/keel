@@ -8,7 +8,62 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestHookCreationFinishesBeforeTaskDeadlineOrCancellation(t *testing.T) {
+	for _, cancelled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancelled=%v", cancelled), func(t *testing.T) {
+			j := job()
+			agent, _ := fakeGateway(t, func(w http.ResponseWriter, _ *http.Request, _ string, _ int) {
+				_, _ = io.WriteString(w, `{"action":"continue"}`)
+			})
+			parent, cancel := context.WithCancelCause(context.Background())
+			defer cancel(nil)
+			created, started, removed := false, false, false
+			agent.docker = func(ctx context.Context, _ io.Reader, args ...string) ([]byte, error) {
+				switch args[1] {
+				case "create":
+					if cancelled {
+						cancel(errCleanupRequested)
+					}
+					// Docker setup can take longer than a one-second task's runtime.
+					if !wait(ctx, 1100*time.Millisecond) {
+						t.Fatal("creation interrupted before Docker confirmed the container")
+					}
+					created = true
+				case "start":
+					started = true
+				case "ls":
+					if created {
+						return []byte("hook"), nil
+					}
+				case "inspect":
+					switch {
+					case strings.Contains(args[3], ".State.Status"):
+						return []byte(fmt.Sprintf("exited 0 %s %d %s", j.AttemptID, j.Fence, j.ImageID)), nil
+					case strings.Contains(args[3], "keel.target"):
+						return []byte(j.TargetID), nil
+					case strings.Contains(args[3], "keel.fence"):
+						return []byte(fmt.Sprint(j.Fence)), nil
+					}
+				case "rm":
+					removed = true
+				}
+				return nil, nil
+			}
+			hook := &LifecycleHook{Command: []string{"/bin/task"}, TimeoutSeconds: 1}
+			code := agent.runHook(parent, j, Target{}, "runbook", hook, nil)
+			expected := ""
+			if cancelled {
+				expected = "CANCELLED"
+			}
+			if code != expected || !created || !removed || started == cancelled {
+				t.Fatalf("code=%q created=%v started=%v removed=%v", code, created, started, removed)
+			}
+		})
+	}
+}
 
 func TestHookExecutionLimitsAndSecretIsolation(t *testing.T) {
 	for _, scenario := range []struct{ name, phase, network, status, code string }{
@@ -19,6 +74,9 @@ func TestHookExecutionLimitsAndSecretIsolation(t *testing.T) {
 		{"post failure", "post", "none", "exited 7", "POST_HOOK_FAILED"},
 		{"post timeout", "post", "none", "running 0", "POST_HOOK_TIMEOUT"},
 		{"cancel", "pre", "none", "running 0", "CANCELLED"},
+		{"runbook success", "runbook", "none", "exited 0", ""},
+		{"runbook failure", "runbook", "none", "exited 7", "RUNBOOK_FAILED"},
+		{"runbook timeout", "runbook", "none", "running 0", "RUNBOOK_TIMEOUT"},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			j := job()

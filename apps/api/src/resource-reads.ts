@@ -33,6 +33,34 @@ const qualify = (columns: string) =>
 
 // SQL identifiers and projections come only from this registry, never from query parameters.
 const resources: Record<string, Resource> = {
+  runbooks: {
+    table: 'runbooks',
+    columns: 't.*, p.name AS project_name, e.name AS environment_name',
+    joins: `${projectJoin} ${environmentJoin}`,
+    search: ['t.name', 't.slug', 't.description', 'p.name', 'e.name'],
+    filters: ['project_id', 'environment_id'],
+  },
+  'runbook-versions': {
+    table: 'runbook_versions',
+    columns: 't.*, b.name AS runbook_name',
+    joins: 'JOIN runbooks b ON b.organisation_id=t.organisation_id AND b.id=t.runbook_id',
+    search: ['b.name', 't.version::text'],
+    filters: ['project_id', 'environment_id', 'runbook_id'],
+  },
+  'runbook-runs': {
+    table: 'runbook_runs',
+    columns: `t.*, b.name AS runbook_name, v.version AS runbook_version, v.manifest,
+      p.name AS project_name, e.name AS environment_name, plan.target_id, target.name AS target_name,
+      a.phase, a.phase_updated_at, a.result_code AS attempt_result`,
+    joins: `${projectJoin} ${environmentJoin}
+      JOIN runbook_versions v ON v.organisation_id=t.organisation_id AND v.id=t.runbook_version_id
+      JOIN runbooks b ON b.organisation_id=v.organisation_id AND b.id=v.runbook_id
+      JOIN runbook_plans plan ON plan.organisation_id=t.organisation_id AND plan.id=t.runbook_plan_id
+      JOIN deployment_targets target ON target.organisation_id=plan.organisation_id AND target.id=plan.target_id
+      LEFT JOIN deployment_attempts a ON a.organisation_id=t.organisation_id AND a.deployment_id=t.id`,
+    search: ['b.name', 't.status', 'target.name', 'p.name', 'e.name', 't.result_code'],
+    filters: ['project_id', 'environment_id', 'status', 'runbook_version_id'],
+  },
   'notification-endpoints': {
     table: 'notification_endpoints',
     columns: qualify(endpointColumns),
@@ -155,6 +183,8 @@ const querySchema = z
     endpoint_id: z.string().uuid().optional(),
     delivery_id: z.string().uuid().optional(),
     deployment_id: z.string().uuid().optional(),
+    runbook_id: z.string().uuid().optional(),
+    runbook_version_id: z.string().uuid().optional(),
     project_id: z.string().uuid().optional(),
     environment_id: z.string().uuid().optional(),
     connection_id: z.string().uuid().optional(),

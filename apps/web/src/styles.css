@@ -1365,3 +1365,24 @@ workspace-access fieldset input {
 account-security > section + section {
   margin-top: 2rem;
 }
+
+runbooks-panel {
+  display: block;
+  min-width: 0;
+}
+runbooks-panel fieldset {
+  display: grid;
+  gap: 1rem;
+}
+runbooks-panel legend {
+  margin-bottom: 1rem;
+  font-weight: 600;
+}
+runbooks-panel code {
+  overflow-wrap: anywhere;
+}
+runbooks-panel button[aria-pressed='true'] {
+  background: #226d75;
+  color: white;
+  border-color: #226d75;
+}

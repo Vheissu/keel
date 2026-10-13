@@ -10,6 +10,10 @@ export function environmentCondition(resource: string, parameter: string, alias 
   const direct: Record<string, string> = {
     environments: 'id',
     deployments: 'environment_id',
+    runbooks: 'environment_id',
+    'runbook-versions': 'environment_id',
+    'runbook-plans': 'environment_id',
+    'runbook-runs': 'environment_id',
     targets: 'environment_id',
     secrets: 'environment_id',
     'notification-endpoints': 'environment_id',
@@ -78,6 +82,10 @@ export function scopeCondition(
 
 const tables: Record<string, string> = {
   deployments: 'deployments',
+  runbooks: 'runbooks',
+  'runbook-versions': 'runbook_versions',
+  'runbook-plans': 'runbook_plans',
+  'runbook-runs': 'runbook_runs',
   secrets: 'deployment_secrets',
   'rollback-plans': 'rollback_plans',
   'notification-endpoints': 'notification_endpoints',
@@ -137,6 +145,7 @@ export async function enforceEnvironmentRequest(db: Database, req: FastifyReques
       'GET /resources/:resource/:id',
       'GET /artifacts/:id/download',
       'POST /processes/validate',
+      'POST /runbooks/validate',
     ].includes(key)
   ) {
     return;
@@ -148,7 +157,14 @@ export async function enforceEnvironmentRequest(db: Database, req: FastifyReques
     return;
   }
 
-  if (['POST /deployments', 'POST /secrets', 'POST /notifications/endpoints'].includes(key)) {
+  if (
+    [
+      'POST /deployments',
+      'POST /secrets',
+      'POST /notifications/endpoints',
+      'POST /runbooks',
+    ].includes(key)
+  ) {
     if (key === 'POST /notifications/endpoints' && !body.environment_id) {
       throw denied();
     }
@@ -156,6 +172,10 @@ export async function enforceEnvironmentRequest(db: Database, req: FastifyReques
     environment(body.environment_id);
 
     return;
+  }
+
+  if (key === 'POST /runbook-plans') {
+    return record('runbook-versions', body.runbook_version_id);
   }
 
   if (key === 'POST /rollback-plans') {
@@ -166,6 +186,12 @@ export async function enforceEnvironmentRequest(db: Database, req: FastifyReques
   }
 
   const records: Record<string, string> = {
+    'POST /runbooks/:id/versions': 'runbooks',
+    'POST /runbook-plans/:id/request': 'runbook-plans',
+    'GET /runbook-runs/:id/secret-bindings': 'runbook-runs',
+    'POST /runbook-runs/:id/approve': 'runbook-runs',
+    'POST /runbook-runs/:id/reject': 'runbook-runs',
+    'POST /runbook-runs/:id/cancel': 'runbook-runs',
     'GET /deployments/:id/rollback-candidates': 'deployments',
     'GET /deployments/:id/secret-bindings': 'deployments',
     'POST /deployments/:id/approve': 'deployments',

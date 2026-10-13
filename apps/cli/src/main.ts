@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { readFile, stat } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
-import { parseProcess } from '../../../packages/deployment-schema/src/index.js';
+import { parseProcess, parseRunbook } from '../../../packages/deployment-schema/src/index.js';
 
 const options = {
   allowPositionals: true,
@@ -22,6 +22,10 @@ const options = {
     name: { type: 'string' },
     version: { type: 'string' },
     artifact: { type: 'string' },
+    target: { type: 'string' },
+    slug: { type: 'string' },
+    runbook: { type: 'string' },
+    'acknowledge-external-effects': { type: 'boolean' },
     release: { type: 'string' },
     environment: { type: 'string' },
     from: { type: 'string' },
@@ -85,6 +89,13 @@ const help = `Keel · publish existing build outputs and create immutable releas
   npm run keel -- secret rotate <secret-uuid> --revision <number> --value-stdin
   npm run keel -- secret revoke <secret-uuid> --revision <number>
   npm run keel -- deployment secret-bindings <deployment-uuid>
+  npm run keel -- runbook validate <runbook.yaml>
+  npm run keel -- runbook create --project <uuid> --environment <uuid> --name <name> --slug <slug>
+  npm run keel -- runbook publish <runbook-uuid> --artifact <uuid> --process runbook.yaml --revision <number>
+  npm run keel -- runbook review --version <version-uuid> --target <uuid>
+  npm run keel -- runbook request <review-uuid> --acknowledge-external-effects
+  npm run keel -- runbook approve <run-uuid> --acknowledge-external-effects
+  npm run keel -- runbook reject|cancel|secret-bindings <run-uuid>
   npm run keel -- validate <process.yaml>
   npm run keel -- list <resource> [--limit 25] [--cursor <cursor>] [--search <text>]
   npm run keel -- notification create --config webhook.json
@@ -96,7 +107,7 @@ Set KEEL_URL (default http://127.0.0.1:4040) and KEEL_TOKEN.
 Connection creation and rotation use KEEL_GITHUB_TOKEN and KEEL_GITHUB_WEBHOOK_SECRET.
 Bitbucket uses KEEL_BITBUCKET_TOKEN and KEEL_PUBLISH_SECRET; publishing needs only KEEL_PUBLISH_SECRET.
 For retryable CI steps, pass a stable --idempotency-key (8–128 characters).
-List resources: projects, environments, artifacts, releases, deployments, audit, agents, targets, attempts, connections, imports, secrets, notification-endpoints, notification-deliveries, notification-attempts.
+List resources: projects, environments, artifacts, releases, deployments, audit, agents, targets, attempts, connections, imports, secrets, notification-endpoints, notification-deliveries, notification-attempts, runbooks, runbook-versions, runbook-runs.
 Use --project, --environment, --connection, --agent, --state or --status where the resource supports that filter.
 Notification filters: --endpoint, --deployment, --delivery, --status. Creation reads KEEL_NOTIFICATION_SECRET.
 Results are JSON. Review a rollback plan before requesting it. Approvals remain available in the UI and API.
@@ -237,6 +248,7 @@ try {
     const query = new URLSearchParams();
 
     for (const [flag, parameter] of [
+      ['runbook', 'runbook_id'],
       ['endpoint', 'endpoint_id'],
       ['delivery', 'delivery_id'],
       ['deployment', 'deployment_id'],
@@ -280,6 +292,63 @@ try {
           : { enabled: subcommand === 'enable', expected_revision: Number(required('revision')) },
       ),
     );
+  } else if (command === 'runbook') {
+    if (subcommand === 'validate') {
+      if (!file) {
+        throw new Error('Provide a runbook process file.');
+      }
+
+      print({ valid: true, process: parseRunbook(await readFile(file, 'utf8')) });
+    } else if (subcommand === 'create') {
+      print(
+        await request('/runbooks', {
+          project_id: required('project'),
+          environment_id: required('environment'),
+          name: required('name'),
+          slug: required('slug'),
+        }),
+      );
+    } else if (subcommand === 'publish') {
+      if (!file) {
+        throw new Error('Provide a runbook UUID.');
+      }
+
+      print(
+        await request(`/runbooks/${encodeURIComponent(file)}/versions`, {
+          artifact_id: required('artifact'),
+          expected_revision: Number(required('revision')),
+          process: parseRunbook(await readFile(required('process'), 'utf8')),
+        }),
+      );
+    } else if (subcommand === 'review') {
+      print(
+        await request('/runbook-plans', {
+          runbook_version_id: required('version'),
+          target_id: required('target'),
+        }),
+      );
+    } else if (['request', 'approve', 'reject', 'cancel', 'secret-bindings'].includes(subcommand)) {
+      if (!file) {
+        throw new Error('Provide the review or run UUID.');
+      }
+
+      const acknowledge = ['request', 'approve'].includes(subcommand);
+
+      if (acknowledge && !values['acknowledge-external-effects']) {
+        throw new Error('Review the command and pass --acknowledge-external-effects.');
+      }
+
+      const body = acknowledge ? { acknowledge_external_effects: true } : {};
+
+      print(
+        await request(
+          `/${subcommand === 'request' ? 'runbook-plans' : 'runbook-runs'}/${encodeURIComponent(file)}/${subcommand}`,
+          subcommand === 'secret-bindings' ? undefined : body,
+        ),
+      );
+    } else {
+      throw new Error('Unknown runbook command. Run npm run keel -- --help.');
+    }
   } else if (command === 'status') {
     print(await request('/snapshot'));
   } else if (command === 'secret' && subcommand === 'list') {

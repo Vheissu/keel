@@ -16,6 +16,7 @@ export class ResourcePicker {
   @bindable label = 'Project';
   @bindable inputId = '';
   @bindable projectId = '';
+  @bindable environmentId = '';
   @bindable state = '';
   @bindable optional = false;
   // A record that must not be offered, such as an environment as its own prerequisite.
@@ -41,6 +42,10 @@ export class ResourcePicker {
     if (this.pager) {
       void this.reload();
     }
+  }
+
+  environmentIdChanged() {
+    this.projectIdChanged();
   }
 
   async valueChanged() {
@@ -76,6 +81,7 @@ export class ResourcePicker {
 
     this.pager = new ResourcePage(this.api, this.resource, '', {
       ...(this.projectId ? { project_id: this.projectId } : {}),
+      ...(this.environmentId ? { environment_id: this.environmentId } : {}),
       ...(this.state ? { state: this.state } : {}),
     });
 

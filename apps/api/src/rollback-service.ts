@@ -67,6 +67,7 @@ export class RollbackService {
           WHERE
             d.organisation_id = $1
             AND d.id = $2
+            AND d.kind <> 'runbook'
             AND d.status IN ('succeeded', 'failed', 'cancelled')
             AND a.state IN ('succeeded', 'failed', 'cancelled')
             AND a.fence > 0

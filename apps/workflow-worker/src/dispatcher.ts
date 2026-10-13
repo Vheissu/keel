@@ -20,10 +20,10 @@ export async function dispatchOutbox(db: Database, client: Client, taskQueue: st
     `);
 
     for (const row of rows.rows) {
-      if (row.topic === 'deployment.queued') {
+      if (['deployment.queued', 'runbook.queued'].includes(row.topic)) {
         try {
           await client.workflow.start('deploymentWorkflow', {
-            workflowId: `deployment-${row.payload.deployment_id}`,
+            workflowId: `${row.topic.split('.')[0]}-${row.payload.deployment_id}`,
             taskQueue,
             args: [row.organisation_id, row.payload.deployment_id],
             workflowIdReusePolicy: 'REJECT_DUPLICATE',

@@ -1,3 +1,4 @@
+import { Runbooks } from './runbooks.js';
 import { auditEvent } from './audit.js';
 import { authenticateToken, lockPrincipal } from './identity-policy.js';
 import { enqueueNotifications } from './notifications.js';
@@ -16,6 +17,7 @@ import {
   type Release,
   type Environment,
   type Deployment,
+  type ExecutionRequest,
 } from '../../../packages/domain/src/index.js';
 import { parseProcess, requiresApproval } from '../../../packages/deployment-schema/src/index.js';
 import { sha256, type ArtifactStore } from './artifact-store.js';
@@ -43,6 +45,7 @@ export const releaseInput = z
 export const deploymentInput = z.object({ release_id: uuid, environment_id: uuid }).strict();
 
 export class ControlPlane {
+  readonly runbooks = new Runbooks(this);
   readonly delivery = new DeliveryPolicy(this);
   readonly secrets: DeploymentSecrets;
 
@@ -301,7 +304,7 @@ export class ControlPlane {
   async deploymentEvent(
     tx: Transaction,
     p: Principal,
-    deployment: Deployment,
+    deployment: ExecutionRequest,
     context: Record<string, unknown> = {},
   ) {
     const eventId = randomUUID();
@@ -322,18 +325,28 @@ export class ControlPlane {
       [eventId, p.organisation_id, deployment.id, deployment.status, p.actor_id],
     );
 
-    await enqueueNotifications(tx, deployment, eventId);
+    if (deployment.kind !== 'runbook') {
+      await enqueueNotifications(tx, deployment, eventId);
+    }
+
+    const eventType = deployment.kind === 'runbook' ? 'runbook' : 'deployment';
 
     // The dispatcher starts each queued deployment with a stable Temporal workflow ID.
     await tx.query('INSERT INTO outbox(id,organisation_id,topic,payload) VALUES($1,$2,$3,$4)', [
       randomUUID(),
       p.organisation_id,
-      `deployment.${deployment.status}`,
+      `${eventType}.${deployment.status}`,
       { deployment_id: deployment.id },
     ]);
 
-    await this.audit(tx, p, `deployment.${deployment.status}`, deployment.id, {
+    await this.audit(tx, p, `${eventType}.${deployment.status}`, deployment.id, {
       release_id: deployment.release_id,
+      ...(deployment.kind === 'runbook'
+        ? {
+            runbook_version_id: deployment.runbook_version_id,
+            runbook_plan_id: deployment.runbook_plan_id,
+          }
+        : {}),
       environment_id: deployment.environment_id,
       kind: deployment.kind,
       promotion_source_deployment_id: deployment.promotion_source_deployment_id,
@@ -443,16 +456,21 @@ export class ControlPlane {
     p: Principal,
     id: string,
     action: 'approve' | 'reject' | 'cancel',
+    runbook = false,
   ) {
     const d = (
-      await tx.query<Deployment>(
-        'SELECT * FROM deployments WHERE organisation_id=$1 AND id=$2 FOR UPDATE',
-        [p.organisation_id, uuid.parse(id)],
+      await tx.query<ExecutionRequest>(
+        "SELECT * FROM deployments WHERE organisation_id=$1 AND id=$2 AND (kind='runbook')=$3 FOR UPDATE",
+        [p.organisation_id, uuid.parse(id), runbook],
       )
     ).rows[0];
 
     if (!d) {
-      throw new DomainError('NOT_FOUND', 'Deployment not found.', 404);
+      throw new DomainError(
+        'NOT_FOUND',
+        runbook ? 'Runbook run not found.' : 'Deployment not found.',
+        404,
+      );
     }
 
     if (action === 'approve' || action === 'reject') {
@@ -460,10 +478,14 @@ export class ControlPlane {
     } else if (
       !['queued', 'awaiting_approval', 'running', 'reconciliation_required'].includes(d.status)
     ) {
-      throw new DomainError('INVALID_STATE', 'This deployment can no longer be cancelled.', 409);
+      throw new DomainError('INVALID_STATE', 'This request can no longer be cancelled.', 409);
     }
 
-    if (action === 'approve') {
+    if (action === 'approve' && d.kind === 'runbook') {
+      const version = await this.runbooks.version(tx, p.organisation_id, d.runbook_version_id);
+
+      await this.store.get(p.organisation_id, version.manifest.artifact.digest);
+    } else if (action === 'approve') {
       const release = (
         await tx.query<Release>('SELECT * FROM releases WHERE organisation_id=$1 AND id=$2', [
           p.organisation_id,
@@ -485,7 +507,7 @@ export class ControlPlane {
         ? 'cancel_requested'
         : transitionStatuses[action];
 
-    const result = await tx.query<Deployment>(
+    const result = await tx.query<ExecutionRequest>(
       `
         UPDATE deployments
         SET
@@ -501,7 +523,12 @@ export class ControlPlane {
       [status, action === 'approve' ? p.actor_id : d.approved_by, p.organisation_id, id],
     );
 
-    await this.deploymentEvent(tx, p, result.rows[0]);
+    await this.deploymentEvent(
+      tx,
+      p,
+      result.rows[0],
+      runbook && action === 'approve' ? { acknowledge_external_effects: true } : {},
+    );
 
     return result.rows[0];
   }

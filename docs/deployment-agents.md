@@ -164,3 +164,7 @@ This is a single-host HTTP strategy. The proxy runs inside the agent, so restart
 ## Lifecycle hooks
 
 Releases may declare bounded pre- and post-deploy container hooks for every supported target strategy. Rebuild the agent and gateway to enable `deployment-hooks-v1`. Hooks require `/bin/timeout` in the retained image, receive only explicitly selected secrets and have no network access by default. Preserve lifecycle state alongside fences and blue/green route files. See [hook contracts, limits and recovery](lifecycle-hooks.md) before enabling them.
+
+## Runbook tasks
+
+Agents advertising `runbooks-v1` can execute [reviewed runbooks](runbooks.md) through the same target allowlist, mTLS leases and secret delivery. A task owns its bounded container only. Cleanup preserves application containers and blue/green routes; external task effects still require operator assessment. Upgrade the controller, gateway, worker and agent together before requesting tasks.

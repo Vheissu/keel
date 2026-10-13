@@ -193,6 +193,11 @@ func (a *Agent) runHook(parent context.Context, j Job, t Target, phase string, h
 	}
 
 	prefix := strings.ToUpper(phase) + "_HOOK_"
+	progress := phase + "_hook"
+	if phase == "runbook" {
+		prefix = "RUNBOOK_"
+		progress = "runbook_task"
+	}
 	code = prefix + "FAILED"
 	environment, err := hookEnvironment(secrets, hook.Secrets)
 	if err != nil {
@@ -210,8 +215,6 @@ func (a *Agent) runHook(parent context.Context, j Job, t Target, phase string, h
 		return "CANCELLED"
 	}
 
-	ctx, cancel := context.WithTimeout(parent, time.Duration(hook.TimeoutSeconds)*time.Second)
-	defer cancel()
 	defer func() {
 		cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
 		defer stop()
@@ -219,7 +222,7 @@ func (a *Agent) runHook(parent context.Context, j Job, t Target, phase string, h
 			code = prefix + "FAILED"
 		}
 	}()
-	a.progress(ctx, j, phase+"_hook")
+	a.progress(parent, j, progress)
 	network := "none"
 	if hook.Network == "target" {
 		network = t.HookNetwork
@@ -246,7 +249,19 @@ func (a *Agent) runHook(parent context.Context, j Job, t Target, phase string, h
 	// init keeps timeout away from PID 1's special signal handling and reaps children.
 	args = append(args, "--entrypoint", "/bin/timeout", j.ImageID, "-s", "KILL", "--", strconv.Itoa(hook.TimeoutSeconds))
 	args = append(args, hook.Command...)
-	if _, err = a.docker(ctx, input, args...); err == nil {
+	// Finish creation before applying the task deadline or handling cancellation.
+	// Killing the Docker client early can leave a daemon-side create in flight,
+	// allowing cleanup to report absence before the container becomes visible.
+	setup, stopSetup := context.WithTimeout(context.WithoutCancel(parent), 30*time.Second)
+	_, err = a.docker(setup, input, args...)
+	stopSetup()
+	if parent.Err() != nil {
+		return abortCode(parent)
+	}
+
+	ctx, cancel := context.WithTimeout(parent, time.Duration(hook.TimeoutSeconds)*time.Second)
+	defer cancel()
+	if err == nil {
 		_, err = a.docker(ctx, nil, "container", "start", containerName(hookJob(j, phase)))
 	}
 

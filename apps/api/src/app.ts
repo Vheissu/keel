@@ -1,3 +1,4 @@
+import { registerRunbookRoutes } from './runbook-routes.js';
 import {
   enforceEnvironmentRequest,
   scopeCondition,
@@ -243,7 +244,7 @@ export async function createApp(
               'deployments',
               'audit_events',
             ]) {
-              const condition = ` AND ${scopeCondition(table, '$2', '$3')}`;
+              const condition = ` AND ${scopeCondition(table, '$2', '$3')}${table === 'deployments' ? " AND t.kind <> 'runbook'" : ''}`;
               const values = [p.organisation_id, p.project_ids ?? null, p.environment_ids ?? null];
 
               result[table === 'audit_events' ? 'audit' : table] = (
@@ -320,6 +321,7 @@ export async function createApp(
                     WHERE
                       organisation_id = $1
                       AND status = 'awaiting_approval'
+                      AND kind <> 'runbook'
                       AND ($2::uuid[] IS NULL OR project_id=ANY($2::uuid[]))
                       AND ($3::uuid[] IS NULL OR environment_id=ANY($3::uuid[]))
                   `,
@@ -343,6 +345,7 @@ export async function createApp(
       await registerIntegrationRoutes(api, integrations);
       await registerExecutionRoutes(api, new ExecutionService(service));
       await registerDeliveryRoutes(api, service);
+      await registerRunbookRoutes(api, service);
       await registerSecretRoutes(api, service);
       await registerNotificationRoutes(api, service);
 

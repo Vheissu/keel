@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { Transaction } from '../../../packages/database/src/index.js';
 import {
   DomainError,
-  type Deployment,
+  type ExecutionRequest,
   type Principal,
 } from '../../../packages/domain/src/index.js';
 import {
@@ -390,7 +390,7 @@ export class DeploymentSecrets {
     });
   }
 
-  async bind(tx: Transaction, deployment: Deployment, references: References) {
+  async bind(tx: Transaction, deployment: ExecutionRequest, references: References) {
     const bindings = await this.resolve(
       tx,
       deployment.organisation_id,
@@ -472,7 +472,7 @@ export class DeploymentSecrets {
     ).rows;
   }
 
-  async deliver(tx: Transaction, deployment: Deployment) {
+  async deliver(tx: Transaction, deployment: ExecutionRequest) {
     const rows = (
       await tx.query<
         Secret & {

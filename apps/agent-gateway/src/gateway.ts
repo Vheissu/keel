@@ -78,9 +78,10 @@ export async function createGateway(execution: ExecutionService, tls: ServerOpti
               'ssh-docker-recreate-v1',
               'docker-blue-green-v1',
               'deployment-hooks-v1',
+              'runbooks-v1',
             ]),
           )
-          .max(4)
+          .max(5)
           .default([]),
       })
       .strict()
@@ -93,6 +94,7 @@ export async function createGateway(execution: ExecutionService, tls: ServerOpti
         input.capabilities.includes('ssh-docker-recreate-v1'),
         input.capabilities.includes('docker-blue-green-v1'),
         input.capabilities.includes('deployment-hooks-v1'),
+        input.capabilities.includes('runbooks-v1'),
       ),
     };
   });

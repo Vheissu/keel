@@ -1,3 +1,4 @@
+import { RunbooksPanel } from './runbooks-panel';
 import { AccountSecurity } from './account-security';
 import { WorkspaceAccess } from './workspace-access';
 import { NotificationsPanel } from './notifications-panel';
@@ -16,6 +17,7 @@ import { SVGAnalyzer } from '@aurelia/runtime-html';
 import './styles.css';
 
 Aurelia.register(
+  RunbooksPanel,
   AccountSecurity,
   WorkspaceAccess,
   NotificationsPanel,

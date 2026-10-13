@@ -420,6 +420,73 @@ it('deploys over verified SSH, rejects an untrusted host and reconciles interrup
   const retried = await deploy();
 
   await until(async () => (await state(retried.id)) === 'succeeded');
+
+  const application = (
+    await run('docker', [
+      'exec',
+      host,
+      'docker',
+      'inspect',
+      '--format',
+      '{{.Id}}',
+      `keel-target-${target.id}`,
+    ])
+  ).stdout;
+
+  const book = await mutate<{ id: string }>((tx) =>
+    control.runbooks.create(tx, p, {
+      project_id: project.id,
+      environment_id: f.environments.staging,
+      name: 'Remote maintenance',
+      slug: 'remote-maintenance',
+      description: '',
+    }),
+  );
+
+  const version = await mutate<{ id: string }>((tx) =>
+    control.runbooks.publish(tx, p, book.id, {
+      artifact_id: artifact.id,
+      expected_revision: 0,
+      process: {
+        apiVersion: 'keel.dev/v1alpha1',
+        kind: 'Runbook',
+        spec: {
+          artifact: { dockerImageId: imageID },
+          task: { command: ['/bin/true'], timeoutSeconds: 10 },
+          requiresApproval: false,
+        },
+      },
+    }),
+  );
+
+  const plan = await mutate<{ id: string }>((tx) =>
+    control.runbooks.review(tx, p, { runbook_version_id: version.id, target_id: target.id }),
+  );
+
+  const task = await mutate<{ id: string }>((tx) => control.runbooks.request(tx, p, plan.id));
+
+  await execution.tick(f.org, task.id);
+  await until(async () => ['succeeded', 'failed'].includes(await state(task.id)));
+
+  expect(
+    (await db.query('SELECT result_code FROM deployments WHERE id=$1', [task.id])).rows[0]
+      .result_code,
+  ).toBe('RUNBOOK_SUCCEEDED');
+
+  expect(
+    (
+      await run('docker', [
+        'exec',
+        host,
+        'docker',
+        'inspect',
+        '--format',
+        '{{.Id}}',
+        `keel-target-${target.id}`,
+      ])
+    ).stdout,
+  ).toBe(application);
+
   expect(logs).not.toContain(secret);
   expect(await readFile(config, 'utf8')).not.toContain(secret);
 }, 150000);

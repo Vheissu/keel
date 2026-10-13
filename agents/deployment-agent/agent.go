@@ -83,7 +83,7 @@ func (a *Agent) execute(parent context.Context, j Job) {
 		return
 	}
 
-	if target.BlueGreen != nil {
+	if target.BlueGreen != nil && j.Operation != "runbook" {
 		if err := a.fenceBlueGreen(j); err != nil {
 			log.Printf("Cannot fence blue/green target: %v", err)
 			return
@@ -106,7 +106,7 @@ func (a *Agent) execute(parent context.Context, j Job) {
 		a = &copy
 	}
 
-	if j.Hooks != nil {
+	if j.Hooks != nil || j.Operation == "runbook" {
 		if err := a.prepareLifecycle(j); err != nil {
 			log.Printf("Cannot prepare lifecycle state; reconciliation required: %v", err)
 			return
@@ -122,8 +122,12 @@ func (a *Agent) execute(parent context.Context, j Job) {
 	}()
 	code := "RECONCILED"
 	if j.Mode == "deploy" {
-		code = a.deploy(ctx, j, target)
-		if code != "HTTP_VERIFIED" && ctx.Err() != nil {
+		if j.Operation == "runbook" {
+			code = a.runRunbook(ctx, j, target)
+		} else {
+			code = a.deploy(ctx, j, target)
+		}
+		if code != "HTTP_VERIFIED" && code != "RUNBOOK_SUCCEEDED" && ctx.Err() != nil {
 			code = abortCode(ctx)
 			cause := context.Cause(ctx)
 			if parent.Err() != nil {
@@ -136,19 +140,21 @@ func (a *Agent) execute(parent context.Context, j Job) {
 
 	recovery := ""
 	// Blue/green always confirms the route, including failures before candidate creation.
-	if code != "HTTP_VERIFIED" && (j.Hooks != nil || target.BlueGreen != nil || code != "SECRET_UNAVAILABLE") {
+	if code != "HTTP_VERIFIED" && code != "RUNBOOK_SUCCEEDED" && (j.Operation == "runbook" || j.Hooks != nil || target.BlueGreen != nil || code != "SECRET_UNAVAILABLE") {
 		cleanupContext, stop := context.WithTimeout(context.Background(), 30*time.Second)
 		a.progress(cleanupContext, j, "cleaning_up")
 		var err error
-		applicationStarted := true
-		if j.Hooks != nil {
+		applicationStarted := j.Operation != "runbook"
+		if j.Operation == "runbook" {
+			err = a.cleanup(cleanupContext, hookJob(j, "runbook"))
+		} else if j.Hooks != nil {
 			err = a.cleanupHooks(cleanupContext, j)
 			if err == nil {
 				applicationStarted, err = a.applicationStarted(j)
 			}
 		}
 
-		if err == nil {
+		if err == nil && j.Operation != "runbook" {
 			if target.BlueGreen != nil {
 				recovery, err = a.recoverBlueGreen(cleanupContext, j)
 			} else if applicationStarted {
@@ -166,7 +172,7 @@ func (a *Agent) execute(parent context.Context, j Job) {
 	}
 
 	result := Result{Lease: j.Lease, Outcome: "failed", Code: code, Recovery: recovery}
-	if code == "HTTP_VERIFIED" {
+	if code == "HTTP_VERIFIED" || code == "RUNBOOK_SUCCEEDED" {
 		result.Outcome = "succeeded"
 	}
 

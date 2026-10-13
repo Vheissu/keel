@@ -98,7 +98,7 @@ func run(configPath string) error {
 	for ctx.Err() == nil {
 		body, err := agent.request(ctx, "poll", struct {
 			Capabilities []string `json:"capabilities"`
-		}{[]string{"deployment-secrets-v1", "ssh-docker-recreate-v1", "docker-blue-green-v1", "deployment-hooks-v1"}})
+		}{[]string{"deployment-secrets-v1", "ssh-docker-recreate-v1", "docker-blue-green-v1", "deployment-hooks-v1", "runbooks-v1"}})
 		var reply struct {
 			Job *Job `json:"job"`
 		}

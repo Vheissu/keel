@@ -8,7 +8,7 @@ export const maxSecretReferences = 32;
 
 export const maxSecretValueBytes = 8192;
 
-const lifecycleHook = z
+export const lifecycleHook = z
   .object({
     command: z
       .array(
@@ -112,7 +112,7 @@ export const processSchema = z
 
 export type DeploymentProcess = z.infer<typeof processSchema>;
 
-export function parseProcess(source: unknown): DeploymentProcess {
+function parseSource(source: unknown): unknown {
   let value = source;
 
   if (typeof source === 'string') {
@@ -136,7 +136,11 @@ export function parseProcess(source: unknown): DeploymentProcess {
     }
   }
 
-  const result = processSchema.safeParse(value);
+  return value;
+}
+
+export function parseProcess(source: unknown): DeploymentProcess {
+  const result = processSchema.safeParse(parseSource(source));
 
   if (!result.success) {
     throw new DomainError(
@@ -180,4 +184,39 @@ export function supportsTargetStrategy(
     ? capability === 'docker-blue-green-v1'
     : strategy === 'recreate' &&
         ['docker-recreate-v1', 'ssh-docker-recreate-v1'].includes(capability);
+}
+
+export const runbookSchema = z
+  .object({
+    apiVersion: z.literal('keel.dev/v1alpha1'),
+    kind: z.literal('Runbook'),
+    spec: z
+      .object({
+        artifact: processSchema.shape.spec.shape.artifact
+          .pick({ dockerImageId: true, dockerArchivePath: true })
+          .required({ dockerImageId: true }),
+        task: lifecycleHook.omit({ secrets: true }),
+        secrets: z
+          .record(secretName, z.object({ secret: secretName }).strict())
+          .refine((value) => Object.keys(value).length <= maxSecretReferences)
+          .optional(),
+        requiresApproval: z.boolean().default(true),
+      })
+      .strict(),
+  })
+  .strict();
+
+export type RunbookProcess = z.infer<typeof runbookSchema>;
+
+export function parseRunbook(source: unknown): RunbookProcess {
+  const result = runbookSchema.safeParse(parseSource(source));
+
+  if (!result.success) {
+    throw new DomainError(
+      'INVALID_RUNBOOK',
+      result.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; '),
+    );
+  }
+
+  return result.data;
 }

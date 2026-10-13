@@ -96,6 +96,16 @@ export interface Deployment {
   updated_at: string;
 }
 
+// Operational runs share request state and locks, but never represent a release deployment.
+export interface RunbookRun extends Omit<Deployment, 'kind' | 'release_id'> {
+  kind: 'runbook';
+  release_id: null;
+  runbook_version_id: string;
+  runbook_plan_id: string;
+}
+
+export type ExecutionRequest = Deployment | RunbookRun;
+
 export interface AuditEvent {
   id: string;
   action: string;
@@ -132,18 +142,21 @@ export function requirePermission(principal: Principal, permission: Permission) 
   }
 }
 
-export function approveDeployment(deployment: Deployment, principal: Principal): void {
+export function approveDeployment(
+  deployment: Pick<Deployment, 'status' | 'requested_by'>,
+  principal: Principal,
+): void {
   requirePermission(principal, 'approve');
 
   if (deployment.status !== 'awaiting_approval') {
     throw new DomainError(
       'INVALID_STATE',
-      'Only a deployment awaiting approval can be approved.',
+      'Only a request awaiting approval can be approved.',
       409,
     );
   }
 
   if (deployment.requested_by === principal.actor_id) {
-    throw new DomainError('SELF_APPROVAL', 'A different person must approve this deployment.', 403);
+    throw new DomainError('SELF_APPROVAL', 'A different person must approve this request.', 403);
   }
 }

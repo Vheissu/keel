@@ -66,7 +66,7 @@
       <div class="header-actions" if.bind="data">
         <button
           class="button secondary"
-          if.bind="page !== 'Integrations' && page !== 'Targets' && page !== 'Notifications' && page !== 'Account security'"
+          if.bind="page !== 'Integrations' && page !== 'Targets' && page !== 'Notifications' && page !== 'Runbooks' && page !== 'Account security'"
           click.trigger="refresh()"
           disabled.bind="loading || busy"
         >
@@ -709,6 +709,13 @@
         can-approve.bind="canApprove && !resourceScoped"
         refresh-workspace.bind="() => refresh()"
       ></environment-policies>
+      <runbooks-panel
+        if.bind="page === 'Runbooks'"
+        api.bind="api"
+        can-write.bind="canWrite"
+        can-approve.bind="canApprove"
+        actor-id.bind="data.principal.actor_id"
+      ></runbooks-panel>
       <secrets-panel
         if.bind="page === 'Secrets'"
         api.bind="api"

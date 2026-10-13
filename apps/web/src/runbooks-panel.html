@@ -1,0 +1,275 @@
+<p class="help">
+  Runbooks execute one fixed command from a retained image. Each run requires a fresh review of its
+  target, policy and secret versions. Task output is not collected.
+</p>
+<p class="alert error" role="alert" if.bind="error">${error}</p>
+<p class="alert success" role="status" if.bind="notice">${notice}</p>
+<div class="header-actions">
+  <button class="button secondary" click.trigger="refresh()" disabled.bind="busy">
+    Refresh runbooks
+  </button>
+  <button
+    class="button primary"
+    if.bind="canWrite"
+    click.trigger="createOpen = !createOpen"
+    disabled.bind="busy"
+  >
+    ${createOpen ? 'Close new runbook' : 'New runbook'}
+  </button>
+</div>
+<form if.bind="createOpen" class="target-form" submit.trigger:prevent="create()">
+  <fieldset disabled.bind="busy">
+    <legend>New runbook</legend>
+    <resource-picker
+      api.bind="api"
+      resource="projects"
+      label="Runbook project"
+      input-id="runbook-project"
+      value.bind="projectId"
+    ></resource-picker>
+    <resource-picker
+      api.bind="api"
+      resource="environments"
+      label="Runbook environment"
+      input-id="runbook-environment"
+      value.bind="environmentId"
+    ></resource-picker>
+    <label for="runbook-name">Runbook name</label>
+    <input id="runbook-name" value.bind="name" maxlength="100" required />
+    <label for="runbook-slug">Runbook slug</label>
+    <input id="runbook-slug" value.bind="slug" pattern="[a-z0-9][a-z0-9-]{0,62}" required />
+    <button class="button primary" type="submit" disabled.bind="!projectId || !environmentId">
+      Create runbook
+    </button>
+  </fieldset>
+</form>
+<page-controls if.bind="catalogue" pager.bind="catalogue" label="Runbooks"></page-controls>
+<div class="table-wrap" role="region" aria-label="Runbook catalogue" tabindex="0">
+  <table>
+    <thead>
+      <tr>
+        <th>Runbook</th>
+        <th>Project</th>
+        <th>Environment</th>
+        <th>Versions</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr repeat.for="book of catalogue.items; key: id">
+        <td>${book.name}</td>
+        <td>${book.project_name}</td>
+        <td>${book.environment_name}</td>
+        <td>${book.revision}</td>
+        <td>
+          <button
+            class="text-button"
+            click.trigger="perform(() => select(book))"
+            disabled.bind="busy"
+          >
+            Open ${book.name}
+          </button>
+        </td>
+      </tr>
+      <tr if.bind="catalogue && !catalogue.loading && !catalogue.items.length">
+        <td colspan="5" class="table-empty">
+          No runbooks yet. Create one, then publish its first version.
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+<section class="target-form" if.bind="selected">
+  <h2 ref="detailHeading" tabindex="-1">${selected.name}</h2>
+  <form if.bind="canWrite" submit.trigger:prevent="publish()">
+    <fieldset disabled.bind="busy">
+      <legend>Publish an immutable version</legend>
+      <resource-picker
+        api.bind="api"
+        resource="artifacts"
+        label="Runbook artifact"
+        input-id="runbook-artifact"
+        project-id.bind="selected.project_id"
+        value.bind="artifactId"
+      ></resource-picker>
+      <label for="runbook-process">Runbook YAML</label>
+      <textarea
+        id="runbook-process"
+        rows="14"
+        value.bind="process"
+        spellcheck="false"
+        required
+      ></textarea>
+      <p class="help">
+        Use a retained Docker archive and its exact image ID. Arguments are fixed in this version.
+        The task timeout must be 1–120 seconds.
+      </p>
+      <button class="button primary" type="submit" disabled.bind="!artifactId">
+        Publish version
+      </button>
+    </fieldset>
+  </form>
+  <page-controls if.bind="versions" pager.bind="versions" label="Runbook versions"></page-controls>
+  <div class="header-actions">
+    <button
+      repeat.for="item of versions.items; key: id"
+      class="button secondary"
+      aria-pressed.bind="version && version.id === item.id"
+      click.trigger="chooseVersion(item)"
+      disabled.bind="busy"
+    >
+      Version ${item.version}
+    </button>
+  </div>
+  <p if.bind="versions && !versions.loading && !versions.items.length" class="help">
+    Publish a version to review a task.
+  </p>
+  <template if.bind="version && canWrite">
+    <fieldset disabled.bind="busy">
+      <legend>Choose a target</legend>
+      <resource-picker
+        api.bind="api"
+        resource="targets"
+        label="Runbook target"
+        input-id="runbook-target"
+        project-id.bind="selected.project_id"
+        environment-id.bind="selected.environment_id"
+        value.bind="targetId"
+        changed.bind="() => clearReview()"
+      ></resource-picker>
+      <button class="button primary" click.trigger="reviewTask()" disabled.bind="!targetId">
+        Review task
+      </button>
+    </fieldset>
+  </template>
+</section>
+<section class="target-form" if.bind="manifest">
+  <h2 if.bind="run" ref="detailHeading" tabindex="-1">
+    ${run.runbook_name} · version ${run.runbook_version}
+  </h2>
+  <h3>Fixed task</h3>
+  <pre class="manifest">${command}</pre>
+  <p>
+    Image
+    <code>${manifest.process.spec.artifact.dockerImageId}</code>
+  </p>
+  <p>
+    Artifact
+    <code>${manifest.artifact.digest}</code>
+    · ${manifest.artifact.size} bytes
+  </p>
+  <p>
+    Timeout ${manifest.process.spec.task.timeoutSeconds}s · Network
+    ${manifest.process.spec.task.network || 'none'}
+  </p>
+  <p class="help">
+    Non-root container, read-only filesystem, 256 MiB memory, one CPU and 64 processes. No
+    application health check runs afterward.
+  </p>
+  <template if.bind="review">
+    <h3>Review before requesting</h3>
+    <p>${review.environment_name} · ${review.target_name} · Agent ${review.agent_name}</p>
+    <p>
+      ${review.requires_approval ? 'A different actor must approve this run.' : 'This run will queue
+      immediately.'} Review expires ${date(review.expires_at)}.
+    </p>
+    <p repeat.for="binding of review.secret_bindings">
+      ${binding.variable} → ${binding.name} version ${binding.version}${binding.revoked_at ? ' ·
+      revoked' : ''}
+    </p>
+    <p if.bind="!review.secret_bindings.length">No secrets requested.</p>
+    <p>${review.warning}</p>
+    <label class="check-label">
+      <input type="checkbox" checked.bind="acknowledged" disabled.bind="busy" />
+      I reviewed this command and understand that cancellation cannot undo external effects.
+    </label>
+    <button
+      class="button primary"
+      click.trigger="requestRun()"
+      disabled.bind="busy || !acknowledged"
+    >
+      Request run
+    </button>
+  </template>
+  <template if.bind="run">
+    <p>${run.environment_name} · ${run.target_name}</p>
+    <p role="status">
+      ${run.status} · ${run.phase || 'No task started'} · ${run.result_code || 'No result yet'}
+    </p>
+    <p repeat.for="binding of bindings">
+      ${binding.variable} → ${binding.name} version ${binding.version}${binding.revoked_at ? ' ·
+      revoked' : ''}
+    </p>
+    <p if.bind="!bindings.length">No secrets requested.</p>
+    <p>
+      Cancellation and cleanup cannot undo external effects. Check the task's effects before
+      requesting another run. Success does not verify an application release.
+    </p>
+    <template
+      if.bind="canApprove && run.status === 'awaiting_approval' && run.requested_by !== actorId"
+    >
+      <label class="check-label">
+        <input type="checkbox" checked.bind="acknowledged" disabled.bind="busy" />
+        I reviewed the fixed command, target and secret versions and approve its external effects.
+      </label>
+      <button
+        class="button primary"
+        click.trigger="transition('approve')"
+        disabled.bind="busy || !acknowledged"
+      >
+        Approve run
+      </button>
+      <button class="button secondary" click.trigger="transition('reject')" disabled.bind="busy">
+        Reject run
+      </button>
+    </template>
+    <button
+      if.bind="canCancel"
+      class="button secondary"
+      click.trigger="transition('cancel')"
+      disabled.bind="busy"
+    >
+      Cancel run
+    </button>
+  </template>
+</section>
+<h2>Run history</h2>
+<page-controls if.bind="runs" pager.bind="runs" label="Runbook runs"></page-controls>
+<div class="table-wrap" role="region" aria-label="Runbook runs" tabindex="0">
+  <table>
+    <thead>
+      <tr>
+        <th>Runbook</th>
+        <th>Environment / target</th>
+        <th>Status</th>
+        <th>Requested</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr repeat.for="item of runs.items; key: id">
+        <td>
+          ${item.runbook_name}
+          <small>Version ${item.runbook_version}</small>
+        </td>
+        <td>
+          ${item.environment_name}
+          <small>${item.target_name}</small>
+        </td>
+        <td>
+          ${item.status}
+          <small>${item.result_code}</small>
+        </td>
+        <td>${date(item.created_at)}</td>
+        <td>
+          <button class="text-button" click.trigger="inspectRun(item)" disabled.bind="busy">
+            Review run
+          </button>
+        </td>
+      </tr>
+      <tr if.bind="runs && !runs.loading && !runs.items.length">
+        <td colspan="5" class="table-empty">No runbook runs yet.</td>
+      </tr>
+    </tbody>
+  </table>
+</div>

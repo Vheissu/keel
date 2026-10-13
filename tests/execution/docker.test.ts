@@ -743,6 +743,71 @@ it('deploys a retained GitHub ZIP after provider expiry and recovers a crashed a
   expect(await (await fetch(`http://127.0.0.1:${hostPort}`)).text()).toBe(content);
   expect(agentOutput).not.toContain('token');
 
+  const book = await mutate<{ id: string }>((tx) =>
+    control.runbooks.create(tx, p, {
+      project_id: project.id,
+      environment_id: f.environments.staging,
+      name: 'Independent task',
+      slug: 'task',
+      description: '',
+    }),
+  );
+
+  const bookVersion = await mutate<{ id: string }>((tx) =>
+    control.runbooks.publish(tx, p, book.id, {
+      artifact_id: artifact.id,
+      expected_revision: 0,
+      process: {
+        apiVersion: 'keel.dev/v1alpha1',
+        kind: 'Runbook',
+        spec: {
+          artifact: { dockerImageId: imageID, dockerArchivePath: 'application.tar' },
+          task: { command: ['/bin/true'], timeoutSeconds: 10 },
+          requiresApproval: false,
+        },
+      },
+    }),
+  );
+
+  const plan = await mutate<{ id: string }>((tx) =>
+    control.runbooks.review(tx, p, { runbook_version_id: bookVersion.id, target_id: target.id }),
+  );
+
+  const task = await mutate<{ id: string }>((tx) => control.runbooks.request(tx, p, plan.id));
+
+  workflowID = `runbook-${task.id}`;
+  await dispatchOutbox(db, client, queue);
+  await until(() => completed(task.id));
+  await client.workflow.getHandle(workflowID).result();
+  await db.query("UPDATE outbox SET delivered_at=NULL WHERE topic='runbook.queued'");
+  await dispatchOutbox(db, client, queue);
+
+  expect(
+    (
+      await db.query(
+        'SELECT count(*)::int AS count FROM deployment_attempts WHERE deployment_id=$1',
+        [task.id],
+      )
+    ).rows[0].count,
+  ).toBe(1);
+
+  expect(
+    (await db.query('SELECT result_code FROM deployments WHERE id=$1', [task.id])).rows[0]
+      .result_code,
+  ).toBe('RUNBOOK_SUCCEEDED');
+
+  expect(
+    (
+      await run('docker', [
+        'container',
+        'inspect',
+        '--format',
+        '{{.Id}}',
+        `keel-target-${target.id}`,
+      ])
+    ).stdout,
+  ).toBe(beforeRevocation.stdout);
+
   const histories = await Promise.all(
     [again.id, interrupted.id, rollbackDeployment.id, promoted.id, revokedDeployment.id].map((id) =>
       client.workflow.getHandle(`deployment-${id}`).fetchHistory(),

@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { transaction, type Transaction } from '../../../packages/database/src/index.js';
 import {
   DomainError,
-  type Deployment,
+  type ExecutionRequest,
+  type RunbookRun,
   type Principal,
 } from '../../../packages/domain/src/index.js';
 import {
@@ -52,6 +53,9 @@ export const resultInput = leaseInput
     outcome: z.enum(['succeeded', 'failed', 'cancelled']),
     code: z.enum([
       'HTTP_VERIFIED',
+      'RUNBOOK_SUCCEEDED',
+      'RUNBOOK_FAILED',
+      'RUNBOOK_TIMEOUT',
       'DOCKER_FAILED',
       'HEALTH_FAILED',
       'ARTIFACT_INVALID',
@@ -84,6 +88,7 @@ export const progressInput = leaseInput
       'replacing_container',
       'starting_candidate',
       'pre_hook',
+      'runbook_task',
       'post_hook',
       'switching_traffic',
       'verifying_http',
@@ -371,12 +376,12 @@ export class ExecutionService {
 
   async event(
     tx: Transaction,
-    d: Deployment,
-    status: Deployment['status'],
+    d: ExecutionRequest,
+    status: ExecutionRequest['status'],
     code: string | null = null,
   ) {
     const updated = (
-      await tx.query<Deployment>(
+      await tx.query<ExecutionRequest>(
         `
           UPDATE deployments
           SET
@@ -429,7 +434,7 @@ export class ExecutionService {
   async tick(org: string, id: string): Promise<boolean> {
     return transaction(this.control.db, async (tx) => {
       const d = (
-        await tx.query<Deployment & { queue_expired: boolean }>(
+        await tx.query<ExecutionRequest & { queue_expired: boolean }>(
           `
             SELECT
               *,
@@ -527,6 +532,10 @@ export class ExecutionService {
 
       if (d.status !== 'queued') {
         return terminal.has(d.status);
+      }
+
+      if (d.kind === 'runbook') {
+        return this.assignRunbook(tx, d);
       }
 
       const release = (
@@ -645,12 +654,81 @@ export class ExecutionService {
     });
   }
 
+  private async assignRunbook(tx: Transaction, run: RunbookRun) {
+    const plan = (
+      await tx.query(
+        `
+          SELECT
+            p.*,
+            t.agent_id,
+            t.fence,
+            a.state AS agent_state,
+            EXISTS (
+              SELECT
+                1
+              FROM
+                audit_events e
+              WHERE
+                e.organisation_id = p.organisation_id
+                AND e.action = 'installation.restored'
+                AND e.created_at > p.created_at
+            ) AS restored
+          FROM
+            runbook_plans p
+            JOIN deployment_targets t ON t.organisation_id = p.organisation_id
+            AND t.id = p.target_id
+            JOIN deployment_agents a ON a.organisation_id = t.organisation_id
+            AND a.id = t.agent_id
+          WHERE
+            p.organisation_id = $1
+            AND p.id = $2
+          FOR UPDATE OF
+            t
+        `,
+        [run.organisation_id, run.runbook_plan_id],
+      )
+    ).rows[0];
+
+    if (!plan || plan.restored || plan.fence !== plan.expected_fence) {
+      await this.event(tx, run, 'failed', 'RUNBOOK_TARGET_CHANGED');
+
+      return true;
+    }
+
+    if (plan.agent_state !== 'active') {
+      await this.event(tx, run, 'failed', 'AGENT_UNAVAILABLE');
+
+      return true;
+    }
+
+    await tx.query(
+      `
+        INSERT INTO
+          deployment_attempts (
+            id,
+            organisation_id,
+            deployment_id,
+            target_id,
+            agent_id,
+            state
+          )
+        VALUES
+          ($1, $2, $3, $4, $5, 'ready')
+        ON CONFLICT DO NOTHING
+      `,
+      [randomUUID(), run.organisation_id, run.id, plan.target_id, plan.agent_id],
+    );
+
+    return false;
+  }
+
   async claim(
     agent: AgentIdentity,
     supportsSecrets = false,
     supportsSSH = false,
     supportsBlueGreen = false,
     supportsHooks = false,
+    supportsRunbooks = false,
   ) {
     return transaction(this.control.db, async (tx) => {
       await this.lockAgent(tx, agent);
@@ -667,6 +745,7 @@ export class ExecutionService {
           WHERE
             a.organisation_id = $1
             AND a.agent_id = $2
+            AND (d.kind <> 'runbook' OR $8::boolean)
             AND (
               EXISTS (
                 SELECT
@@ -726,10 +805,11 @@ export class ExecutionService {
           supportsSSH,
           supportsBlueGreen,
           supportsHooks,
+          supportsRunbooks,
         ],
       );
 
-      const d = candidates.rows[0] as Deployment | undefined;
+      const d = candidates.rows[0] as ExecutionRequest | undefined;
 
       if (!d) {
         return null;
@@ -808,6 +888,35 @@ export class ExecutionService {
         await this.event(tx, d, 'running');
       }
 
+      if (d.kind === 'runbook') {
+        const version = await this.control.runbooks.version(
+          tx,
+          agent.organisation_id,
+          d.runbook_version_id,
+        );
+
+        const spec = version.manifest.process.spec;
+
+        return {
+          attempt_id: a.id,
+          fence: lease.fence,
+          token,
+          operation: 'runbook',
+          mode: cleanup ? 'cleanup' : 'deploy',
+          target_id: a.target_id,
+          capability: targetFence.capability,
+          strategy: 'task',
+          hooks: null,
+          runbook: { ...spec.task, secrets: Object.keys(spec.secrets ?? {}) },
+          digest: version.manifest.artifact.digest,
+          size: version.manifest.artifact.size,
+          image_id: spec.artifact.dockerImageId,
+          archive_path: spec.artifact.dockerArchivePath ?? '',
+          health_path: '',
+          secret_count: cleanup ? 0 : Object.keys(spec.secrets ?? {}).length,
+        };
+      }
+
       const release = (
         await tx.query('SELECT manifest FROM releases WHERE organisation_id=$1 AND id=$2', [
           agent.organisation_id,
@@ -829,6 +938,8 @@ export class ExecutionService {
         fence: lease.fence,
         token,
         mode: cleanup ? 'cleanup' : 'deploy',
+        operation: 'deployment',
+        runbook: null,
         target_id: a.target_id,
         capability: targetFence.capability,
         strategy: process.spec.environments[env.slug].strategy,
@@ -882,7 +993,7 @@ export class ExecutionService {
     await this.lockAgent(tx, agent);
 
     const d = (
-      await tx.query<Deployment>(
+      await tx.query<ExecutionRequest>(
         `
           SELECT
             d.*
@@ -945,6 +1056,18 @@ export class ExecutionService {
         );
       }
 
+      if (
+        (d.kind === 'runbook' &&
+          !['downloading', 'loading_image', 'runbook_task', 'cleaning_up'].includes(input.phase)) ||
+        (d.kind !== 'runbook' && input.phase === 'runbook_task')
+      ) {
+        throw new DomainError(
+          'INVALID_PROGRESS',
+          'This phase does not belong to the assigned operation.',
+          409,
+        );
+      }
+
       await tx.query(
         `
           UPDATE deployment_attempts
@@ -996,6 +1119,12 @@ export class ExecutionService {
         throw new DomainError('STALE_LEASE', 'This lease cannot download an artifact.', 409);
       }
 
+      if (d.kind === 'runbook') {
+        return (
+          await this.control.runbooks.version(tx, agent.organisation_id, d.runbook_version_id)
+        ).manifest.artifact.digest;
+      }
+
       return (
         await tx.query('SELECT manifest FROM releases WHERE organisation_id=$1 AND id=$2', [
           agent.organisation_id,
@@ -1024,8 +1153,29 @@ export class ExecutionService {
       const { d, a } = await this.lockedLease(tx, agent, input);
 
       if (
+        (d.kind !== 'runbook' && input.code.startsWith('RUNBOOK_')) ||
+        (d.kind === 'runbook' &&
+          [
+            'HTTP_VERIFIED',
+            'HEALTH_FAILED',
+            'PRE_HOOK_FAILED',
+            'PRE_HOOK_TIMEOUT',
+            'POST_HOOK_FAILED',
+            'POST_HOOK_TIMEOUT',
+          ].includes(input.code))
+      ) {
+        throw new DomainError(
+          'INVALID_RESULT',
+          'This result does not belong to the assigned operation.',
+          400,
+        );
+      }
+
+      const successCode = d.kind === 'runbook' ? 'RUNBOOK_SUCCEEDED' : 'HTTP_VERIFIED';
+
+      if (
         input.outcome === 'succeeded' &&
-        (d.status !== 'running' || a.state !== 'running' || input.code !== 'HTTP_VERIFIED')
+        (d.status !== 'running' || a.state !== 'running' || input.code !== successCode)
       ) {
         throw new DomainError(
           'INVALID_RESULT',
@@ -1039,7 +1189,7 @@ export class ExecutionService {
       }
 
       if (
-        (input.outcome === 'succeeded') !== (input.code === 'HTTP_VERIFIED') ||
+        (input.outcome === 'succeeded') !== (input.code === successCode) ||
         (input.outcome === 'cancelled' && !['CANCELLED', 'RECONCILED'].includes(input.code))
       ) {
         throw new DomainError('INVALID_RESULT', 'Outcome and result code do not match.', 400);
@@ -1053,7 +1203,9 @@ export class ExecutionService {
       ).rows[0];
 
       const needsRecovery =
-        target.capability === 'docker-blue-green-v1' && input.outcome !== 'succeeded';
+        d.kind !== 'runbook' &&
+        target.capability === 'docker-blue-green-v1' &&
+        input.outcome !== 'succeeded';
 
       if (needsRecovery !== !!input.recovery) {
         throw new DomainError(
@@ -1065,7 +1217,7 @@ export class ExecutionService {
 
       const status = d.status === 'cancel_requested' ? 'cancelled' : input.outcome;
 
-      if (status === 'succeeded') {
+      if (status === 'succeeded' && d.kind !== 'runbook') {
         await tx.query(
           `
             UPDATE deployment_targets

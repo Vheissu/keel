@@ -42,9 +42,11 @@ type Lease struct {
 }
 
 type Job struct {
-	Hooks    *LifecycleHooks `json:"hooks,omitempty"`
-	Strategy string          `json:"strategy"`
-	slot     string
+	Operation string          `json:"operation,omitempty"`
+	Runbook   *LifecycleHook  `json:"runbook,omitempty"`
+	Hooks     *LifecycleHooks `json:"hooks,omitempty"`
+	Strategy  string          `json:"strategy"`
+	slot      string
 	Lease
 	Capability  string `json:"capability"`
 	Mode        string `json:"mode"`
@@ -145,7 +147,20 @@ func validateJob(j Job) error {
 		return errors.New("invalid lease")
 	}
 
-	if j.Capability == "docker-blue-green-v1" {
+	if j.Operation != "" && j.Operation != "deployment" && j.Operation != "runbook" {
+		return errors.New("unsupported operation")
+	}
+
+	if j.Operation == "runbook" {
+		if j.Runbook == nil || j.Hooks != nil || j.Strategy != "task" || j.HealthPath != "" {
+			return errors.New("invalid runbook contract")
+		}
+		if err := validateHooks(&LifecycleHooks{PreDeploy: j.Runbook}); err != nil {
+			return err
+		}
+	} else if j.Runbook != nil {
+		return errors.New("runbook requires an explicit operation")
+	} else if j.Capability == "docker-blue-green-v1" {
 		if j.Strategy != "blue-green" {
 			return errors.New("blue/green target requires blue/green strategy")
 		}
@@ -167,6 +182,10 @@ func validateJob(j Job) error {
 
 	if j.ArchivePath != "" && !validArchivePath(j.ArchivePath) {
 		return errors.New("invalid archive path")
+	}
+
+	if j.Operation == "runbook" {
+		return nil
 	}
 
 	u, err := url.Parse(j.HealthPath)

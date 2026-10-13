@@ -10,6 +10,10 @@ export function projectCondition(resource: string, parameter: string, alias = 't
     artifacts: 'project_id',
     releases: 'project_id',
     deployments: 'project_id',
+    runbooks: 'project_id',
+    'runbook-versions': 'project_id',
+    'runbook-plans': 'project_id',
+    'runbook-runs': 'project_id',
     targets: 'project_id',
     connections: 'project_id',
     imports: 'project_id',
@@ -67,6 +71,10 @@ const tables: Record<string, string> = {
   artifacts: 'artifacts',
   releases: 'releases',
   deployments: 'deployments',
+  runbooks: 'runbooks',
+  'runbook-versions': 'runbook_versions',
+  'runbook-plans': 'runbook_plans',
+  'runbook-runs': 'runbook_runs',
   connections: 'provider_connections',
   imports: 'artifact_imports',
   secrets: 'deployment_secrets',
@@ -129,6 +137,7 @@ export async function enforceProjectRequest(db: Database, req: FastifyRequest) {
       'GET /resources/:resource',
       'GET /resources/:resource/:id',
       'POST /processes/validate',
+      'POST /runbooks/validate',
     ].includes(key)
   ) {
     return;
@@ -143,6 +152,7 @@ export async function enforceProjectRequest(db: Database, req: FastifyRequest) {
   if (
     [
       'POST /releases',
+      'POST /runbooks',
       'POST /secrets',
       'POST /integrations/github',
       'POST /integrations/bitbucket',
@@ -158,6 +168,10 @@ export async function enforceProjectRequest(db: Database, req: FastifyRequest) {
     return record('releases', body.release_id);
   }
 
+  if (key === 'POST /runbook-plans') {
+    return record('runbook-versions', body.runbook_version_id);
+  }
+
   if (key === 'POST /rollback-plans') {
     await record('deployments', body.source_deployment_id);
     await record('deployments', body.candidate_deployment_id);
@@ -166,6 +180,12 @@ export async function enforceProjectRequest(db: Database, req: FastifyRequest) {
   }
 
   const records: Record<string, string> = {
+    'POST /runbooks/:id/versions': 'runbooks',
+    'POST /runbook-plans/:id/request': 'runbook-plans',
+    'GET /runbook-runs/:id/secret-bindings': 'runbook-runs',
+    'POST /runbook-runs/:id/approve': 'runbook-runs',
+    'POST /runbook-runs/:id/reject': 'runbook-runs',
+    'POST /runbook-runs/:id/cancel': 'runbook-runs',
     'GET /artifacts/:id/download': 'artifacts',
     'GET /releases/:id/promotion': 'releases',
     'GET /deployments/:id/rollback-candidates': 'deployments',

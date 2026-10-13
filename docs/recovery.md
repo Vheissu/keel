@@ -58,3 +58,5 @@ SSO provider configuration, account bindings and workspace policies also reflect
 ## Passkeys after restore
 
 Restore clears registered passkeys and pending WebAuthn challenges. This prevents a backup from reviving removed credentials or rolling back signature counters. Users sign in with their password and MFA, then add passkeys again from Account security. Keep the public hostname stable for future passkey registrations. Server-assisted password recovery also removes passkeys when its link is redeemed.
+
+Runbook versions, reviews, runs and pinned secret metadata are included in the database backup. Their image bytes and encrypted secrets use the existing artifact and secret backup paths. Active runbooks share the deployment stop barrier. After restore, agents remain quarantined and old reviews cannot start new work without a current target review. The self-hosted drill verifies retention of a cancelled run and its immutable version and secret bindings.

@@ -290,7 +290,7 @@ it('bounds hooks, isolates secrets and preserves or removes the application acco
       ])
     ).stdout.trim();
 
-  const waitHook = async (d: { id: string }) => {
+  const waitHook = async (d: { id: string }, phase = 'pre') => {
     let name = '';
 
     await until(async () => {
@@ -298,7 +298,7 @@ it('bounds hooks, isolates secrets and preserves or removes the application acco
         await db.query('SELECT id FROM deployment_attempts WHERE deployment_id=$1', [d.id])
       ).rows[0];
 
-      name = `keel-target-${targets[0]}-hook-${attempt.id}-pre`;
+      name = `keel-target-${targets[0]}-hook-${attempt.id}-${phase}`;
 
       try {
         return (
@@ -416,6 +416,117 @@ it('bounds hooks, isolates secrets and preserves or removes the application acco
 
   expect(await (await fetch(`http://127.0.0.1:${ports[1]}`)).text()).toBe('healthy application');
 
+  const book = await mutate<{ id: string }>((tx) =>
+    control.runbooks.create(tx, p, {
+      project_id: project.id,
+      environment_id: f.environments.staging,
+      name: 'Maintenance',
+      slug: 'maintenance',
+      description: '',
+    }),
+  );
+
+  let revision = 0;
+
+  const runbook = async (task: Hook, targetId = targets[0]) => {
+    const version = await mutate<{ id: string }>((tx) =>
+      control.runbooks.publish(tx, p, book.id, {
+        artifact_id: artifact.id,
+        expected_revision: revision++,
+        process: {
+          apiVersion: 'keel.dev/v1alpha1',
+          kind: 'Runbook',
+          spec: {
+            artifact: { dockerImageId: image },
+            task,
+            requiresApproval: false,
+            secrets: { TASK_PASSWORD: { secret: 'PASSWORD' } },
+          },
+        },
+      }),
+    );
+
+    const plan = await mutate<{ id: string }>((tx) =>
+      control.runbooks.review(tx, p, { runbook_version_id: version.id, target_id: targetId }),
+    );
+
+    const result = await mutate<{ id: string }>((tx) => control.runbooks.request(tx, p, plan.id));
+
+    await execution.tick(f.org, result.id);
+
+    return result;
+  };
+
+  const retainedApplication = await applicationID();
+
+  for (const [task, code] of [
+    [hook('test -n "$TASK_PASSWORD" && test -z "$OTHER_SECRET"'), 'RUNBOOK_SUCCEEDED'],
+    [hook('exit 7'), 'RUNBOOK_FAILED'],
+    [hook('sleep 60', 1), 'RUNBOOK_TIMEOUT'],
+  ] as const) {
+    await waitResult(await runbook(task), code);
+    expect(await applicationID()).toBe(retainedApplication);
+  }
+
+  await waitResult(await runbook(hook('exit 7'), targets[1]), 'RUNBOOK_FAILED');
+
+  expect(
+    JSON.parse(await readFile(join(root, 'state', `route-${targets[1]}.json`), 'utf8')).active,
+  ).toEqual(activeRoute);
+
+  expect(await (await fetch(`http://127.0.0.1:${ports[1]}`)).text()).toBe('healthy application');
+
+  const cancelledTask = await runbook(hook('echo "$TASK_PASSWORD"; sleep 60', 120));
+  const taskName = await waitHook(cancelledTask, 'runbook');
+
+  const taskInspection = JSON.parse(
+    (await run('docker', ['container', 'inspect', taskName])).stdout,
+  )[0];
+
+  expect(taskInspection.Config.Env).toContain(`TASK_PASSWORD=${secret}`);
+  expect(taskInspection.HostConfig.LogConfig.Type).toBe('none');
+  await mutate((tx) => control.transition(tx, p, cancelledTask.id, 'cancel', true));
+  await waitResult(cancelledTask, 'CANCELLED');
+  expect(await applicationID()).toBe(retainedApplication);
+
+  const interruptedTask = await runbook(hook('sleep 60', 10));
+  const interruptedName = await waitHook(interruptedTask, 'runbook');
+
+  await stopAgent();
+
+  await until(
+    async () =>
+      (
+        await run('docker', [
+          'container',
+          'inspect',
+          '--format',
+          '{{.State.Running}}',
+          interruptedName,
+        ])
+      ).stdout.trim() === 'false',
+    15000,
+  );
+
+  await db.query(
+    "UPDATE deployment_attempts SET lease_expires_at=now()-interval '1 second' WHERE deployment_id=$1",
+    [interruptedTask.id],
+  );
+
+  await execution.tick(f.org, interruptedTask.id);
+  startAgent();
+  await waitResult(interruptedTask, 'RECONCILED');
+  expect(await applicationID()).toBe(retainedApplication);
+
+  expect(
+    (
+      await db.query(
+        'SELECT count(*)::int AS count FROM deployment_attempts WHERE deployment_id=$1',
+        [interruptedTask.id],
+      )
+    ).rows[0].count,
+  ).toBe(1);
+
   for (const target of targets) {
     expect(
       (
@@ -426,7 +537,7 @@ it('bounds hooks, isolates secrets and preserves or removes the application acco
           '--filter',
           `name=keel-target-${target}-hook-`,
           '--format',
-          '{{.ID}}',
+          '{{.Names}} {{.Status}}',
         ])
       ).stdout.trim(),
     ).toBe('');

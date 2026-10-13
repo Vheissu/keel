@@ -1202,3 +1202,127 @@ test('configures signed webhooks and shows failed, retried and delivered attempt
     }
   }
 });
+
+test('publishes, reviews and independently approves a bounded runbook', async ({
+  page,
+  browser,
+}) => {
+  const p = await control.authenticate(f.operator.token);
+
+  const mutate = <T>(work: Parameters<ControlPlane['mutate']>[3]) =>
+    control.mutate(p, randomUUID(), randomUUID(), work) as Promise<T>;
+
+  const project = await mutate<{ id: string }>((tx) =>
+    control.project(tx, p, { name: 'Task project', slug: 'tasks', description: '' }),
+  );
+
+  const bytes = Buffer.from('retained task image');
+
+  await mutate((tx) =>
+    control.artifact(
+      tx,
+      p,
+      { project_id: project.id, name: 'Task image', version: '1', digest: sha256(bytes) },
+      bytes,
+    ),
+  );
+
+  const execution = new ExecutionService(control);
+
+  const agent = await mutate<{ id: string }>((tx) =>
+    execution.registerAgent(tx, p, {
+      name: 'Task agent',
+      certificate_fingerprint: randomBytes(32).toString('hex'),
+    }),
+  );
+
+  await mutate((tx) =>
+    execution.registerTarget(tx, p, {
+      project_id: project.id,
+      environment_id: f.environments.staging,
+      agent_id: agent.id,
+      name: 'Task target',
+      labels: {},
+    }),
+  );
+
+  await connect(page);
+  await page.getByRole('link', { name: 'Runbooks', exact: true }).click();
+  await page.getByRole('button', { name: 'New runbook', exact: true }).click();
+  await page.getByLabel('Runbook project', { exact: true }).selectOption(project.id);
+
+  await page
+    .getByLabel('Runbook environment', { exact: true })
+    .selectOption(f.environments.staging);
+
+  await page.getByLabel('Runbook name', { exact: true }).fill('Cache check');
+  await page.getByLabel('Runbook slug', { exact: true }).fill('cache-check');
+  await page.getByRole('button', { name: 'Create runbook', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Cache check', exact: true })).toBeVisible();
+
+  await page.getByLabel('Runbook YAML', { exact: true }).fill(
+    JSON.stringify({
+      apiVersion: 'keel.dev/v1alpha1',
+      kind: 'Runbook',
+      spec: {
+        artifact: { dockerImageId: `sha256:${'a'.repeat(64)}` },
+        task: { command: ['/bin/true'], timeoutSeconds: 15 },
+      },
+    }),
+  );
+
+  await page.getByRole('button', { name: 'Publish version', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Version 1', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Review task', exact: true }).click();
+
+  await expect(
+    page.getByText('A different actor must approve this run.', { exact: false }),
+  ).toBeVisible();
+
+  await expect(page.getByRole('button', { name: 'Request run', exact: true })).toBeDisabled();
+
+  await page
+    .getByLabel(
+      'I reviewed this command and understand that cancellation cannot undo external effects.',
+    )
+    .check();
+
+  await page.getByRole('button', { name: 'Request run', exact: true }).click();
+
+  await expect(
+    page.getByRole('heading', { name: 'Cache check · version 1', exact: true }),
+  ).toBeVisible();
+
+  await expect(page.getByRole('button', { name: 'Approve run', exact: true })).toHaveCount(0);
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: 'output/playwright/runbooks-mobile.png', fullPage: true });
+  const context = await browser.newContext();
+  const approver = await context.newPage();
+
+  approver.on('pageerror', (error) => errors.push(error.message));
+
+  try {
+    await connect(approver, f.approver.token);
+    await approver.getByRole('link', { name: 'Runbooks', exact: true }).click();
+    await approver.getByRole('button', { name: 'Review run', exact: true }).click();
+    await expect(approver.getByRole('button', { name: 'Approve run', exact: true })).toBeDisabled();
+
+    await approver
+      .getByLabel(
+        'I reviewed the fixed command, target and secret versions and approve its external effects.',
+      )
+      .check();
+
+    await approver.getByRole('button', { name: 'Approve run', exact: true }).click();
+    await expect(approver.getByRole('status').filter({ hasText: 'queued' })).toBeVisible();
+    await approver.screenshot({ path: 'output/playwright/runbooks-desktop.png', fullPage: true });
+  } finally {
+    await context.close();
+  }
+
+  await page.getByRole('button', { name: 'Refresh runbooks', exact: true }).click();
+  await page.getByRole('button', { name: 'Cancel run', exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'cancelled' })).toBeVisible();
+});

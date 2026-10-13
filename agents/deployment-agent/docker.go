@@ -195,7 +195,7 @@ func verifyImageArchive(data []byte, imageID string) error {
 	return nil
 }
 
-func (a *Agent) deploy(ctx context.Context, j Job, t Target) string {
+func (a *Agent) loadArtifact(ctx context.Context, j Job) string {
 	a.progress(ctx, j, "downloading")
 	artifact, err := a.request(ctx, "artifact", j.Lease)
 	if leaseRejected(err) {
@@ -234,6 +234,14 @@ func (a *Agent) deploy(ctx context.Context, j Job, t Target) string {
 	image, err := a.docker(ctx, nil, "image", "inspect", "--format", "{{.Id}}", j.ImageID)
 	if err != nil || strings.TrimSpace(string(image)) != j.ImageID {
 		return "ARTIFACT_INVALID"
+	}
+
+	return ""
+}
+
+func (a *Agent) deploy(ctx context.Context, j Job, t Target) string {
+	if code := a.loadArtifact(ctx, j); code != "" {
+		return code
 	}
 
 	// Fetch only after local target and image validation, before any destructive action.
