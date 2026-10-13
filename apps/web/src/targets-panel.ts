@@ -17,6 +17,7 @@ interface Target {
   project_id: string;
   environment_id: string;
   agent_id: string;
+  capability: string;
   current_state: string;
   current_release_id: string | null;
 }
@@ -62,6 +63,7 @@ export class TargetsPanel {
   projectId = '';
   environmentId = '';
   agentId = '';
+  capability = 'docker-recreate-v1';
   labels = '{"app":"web","tier":"staging"}';
   private revision = 0;
 
@@ -119,7 +121,7 @@ export class TargetsPanel {
   get formTitle() {
     const titles = {
       agent: 'Register a certificate',
-      target: 'Register a Docker target',
+      target: 'Register a deployment target',
       certificate: 'Replace agent certificate',
     };
 
@@ -166,6 +168,7 @@ export class TargetsPanel {
           environment_id: this.environmentId,
           agent_id: this.agentId,
           labels: JSON.parse(this.labels),
+          capability: this.capability,
         });
 
         this.notice = 'Target registered. Add its ID and ports to the agent’s local allowlist.';
@@ -202,7 +205,7 @@ export class TargetsPanel {
 
   guidance(attempt: Attempt) {
     if (['reconciliation_required', 'reconciling'].includes(attempt.state)) {
-      return 'Keep the agent on its original Docker host. It must confirm cleanup before this target can deploy again.';
+      return 'Keep the agent on its original host with the same local or SSH target configuration. It must confirm cleanup before this target can deploy again.';
     }
 
     const messages: Record<string, string> = {
@@ -210,7 +213,7 @@ export class TargetsPanel {
       ARTIFACT_INVALID:
         'Check the retained artifact, ZIP entry path and pinned Docker image ID. Create a corrected release before retrying.',
       DOCKER_FAILED:
-        'Check the local Docker socket, available resources and target port before retrying.',
+        'Check the Docker socket, SSH connection, available resources and target port before retrying.',
       HEALTH_FAILED: 'Check the application’s HTTP path and container port before retrying.',
       SECRET_UNAVAILABLE:
         'Check pinned secret versions and the gateway encryption key. Secret preflight failed before container replacement; submit a new request after resolving it.',
@@ -218,7 +221,7 @@ export class TargetsPanel {
         'Cleanup confirmed. The interrupted release did not succeed; request a new deployment when ready.',
       CANCELLED: 'Cancellation cleanup confirmed.',
       AGENT_UNAVAILABLE:
-        'The agent did not claim this deployment. Check its connection, certificate, draining state and support for deployment secrets.',
+        'The agent did not claim this deployment. Check its connection, certificate, draining state and support for deployment secrets and SSH targets.',
     };
 
     return (

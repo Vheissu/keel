@@ -1,0 +1,22 @@
+{
+  "gateway": "https://keel.example.com:4041",
+  "certificate": "/etc/keel/agent.crt",
+  "key": "/etc/keel/agent.key",
+  "ca": "/etc/keel/ca.crt",
+  "state_directory": "/var/lib/keel-agent",
+  "targets": {
+    "00000000-0000-0000-0000-000000000001": {
+      "host_port": 8088,
+      "container_port": 8080,
+      "ssh": {
+        "host": "application.internal",
+        "port": 22,
+        "user": "keel",
+        "identity_file": "/etc/keel/ssh_identity",
+        "known_hosts_file": "/etc/keel/known_hosts",
+        "helper_path": "/usr/local/bin/keel-agent",
+        "state_directory": "/var/lib/keel-targets"
+      }
+    }
+  }
+}

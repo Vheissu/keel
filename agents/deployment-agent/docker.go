@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
 	"path"
 	"slices"
@@ -21,10 +22,20 @@ import (
 )
 
 func dockerCommand(ctx context.Context, input io.Reader, args ...string) ([]byte, error) {
+	return dockerCommandWithLock(ctx, input, nil, args...)
+}
+
+func dockerCommandWithLock(ctx context.Context, input io.Reader, lock *os.File, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, "docker", args...)
 	command.Stdin = input
+	if lock != nil {
+		// Keep the remote session lock alive even if the helper is killed while the
+		// Docker CLI is still running. A new helper must wait for that child too.
+		command.ExtraFiles = []*os.File{lock}
+	}
+
 	// Bound output and never forward image output or command errors into control-plane logs.
 	var output cappedBuffer
 	command.Stdout = &output
@@ -283,34 +294,21 @@ func (a *Agent) deploy(ctx context.Context, j Job, t Target) string {
 	}
 
 	a.progress(ctx, j, "verifying_http")
-	client := &http.Client{
-		Timeout:   2 * time.Second,
-		Transport: &http.Transport{Proxy: nil},
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
+	health := a.health
+	if health == nil {
+		health = localHealth
 	}
 
-	defer client.CloseIdleConnections()
 	for tries := 0; tries < 30; tries++ {
 		if ctx.Err() != nil {
 			return abortCode(ctx)
 		}
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d%s", t.HostPort, j.HealthPath), nil)
-		if err != nil {
-			return "HEALTH_FAILED"
-		}
-
-		response, err := client.Do(req)
-		if err == nil {
-			_ = response.Body.Close()
-			if response.StatusCode == 200 {
-				state, inspectErr := a.docker(ctx, nil, "container", "inspect", "--format", `{{.State.Running}} {{index .Config.Labels "keel.attempt"}} {{index .Config.Labels "keel.fence"}} {{.Image}}`, containerName(j))
-				expected := fmt.Sprintf("true %s %d %s", j.AttemptID, j.Fence, j.ImageID)
-				if inspectErr == nil && strings.TrimSpace(string(state)) == expected {
-					return "HTTP_VERIFIED"
-				}
+		if health(ctx, t.HostPort, j.HealthPath) {
+			state, inspectErr := a.docker(ctx, nil, "container", "inspect", "--format", `{{.State.Running}} {{index .Config.Labels "keel.attempt"}} {{index .Config.Labels "keel.fence"}} {{.Image}}`, containerName(j))
+			expected := fmt.Sprintf("true %s %d %s", j.AttemptID, j.Fence, j.ImageID)
+			if inspectErr == nil && strings.TrimSpace(string(state)) == expected {
+				return "HTTP_VERIFIED"
 			}
 		}
 
@@ -322,4 +320,26 @@ func (a *Agent) deploy(ctx context.Context, j Job, t Target) string {
 	}
 
 	return "HEALTH_FAILED"
+}
+
+func localHealth(ctx context.Context, port int, healthPath string) bool {
+	client := &http.Client{
+		Timeout:   2 * time.Second,
+		Transport: &http.Transport{Proxy: nil},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	defer client.CloseIdleConnections()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d%s", port, healthPath), nil)
+	if err != nil {
+		return false
+	}
+	response, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer response.Body.Close()
+	return response.StatusCode == 200
 }

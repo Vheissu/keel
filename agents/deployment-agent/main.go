@@ -96,7 +96,7 @@ func run(configPath string) error {
 	for ctx.Err() == nil {
 		body, err := agent.request(ctx, "poll", struct {
 			Capabilities []string `json:"capabilities"`
-		}{[]string{"deployment-secrets-v1"}})
+		}{[]string{"deployment-secrets-v1", "ssh-docker-recreate-v1"}})
 		var reply struct {
 			Job *Job `json:"job"`
 		}
@@ -135,6 +135,13 @@ func run(configPath string) error {
 }
 
 func main() {
+	if len(os.Args) == 6 && os.Args[1] == "--ssh-helper" {
+		if err := runSSHHelper(os.Args[2:]); err != nil {
+			log.Fatal("SSH helper failed")
+		}
+		return
+	}
+
 	if len(os.Args) != 2 {
 		log.Fatal("Usage: deployment-agent /path/to/config.json")
 	}

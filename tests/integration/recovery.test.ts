@@ -90,7 +90,7 @@ it('verifies all retained artifacts and encrypted versions and fails for corrupt
     }),
   );
 
-  expect(await verify(db)).toMatchObject({ migrations: 14, artifacts: 1, secret_versions: 1 });
+  expect(await verify(db)).toMatchObject({ migrations: 15, artifacts: 1, secret_versions: 1 });
   vi.stubEnv('KEEL_DEPLOYMENT_SECRET_KEY', randomBytes(32).toString('base64'));
   await expect(verify(db)).rejects.toThrow('decrypt');
   await writeFile(join(root, f.org, digest), 'tampered');

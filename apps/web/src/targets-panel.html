@@ -18,8 +18,8 @@
   </div>
 </div>
 <p class="muted">
-  Agents connect outward over mutual TLS. Each Docker target belongs to one project, environment and
-  agent.
+  Agents connect outward over mutual TLS. Each deployment target belongs to one project, environment
+  and agent.
 </p>
 <p class="alert error" role="alert" if.bind="error">${error}</p>
 <p class="alert success" role="status" if.bind="notice">${notice}</p>
@@ -46,16 +46,24 @@
   </label>
   <template if.bind="form === 'certificate'">
     <p>
-      Stop the old agent process first. Install the replacement certificate on the same Docker host,
-      keeping the target allowlist and state directory. Existing deployment locks remain until
-      cleanup succeeds.
+      Stop the old agent process first. Install the replacement certificate on the same private
+      host, keeping the target allowlist, state directory and any SSH host settings. Existing
+      deployment locks remain until cleanup succeeds.
     </p>
     <label class="check-label">
       <input type="checkbox" checked.bind="stopped" required />
-      I stopped the old agent and will restart it on the same Docker host.
+      I stopped the old agent and will restart it on the same private host.
     </label>
   </template>
   <template if.bind="form === 'target'">
+    <div>
+      <label for="target-connection">Connection</label>
+      <select id="target-connection" value.bind="capability">
+        <option value="docker-recreate-v1">Local Docker</option>
+        <option value="ssh-docker-recreate-v1">Docker over SSH</option>
+      </select>
+    </div>
+    <p class="muted">Configure SSH addresses, keys and trusted host keys on the private agent.</p>
     <resource-picker
       api.bind="api"
       resource="projects"
@@ -154,15 +162,12 @@
     <div class="empty-state" if.bind="!data.agents.length">
       <boat-mark></boat-mark>
       <h3>No agents registered.</h3>
-      <p>
-        Register a client certificate fingerprint, then configure the agent on a private Docker
-        host.
-      </p>
+      <p>Register a client certificate fingerprint, then configure the agent on a private host.</p>
     </div>
   </div>
-  <div class="section-title"><h2>Docker targets</h2></div>
+  <div class="section-title"><h2>Deployment targets</h2></div>
   <page-controls pager.bind="targets" label="Targets"></page-controls>
-  <div class="table-wrap" tabindex="0" role="region" aria-label="Docker targets">
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Deployment targets">
     <table>
       <thead>
         <tr>
@@ -176,6 +181,9 @@
         <tr repeat.for="target of data.targets">
           <td>
             <strong>${target.name}</strong>
+            <small>
+              ${target.capability === 'ssh-docker-recreate-v1' ? 'Docker over SSH' : 'Local Docker'}
+            </small>
             <small><code>${target.id}</code></small>
           </td>
           <td>${target.environment_name || environmentName(target.environment_id)}</td>
@@ -185,7 +193,7 @@
       </tbody>
     </table>
     <div class="empty-state" if.bind="!data.targets.length">
-      <h3>No Docker targets.</h3>
+      <h3>No Deployment targets.</h3>
       <p>Add a target, then allow its ID and ports in the agent configuration.</p>
     </div>
   </div>

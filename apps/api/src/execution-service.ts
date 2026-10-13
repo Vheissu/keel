@@ -28,6 +28,7 @@ export const targetInput = z
     project_id: uuid,
     environment_id: uuid,
     agent_id: uuid,
+    capability: z.enum(['docker-recreate-v1', 'ssh-docker-recreate-v1']).optional(),
     labels: z
       .record(z.string().min(1).max(100), z.string().min(1).max(100))
       .refine((v) => Object.keys(v).length > 0 && Object.keys(v).length <= 20),
@@ -300,10 +301,11 @@ export class ExecutionService {
             environment_id,
             agent_id,
             name,
-            labels
+            labels,
+            capability
           )
         VALUES
-          ($1, $2, $3, $4, $5, $6, $7)
+          ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING
           *
       `,
@@ -315,6 +317,7 @@ export class ExecutionService {
         input.agent_id,
         input.name,
         input.labels,
+        input.capability ?? 'docker-recreate-v1',
       ],
     );
 
@@ -621,7 +624,7 @@ export class ExecutionService {
     });
   }
 
-  async claim(agent: AgentIdentity, supportsSecrets = false) {
+  async claim(agent: AgentIdentity, supportsSecrets = false, supportsSSH = false) {
     return transaction(this.control.db, async (tx) => {
       await this.lockAgent(tx, agent);
 
@@ -637,6 +640,19 @@ export class ExecutionService {
           WHERE
             a.organisation_id = $1
             AND a.agent_id = $2
+            AND (
+              $5::boolean
+              OR EXISTS (
+                SELECT
+                  1
+                FROM
+                  deployment_targets t
+                WHERE
+                  t.organisation_id = a.organisation_id
+                  AND t.id = a.target_id
+                  AND t.capability = 'docker-recreate-v1'
+              )
+            )
             AND (
               a.state = 'reconciliation_required'
               OR (
@@ -664,7 +680,7 @@ export class ExecutionService {
           FOR UPDATE OF
             d SKIP LOCKED
         `,
-        [agent.organisation_id, agent.id, agent.state, supportsSecrets],
+        [agent.organisation_id, agent.id, agent.state, supportsSecrets, supportsSSH],
       );
 
       const d = candidates.rows[0] as Deployment | undefined;
@@ -702,11 +718,12 @@ export class ExecutionService {
               organisation_id = $1
               AND id = $2
             RETURNING
-              fence
+              fence,
+              capability
           `,
           [agent.organisation_id, a.target_id],
         )
-      ).rows[0].fence;
+      ).rows[0];
 
       const lease = (
         await tx.query(
@@ -724,7 +741,7 @@ export class ExecutionService {
             RETURNING
               fence
           `,
-          [a.id, cleanup ? 'reconciling' : 'running', sha256(token), targetFence],
+          [a.id, cleanup ? 'reconciling' : 'running', sha256(token), targetFence.fence],
         )
       ).rows[0];
 
@@ -767,6 +784,7 @@ export class ExecutionService {
         token,
         mode: cleanup ? 'cleanup' : 'deploy',
         target_id: a.target_id,
+        capability: targetFence.capability,
         digest: release.manifest.artifact.digest,
         size: release.manifest.artifact.size,
         image_id: process.spec.artifact.dockerImageId,

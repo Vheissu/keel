@@ -1,6 +1,6 @@
 # Implementation status
 
-The control-plane foundation, GitHub ingestion, Bitbucket publishing and Docker execution, agent recovery, promotion policy, rollback planning, scoped deployment secrets, self-hosted packaging, operational recovery, paginated resource navigation, durable webhook notifications, invitation-only accounts, workspace membership and managed token lifecycle, authenticator MFA and session management, OIDC SSO, workspace authentication policies and passkey sign-in are implemented. PLAN.md remains the product roadmap.
+The control-plane foundation, GitHub ingestion, Bitbucket publishing and local/SSH Docker execution, agent recovery, promotion policy, rollback planning, scoped deployment secrets, self-hosted packaging, operational recovery, paginated resource navigation, durable webhook notifications, invitation-only accounts, workspace membership and managed token lifecycle, authenticator MFA and session management, OIDC SSO, workspace authentication policies and passkey sign-in are implemented. PLAN.md remains the product roadmap.
 
 ## Implemented
 
@@ -20,6 +20,7 @@ The control-plane foundation, GitHub ingestion, Bitbucket publishing and Docker 
 - Responsive UI, keyboard-accessible dialogs, reduced-motion boat loaders, and empty states backed by actual data.
 - Temporal deployment workflows and transactional outbox delivery, with stable workflow IDs.
 - A separate mutual-TLS gateway and outbound Go agent with scoped downloads, heartbeats, monotonic target fences, draining and revocation.
+- SSH Docker targets with strict host-key verification, local connection allowlists, a remote helper, durable remote fences and session locks.
 - Controlled Docker recreate execution of a retained image archive, HTTP verification, cancellation cleanup and expiry reconciliation.
 - Target registration, agent state and verified-release projections in the UI.
 - Explicit Docker archive entry selection inside retained GitHub ZIPs, with bounded reads and archive validation.
@@ -56,7 +57,7 @@ The control-plane foundation, GitHub ingestion, Bitbucket publishing and Docker 
 
 ## Next increment
 
-Add SSH deployment targets through private agents. SAML, SCIM, environment-scoped tokens, additional deployment strategies and automated rollback remain later work.
+Add environment-scoped managed API tokens. SAML, SCIM, additional deployment strategies, non-container SSH deployments and automated rollback remain later work.
 
 ## Decisions and constraints
 

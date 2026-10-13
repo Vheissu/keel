@@ -71,7 +71,10 @@ export async function createGateway(execution: ExecutionService, tls: ServerOpti
   app.post('/agent/v1/poll', async (req) => {
     const input = z
       .object({
-        capabilities: z.array(z.literal('deployment-secrets-v1')).max(1).default([]),
+        capabilities: z
+          .array(z.enum(['deployment-secrets-v1', 'ssh-docker-recreate-v1']))
+          .max(2)
+          .default([]),
       })
       .strict()
       .parse(req.body);
@@ -80,6 +83,7 @@ export async function createGateway(execution: ExecutionService, tls: ServerOpti
       job: await execution.claim(
         identities.get(req)!,
         input.capabilities.includes('deployment-secrets-v1'),
+        input.capabilities.includes('ssh-docker-recreate-v1'),
       ),
     };
   });

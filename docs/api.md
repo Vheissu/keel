@@ -124,12 +124,14 @@ Provider capability responses include `artifactIngestion`: `provider-download` f
 
 ## Agent and target management
 
-| Method and path          | Permission | Input / result                                                                           |
-| ------------------------ | ---------- | ---------------------------------------------------------------------------------------- |
-| `GET /execution`         | read       | Latest 200 agents, targets and attempts; no lease credentials                            |
-| `POST /agents`           | write      | `{name, certificate_fingerprint}`; lowercase SHA-256 certificate fingerprint             |
-| `POST /agents/:id/state` | write      | `{state: "active"                                                                        | "draining" | "revoked"}`; revoked identities cannot resume |
-| `POST /targets`          | write      | `{name, project_id, environment_id, agent_id, labels}`; fixed Docker recreate capability |
+| Method and path          | Permission | Input / result                                                                                    |
+| ------------------------ | ---------- | ------------------------------------------------------------------------------------------------- |
+| `GET /execution`         | read       | Latest 200 agents, targets and attempts; no lease credentials                                     |
+| `POST /agents`           | write      | `{name, certificate_fingerprint}`; lowercase SHA-256 certificate fingerprint                      |
+| `POST /agents/:id/state` | write      | `{state: "active"                                                                                 | "draining" | "revoked"}`; revoked identities cannot resume |
+| `POST /targets`          | write      | `{name, project_id, environment_id, agent_id, labels, capability?}`; local or SSH Docker recreate |
+
+`capability` accepts `docker-recreate-v1` (default) or `ssh-docker-recreate-v1`. SSH connection details and credentials stay in the private agent configuration. Polling agents must advertise `ssh-docker-recreate-v1` to claim SSH deployment or reconciliation work. The returned job includes its target capability.
 
 These mutations require idempotency keys. Target bindings are immutable in this increment. A target's `current_release_id` is present only when `current_state` is `verified`. `reconciliation_required` and `cancel_requested` deployments continue holding their environment and target locks. Result codes contain no agent-provided text.
 

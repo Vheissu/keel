@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -12,8 +13,9 @@ import (
 )
 
 type Target struct {
-	HostPort      int `json:"host_port"`
-	ContainerPort int `json:"container_port"`
+	SSH           *SSHConfig `json:"ssh,omitempty"`
+	HostPort      int        `json:"host_port"`
+	ContainerPort int        `json:"container_port"`
 }
 
 type Config struct {
@@ -34,6 +36,7 @@ type Lease struct {
 
 type Job struct {
 	Lease
+	Capability  string `json:"capability"`
 	Mode        string `json:"mode"`
 	TargetID    string `json:"target_id"`
 	Digest      string `json:"digest"`
@@ -55,6 +58,7 @@ type Agent struct {
 	client *http.Client
 	// Tests replace this boundary; production always invokes Docker without a shell.
 	docker func(context.Context, io.Reader, ...string) ([]byte, error)
+	health func(context.Context, int, string) bool
 }
 
 var uuidPattern = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
@@ -67,7 +71,7 @@ func validateConfig(c Config) error {
 		return errors.New("gateway must be an HTTPS origin")
 	}
 
-	if !filepath.IsAbs(c.DockerSocket) {
+	if c.DockerSocket != "" && !filepath.IsAbs(c.DockerSocket) {
 		return errors.New("an absolute local Docker socket is required")
 	}
 
@@ -75,19 +79,36 @@ func validateConfig(c Config) error {
 		return errors.New("certificate, key, CA, state directory and targets are required")
 	}
 
-	ports := map[int]bool{}
+	ports := map[string]bool{}
 	for id, t := range c.Targets {
-		if !uuidPattern.MatchString(id) || t.HostPort < 1024 || t.HostPort > 65535 || t.ContainerPort < 1024 || t.ContainerPort > 65535 || ports[t.HostPort] {
+		if !uuidPattern.MatchString(id) || t.HostPort < 1024 || t.HostPort > 65535 || t.ContainerPort < 1024 || t.ContainerPort > 65535 {
 			return errors.New("target IDs and unprivileged, unique host ports are required")
 		}
 
-		ports[t.HostPort] = true
+		host := "local"
+		if t.SSH != nil {
+			if err := validateSSH(*t.SSH); err != nil {
+				return err
+			}
+			host = t.SSH.Host
+		} else if c.DockerSocket == "" {
+			return errors.New("local targets require a Docker socket")
+		}
+		key := fmt.Sprintf("%s:%d", host, t.HostPort)
+		if ports[key] {
+			return errors.New("target host ports must be unique per host")
+		}
+		ports[key] = true
 	}
 
 	return nil
 }
 
 func validateJob(j Job) error {
+	if j.Capability != "" && j.Capability != "docker-recreate-v1" && j.Capability != "ssh-docker-recreate-v1" {
+		return errors.New("unsupported target capability")
+	}
+
 	if !uuidPattern.MatchString(j.AttemptID) || !uuidPattern.MatchString(j.TargetID) || j.Fence < 1 || !digestPattern.MatchString(j.Token) {
 		return errors.New("invalid lease")
 	}

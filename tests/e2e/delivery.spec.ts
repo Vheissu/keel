@@ -404,7 +404,7 @@ test('connects Bitbucket, waits for successful CI, and manages publishing creden
   await page.screenshot({ path: 'output/playwright/bitbucket-mobile.png', fullPage: true });
 });
 
-test('registers and drains private agents, maps Docker targets and remains accessible on mobile', async ({
+test('registers and drains private agents, maps local and SSH targets and remains accessible on mobile', async ({
   page,
 }) => {
   await connect(page);
@@ -426,9 +426,23 @@ test('registers and drains private agents, maps Docker targets and remains acces
   await expect(page.getByRole('cell').filter({ hasText: 'Private staging host' })).toBeVisible();
   await page.getByRole('button', { name: 'Add target', exact: true }).click();
   await page.getByLabel('Name', { exact: true }).fill('Web staging');
+  await expect(page.getByLabel('Connection', { exact: true })).toHaveValue('docker-recreate-v1');
+  await page.getByLabel('Connection', { exact: true }).selectOption('ssh-docker-recreate-v1');
   await page.getByLabel('Environment', { exact: true }).selectOption({ label: 'Staging' });
   await page.getByRole('button', { name: 'Save registration' }).click();
-  await expect(page.getByRole('cell').filter({ hasText: 'Web staging' })).toBeVisible();
+
+  await expect(page.getByRole('cell').filter({ hasText: 'Web staging' })).toContainText(
+    'Docker over SSH',
+  );
+
+  await page.reload();
+  await page.getByLabel('API token', { exact: true }).fill(f.operator.token);
+  await page.getByRole('button', { name: 'Connect workspace', exact: true }).click();
+
+  await expect(page.getByRole('cell').filter({ hasText: 'Web staging' })).toContainText(
+    'Docker over SSH',
+  );
+
   await expect(page.getByRole('cell', { name: 'Unknown', exact: true })).toBeVisible();
   await page.getByRole('button', { name: /^Drain / }).click();
   await expect(page.getByRole('cell', { name: 'draining', exact: true })).toBeVisible();

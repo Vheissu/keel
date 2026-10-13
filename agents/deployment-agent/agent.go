@@ -71,6 +71,22 @@ func (a *Agent) execute(parent context.Context, j Job) {
 		return
 	}
 
+	// A capability mismatch must never execute on a different Docker daemon.
+	if (j.Capability == "ssh-docker-recreate-v1") != (target.SSH != nil) {
+		log.Print("Target transport differs from the registered capability; reconciliation required")
+		return
+	}
+
+	// Each attempt owns its transport. Reconnection for cleanup takes the same remote lock.
+	if target.SSH != nil {
+		remote := &sshTransport{config: *target.SSH, job: j}
+		defer remote.close()
+		copy := *a
+		copy.docker = remote.docker
+		copy.health = remote.health
+		a = &copy
+	}
+
 	ctx, cancel := context.WithCancelCause(parent)
 	var wg sync.WaitGroup
 	wg.Add(1)

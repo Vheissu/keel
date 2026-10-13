@@ -577,3 +577,38 @@ describe('Fenced deployment execution', () => {
     ).toBe('UNSUPPORTED_PROCESS');
   });
 });
+
+it('gates SSH deployment and reconciliation claims on the SSH capability', async () => {
+  await db.query('DELETE FROM deployment_targets WHERE id=$1', [target.id]);
+
+  target = await mutate((tx) =>
+    execution.registerTarget(tx, p, {
+      project_id: project.id,
+      environment_id: f.environments.staging,
+      agent_id: agent.id,
+      name: 'SSH target',
+      labels: { tier: 'staging' },
+      capability: 'ssh-docker-recreate-v1',
+    }),
+  );
+
+  const d = await requestDeployment();
+
+  await execution.tick(f.org, d.id);
+  expect(await execution.claim(agent, true)).toBeNull();
+  const job = await execution.claim(agent, true, true);
+
+  expect(job).toMatchObject({ capability: 'ssh-docker-recreate-v1', mode: 'deploy' });
+
+  await db.query(
+    "UPDATE deployment_attempts SET lease_expires_at=now()-interval '1 second' WHERE deployment_id=$1",
+    [d.id],
+  );
+
+  await execution.tick(f.org, d.id);
+  expect(await execution.claim(agent, true)).toBeNull();
+  const cleanup = await execution.claim(agent, true, true);
+
+  expect(cleanup).toMatchObject({ capability: 'ssh-docker-recreate-v1', mode: 'cleanup' });
+  expect(cleanup!.fence).toBeGreaterThan(job!.fence);
+});
