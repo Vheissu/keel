@@ -813,3 +813,75 @@ describe('Retained-release rollback plans', () => {
     ).toBe(400);
   });
 });
+
+it('keeps rollback and approval inside token environment scope and redacts prerequisite evidence', async () => {
+  const { previous, current, staging } = await history();
+
+  await db.query('UPDATE api_tokens SET environment_ids=$1, project_ids=$2 WHERE actor_id=$3', [
+    [f.environments.production],
+    [project.id],
+    f.operator.id,
+  ]);
+
+  await db.query('UPDATE api_tokens SET environment_ids=$1 WHERE actor_id=$2', [
+    [f.environments.staging],
+    f.approver.id,
+  ]);
+
+  expect((await get(`/deployments/${staging.id}/rollback-candidates`)).statusCode).toBe(404);
+
+  expect(
+    (
+      await post('/rollback-plans', {
+        source_deployment_id: current.id,
+        candidate_deployment_id: staging.id,
+      })
+    ).statusCode,
+  ).toBe(404);
+
+  const candidates = await get(`/deployments/${current.id}/rollback-candidates`);
+
+  expect(candidates.statusCode, candidates.body).toBe(200);
+  expect(candidates.json().candidates[0].deployment_id).toBe(previous.id);
+  const reviewed = await plan(previous, current);
+
+  expect(reviewed.promotion_source_deployment_id).toBeNull();
+
+  const request = await post(`/rollback-plans/${reviewed.id}/request`, {
+    acknowledge_data_not_restored: true,
+  });
+
+  expect(request.statusCode, request.body).toBe(200);
+
+  expect(request.json()).toMatchObject({
+    kind: 'rollback',
+    status: 'awaiting_approval',
+    promotion_source_deployment_id: null,
+  });
+
+  expect(request.body).not.toContain(f.environments.staging);
+
+  expect(
+    (await post(`/deployments/${request.json().id}/approve`, {}, f.approver.token)).statusCode,
+  ).toBe(404);
+
+  await db.query('UPDATE api_tokens SET environment_ids=$1 WHERE actor_id=$2', [
+    [f.environments.production],
+    f.approver.id,
+  ]);
+
+  const approved = await post(`/deployments/${request.json().id}/approve`, {}, f.approver.token);
+
+  expect(approved.statusCode, approved.body).toBe(200);
+  expect(approved.json().promotion_source_deployment_id).toBeNull();
+
+  await db.query('UPDATE api_tokens SET environment_ids=$1 WHERE actor_id=$2', [
+    [f.environments.staging],
+    f.operator.id,
+  ]);
+
+  expect(
+    (await post(`/rollback-plans/${reviewed.id}/request`, { acknowledge_data_not_restored: true }))
+      .statusCode,
+  ).toBe(404);
+});

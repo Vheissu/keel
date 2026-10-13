@@ -49,6 +49,7 @@ interface Promotion {
   reason: string | null;
   promotion_from_environment_id: string | null;
   source_deployment_id: string | null;
+  prerequisite_restricted?: boolean;
   requires_approval: boolean;
   digest: string;
   secret_bindings: { variable: string; name: string; version: number | null; available: boolean }[];
@@ -224,6 +225,14 @@ export class MyApp {
 
   get projectScoped() {
     return this.data?.principal.project_ids != null;
+  }
+
+  get environmentScoped() {
+    return this.data?.principal.environment_ids != null;
+  }
+
+  get resourceScoped() {
+    return this.projectScoped || this.environmentScoped;
   }
 
   get canWrite() {

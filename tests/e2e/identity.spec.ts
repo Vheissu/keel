@@ -679,3 +679,133 @@ test('manages custom roles and issues a token for selected projects', async ({ p
   await expect(scopedPage.getByRole('alert').filter({ hasText: 'Could not load' })).toHaveCount(0);
   await scopedContext.close();
 });
+
+test('creates, rotates and uses a token restricted to one environment', async ({
+  page,
+  browser,
+}) => {
+  const projectId = randomUUID();
+
+  await db.query('INSERT INTO projects(id,organisation_id,name,slug) VALUES($1,$2,$3,$4)', [
+    projectId,
+    workspace,
+    'Scoped application',
+    projectId,
+  ]);
+
+  const environments = (
+    await db.query('SELECT id,slug FROM environments WHERE organisation_id=$1', [workspace])
+  ).rows;
+
+  const production = environments.find((environment) => environment.slug === 'production').id;
+  const staging = environments.find((environment) => environment.slug === 'staging').id;
+
+  await db.query('UPDATE environments SET promotion_from_environment_id=$1 WHERE id=$2', [
+    staging,
+    production,
+  ]);
+
+  await page.goto(link);
+  await page.getByLabel('Your name', { exact: true }).fill('Workspace owner');
+  await page.getByLabel('Password (at least 15 characters)', { exact: true }).fill(password);
+  await page.getByRole('button', { name: 'Create account and join' }).click();
+  await page.getByRole('link', { name: 'Workspace access', exact: true }).click();
+  await page.getByLabel('Token name').fill('Production deployment token');
+
+  await page
+    .getByRole('group', { name: 'Token permissions' })
+    .getByRole('checkbox', { name: 'write', exact: true })
+    .check();
+
+  await page.getByLabel('Token access', { exact: true }).selectOption('projects');
+  await page.getByLabel('Token project', { exact: true }).selectOption(projectId);
+  await page.getByRole('button', { name: 'Add project', exact: true }).click();
+  await page.getByLabel('Token environment access', { exact: true }).selectOption('environments');
+  await expect(page.getByRole('button', { name: 'Create API token', exact: true })).toBeDisabled();
+  await page.getByLabel('Token environment', { exact: true }).selectOption(production);
+  await page.getByRole('button', { name: 'Add environment', exact: true }).click();
+  await page.getByRole('button', { name: 'Remove Production from token', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Create API token', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Add environment', exact: true }).click();
+  await page.getByRole('button', { name: 'Create API token', exact: true }).click();
+  const original = await page.getByLabel('New API token', { exact: true }).inputValue();
+
+  await expect(
+    page.getByRole('row').filter({ hasText: 'Production deployment token' }),
+  ).toContainText('1 selected environment(s)');
+
+  await page.getByRole('button', { name: 'Rotate token', exact: true }).click();
+  await expect(page.getByLabel('New API token', { exact: true })).not.toHaveValue(original);
+  const rotated = await page.getByLabel('New API token', { exact: true }).inputValue();
+
+  const snapshot = await app.inject({
+    method: 'GET',
+    url: '/api/v1/snapshot',
+    headers: { authorization: `Bearer ${rotated}` },
+  });
+
+  expect(snapshot.statusCode, snapshot.body).toBe(200);
+
+  expect(snapshot.json().principal).toMatchObject({
+    project_ids: [projectId],
+    environment_ids: [production],
+  });
+
+  expect(snapshot.body).not.toContain(staging);
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+
+  await page.screenshot({
+    path: 'output/playwright/environment-tokens-desktop.png',
+    fullPage: true,
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+
+  await page.screenshot({
+    path: 'output/playwright/environment-tokens-mobile.png',
+    fullPage: true,
+  });
+
+  const context = await browser.newContext();
+  const scopedPage = await context.newPage();
+
+  scopedPage.on('pageerror', (error) => errors.push(error.message));
+  await scopedPage.goto('/');
+  await scopedPage.getByLabel('API token', { exact: true }).fill(rotated);
+  await scopedPage.getByRole('button', { name: 'Connect workspace', exact: true }).click();
+  await expect(scopedPage.getByRole('heading', { name: 'Your delivery pipeline' })).toBeVisible();
+  await scopedPage.getByRole('link', { name: 'Environments', exact: true }).click();
+
+  await expect(
+    scopedPage.getByRole('cell', { name: 'Production Policy revision 1', exact: true }),
+  ).toBeVisible();
+
+  await expect(
+    scopedPage.getByRole('cell', { name: 'Staging Policy revision 1', exact: true }),
+  ).toHaveCount(0);
+
+  await expect(
+    scopedPage.getByRole('cell', { name: 'Prerequisite outside token access', exact: true }),
+  ).toBeVisible();
+
+  await scopedPage.getByRole('link', { name: 'Artifacts', exact: true }).click();
+
+  await expect(
+    scopedPage.getByRole('button', { name: 'Publish artifact', exact: true }),
+  ).toHaveCount(0);
+
+  await scopedPage.getByRole('link', { name: 'Releases', exact: true }).click();
+
+  await expect(scopedPage.getByRole('button', { name: 'Create release', exact: true })).toHaveCount(
+    0,
+  );
+
+  await scopedPage.getByRole('link', { name: 'Targets', exact: true }).click();
+
+  await expect(scopedPage.getByRole('button', { name: 'Register agent', exact: true })).toHaveCount(
+    0,
+  );
+
+  await context.close();
+});

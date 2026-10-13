@@ -10,6 +10,7 @@ export interface Principal {
   token_id?: string;
   role?: string;
   project_ids?: string[] | null;
+  environment_ids?: string[] | null;
 }
 
 export interface Project {
@@ -22,6 +23,7 @@ export interface Project {
 }
 
 export interface Environment {
+  prerequisite_restricted?: boolean;
   id: string;
   organisation_id: string;
   name: string;

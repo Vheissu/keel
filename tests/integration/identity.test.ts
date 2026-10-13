@@ -1,3 +1,4 @@
+import { CredentialVault } from '../../apps/api/src/credential-vault.js';
 import { mfaVault } from '../../apps/api/src/account-security.js';
 import { totp } from '../../apps/api/src/totp.js';
 import { beforeAll, afterAll, beforeEach, expect, it } from 'vitest';
@@ -34,7 +35,13 @@ beforeAll(async () => {
   await admin.query(`CREATE SCHEMA ${schema}`);
   await migrate(db);
   root = await mkdtemp(join(tmpdir(), 'keel-identity-'));
-  control = new ControlPlane(db, new LocalArtifactStore(root));
+
+  control = new ControlPlane(
+    db,
+    new LocalArtifactStore(root),
+    new CredentialVault(process.env.KEEL_CREDENTIAL_KEY, 'deployment-secrets'),
+  );
+
   app = await createApp(control, false, undefined, undefined, origin);
 });
 
@@ -85,6 +92,7 @@ async function session(cookie: string, workspace: string): Promise<Session> {
   const response = await app.inject({
     method: 'GET',
     url: '/api/auth/session',
+    remoteAddress: `192.0.2.${(++ip % 250) + 1}`,
     headers: { cookie: cookie.split(';')[0] },
   });
 
@@ -148,6 +156,7 @@ function bearer(value: string, path = '/snapshot', payload?: object, workspace?:
     method: payload ? 'POST' : 'GET',
     url: `/api/v1${path}`,
     payload,
+    remoteAddress: `192.0.2.${(++ip % 250) + 1}`,
     headers: {
       authorization: `Bearer ${value}`,
       'idempotency-key': randomUUID(),
@@ -1794,4 +1803,660 @@ it('isolates integration, execution and notification metadata and related mutati
       )
     ).statusCode,
   ).toBe(404);
+});
+
+async function environmentFixture() {
+  const { allowed, excluded } = await scopedFixture();
+  const deployments = [];
+
+  for (const project of [allowed, excluded]) {
+    const response = await api('/deployments', {
+      release_id: project.release.id,
+      environment_id: f.environments.production,
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+    deployments.push(response.json());
+  }
+
+  const input = {
+    name: 'Production CI',
+    permissions: ['read', 'write', 'approve', 'manage_secrets'],
+    expires_in_days: 30,
+    project_ids: [allowed.id],
+    environment_ids: [f.environments.production],
+  };
+
+  const issued = await api('/identity/tokens', input);
+
+  expect(issued.statusCode, issued.body).toBe(200);
+
+  return { allowed, excluded, deployments, input, credential: issued.json() };
+}
+
+it('validates environment selection and preserves both scopes on rotation', async () => {
+  const { input, credential, allowed } = await environmentFixture();
+  const foreign = await fixture(db);
+
+  for (const environment_ids of [
+    [],
+    [null],
+    ['invalid'],
+    Array(101).fill(randomUUID()),
+    [f.environments.production, f.environments.production],
+    [f.environments.production, f.environments.production.toUpperCase()],
+  ]) {
+    expect((await api('/identity/tokens', { ...input, environment_ids })).statusCode).toBe(400);
+  }
+
+  for (const id of [foreign.environments.production, randomUUID()]) {
+    expect((await api('/identity/tokens', { ...input, environment_ids: [id] })).statusCode).toBe(
+      404,
+    );
+  }
+
+  const uppercase = await api('/identity/tokens', {
+    ...input,
+    environment_ids: [f.environments.production.toUpperCase()],
+  });
+
+  expect(uppercase.statusCode, uppercase.body).toBe(200);
+  expect(uppercase.json().environment_ids).toEqual(input.environment_ids);
+
+  expect(
+    (
+      await bearer(
+        uppercase.json().token,
+        `/releases/${allowed.release.id}/promotion?environment_id=${f.environments.production.toUpperCase()}`,
+      )
+    ).statusCode,
+  ).toBe(200);
+
+  // A failed replacement must not revoke the working credential.
+  expect(
+    (
+      await api(`/identity/tokens/${credential.id}/rotate`, {
+        ...input,
+        environment_ids: [foreign.environments.production],
+      })
+    ).statusCode,
+  ).toBe(404);
+
+  expect((await bearer(credential.token)).statusCode).toBe(200);
+
+  const { project_ids: _projects, environment_ids: _environments, ...unscoped } = input;
+  const rotated = await api(`/identity/tokens/${credential.id}/rotate`, unscoped);
+
+  expect(rotated.statusCode, rotated.body).toBe(200);
+
+  expect(rotated.json()).toMatchObject({
+    project_ids: [allowed.id],
+    environment_ids: input.environment_ids,
+  });
+
+  expect((await bearer(credential.token)).statusCode).toBe(401);
+
+  const listed = (await api('/identity/tokens'))
+    .json()
+    .items.find((row: { id: string }) => row.id === rotated.json().id);
+
+  expect(listed.environment_ids).toEqual(input.environment_ids);
+  expect(listed.token).toBeUndefined();
+
+  const expanded = await api(`/identity/tokens/${rotated.json().id}/rotate`, {
+    ...unscoped,
+    environment_ids: null,
+  });
+
+  expect(expanded.statusCode, expanded.body).toBe(200);
+  expect(expanded.json().project_ids).toEqual([allowed.id]);
+  expect(expanded.json().environment_ids).toBeNull();
+  expect((await bearer(expanded.json().token)).json().environments).toHaveLength(2);
+});
+
+it('intersects environment and project scope across snapshots, pages, actions and replay', async () => {
+  const { allowed, excluded, deployments, credential, input } = await environmentFixture();
+  const snapshot = await bearer(credential.token);
+
+  expect(snapshot.statusCode, snapshot.body).toBe(200);
+  expect(snapshot.json().principal.environment_ids).toEqual(input.environment_ids);
+
+  expect(snapshot.json().totals).toMatchObject({
+    projects: 1,
+    deployments: 1,
+    environments: 1,
+    audit_events: 0,
+  });
+
+  expect(snapshot.json().awaiting_approval).toBe(1);
+  expect(snapshot.json().environment_states).toHaveLength(1);
+  expect(snapshot.body).not.toContain(excluded.id);
+  expect(snapshot.body).not.toContain(allowed.deployment.id);
+  expect(snapshot.body).not.toContain(f.environments.staging);
+
+  for (const [resource, id] of [
+    ['deployments', deployments[0].id],
+    ['environments', f.environments.production],
+  ]) {
+    const response = await bearer(credential.token, `/resources/${resource}`);
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json().total).toBe(1);
+    expect(response.json().items[0].id).toBe(id);
+    expect((await bearer(credential.token, `/resources/${resource}/${id}`)).statusCode).toBe(200);
+  }
+
+  for (const id of [allowed.deployment.id, deployments[1].id]) {
+    expect((await bearer(credential.token, `/resources/deployments/${id}`)).statusCode).toBe(404);
+
+    for (const action of ['approve', 'reject', 'cancel']) {
+      expect((await bearer(credential.token, `/deployments/${id}/${action}`, {})).statusCode).toBe(
+        404,
+      );
+    }
+
+    for (const action of ['rollback-candidates', 'secret-bindings']) {
+      expect((await bearer(credential.token, `/deployments/${id}/${action}`)).statusCode).toBe(404);
+    }
+  }
+
+  expect(
+    (await bearer(credential.token, `/resources/environments/${f.environments.staging}`))
+      .statusCode,
+  ).toBe(404);
+
+  expect(
+    (
+      await bearer(
+        credential.token,
+        `/resources/deployments?environment_id=${f.environments.staging}`,
+      )
+    ).json().total,
+  ).toBe(0);
+
+  expect(
+    (await bearer(credential.token, `/deployments/${deployments[0].id}/cancel`, {})).statusCode,
+  ).toBe(200);
+
+  expect(
+    (
+      await bearer(credential.token, '/rollback-plans', {
+        source_deployment_id: deployments[0].id,
+        candidate_deployment_id: allowed.deployment.id,
+      })
+    ).statusCode,
+  ).toBe(404);
+
+  expect(
+    (
+      await bearer(credential.token, '/deployments', {
+        release_id: allowed.release.id,
+        environment_id: f.environments.staging,
+      })
+    ).statusCode,
+  ).toBe(403);
+
+  expect(
+    (
+      await bearer(credential.token, '/deployments', {
+        release_id: excluded.release.id,
+        environment_id: f.environments.production,
+      })
+    ).statusCode,
+  ).toBe(404);
+
+  const request = { release_id: allowed.release.id, environment_id: f.environments.production };
+  const key = randomUUID();
+
+  const broadDeployment = await api('/deployments', request, owner, key);
+
+  expect(broadDeployment.statusCode, broadDeployment.body).toBe(200);
+
+  const replay = await app.inject({
+    method: 'POST',
+    url: '/api/v1/deployments',
+    payload: request,
+    headers: { authorization: `Bearer ${credential.token}`, 'idempotency-key': key },
+  });
+
+  expect(replay.statusCode).toBe(409);
+  expect((await api(`/deployments/${broadDeployment.json().id}/cancel`, {})).statusCode).toBe(200);
+  const restrictedDeployment = await bearer(credential.token, '/deployments', request);
+
+  expect(restrictedDeployment.statusCode, restrictedDeployment.body).toBe(200);
+
+  const environmentOnly = await api('/identity/tokens', { ...input, project_ids: null });
+  const page = await bearer(environmentOnly.json().token, '/resources/deployments?limit=1');
+
+  expect(page.json().total).toBe(4);
+  expect(page.json().next_cursor).toBeTruthy();
+
+  expect(
+    (await bearer(credential.token, `/resources/deployments?cursor=${page.json().next_cursor}`))
+      .statusCode,
+  ).toBe(400);
+
+  const projectOnly = await api('/identity/tokens', {
+    ...input,
+    environment_ids: null,
+    project_ids: null,
+  });
+
+  const broadPage = await bearer(projectOnly.json().token, '/resources/deployments?limit=1');
+
+  expect(
+    (
+      await bearer(
+        environmentOnly.json().token,
+        `/resources/deployments?cursor=${broadPage.json().next_cursor}`,
+      )
+    ).statusCode,
+  ).toBe(400);
+
+  // Shared immutable inputs remain readable; a restricted credential cannot publish new inputs.
+  expect(
+    (await bearer(credential.token, `/artifacts/${allowed.artifact.id}/download`)).statusCode,
+  ).toBe(200);
+
+  for (const path of [
+    '/projects',
+    '/agents',
+    '/targets',
+    '/releases',
+    '/integrations/github',
+    '/integrations/bitbucket',
+    `/environments/${f.environments.production}/promotion-policy`,
+    `/integrations/${randomUUID()}/state`,
+    `/imports/${randomUUID()}/retry`,
+  ]) {
+    expect(
+      (await bearer(environmentOnly.json().token, path, { project_id: allowed.id })).statusCode,
+    ).toBe(403);
+  }
+
+  expect((await bearer(credential.token, '/integrations')).json()).toMatchObject({
+    connections: [],
+    imports: [],
+  });
+});
+
+it('limits secret metadata and changes to selected environments', async () => {
+  const { allowed, credential } = await environmentFixture();
+  const secrets = [];
+
+  for (const environment_id of [f.environments.staging, f.environments.production]) {
+    const result = await api('/secrets', {
+      project_id: allowed.id,
+      environment_id,
+      name: 'API_KEY',
+      value: 'do-not-expose',
+    });
+
+    expect(result.statusCode, result.body).toBe(200);
+    secrets.push(result.json());
+  }
+
+  const query = `project_id=${allowed.id}&environment_id=${f.environments.production}`;
+  const metadata = await bearer(credential.token, `/secrets?${query}`);
+
+  expect(metadata.statusCode, metadata.body).toBe(200);
+  expect(metadata.body).not.toContain('do-not-expose');
+  expect((await bearer(credential.token, `/resources/secrets?${query}`)).json().total).toBe(1);
+
+  expect((await bearer(credential.token, `/resources/secrets/${secrets[0].id}`)).statusCode).toBe(
+    404,
+  );
+
+  expect(
+    (
+      await bearer(
+        credential.token,
+        `/secrets?project_id=${allowed.id}&environment_id=${f.environments.staging}`,
+      )
+    ).statusCode,
+  ).toBe(403);
+
+  expect(
+    (
+      await bearer(credential.token, '/secrets', {
+        project_id: allowed.id,
+        environment_id: f.environments.staging,
+      })
+    ).statusCode,
+  ).toBe(403);
+
+  for (const action of ['versions', 'revoke']) {
+    expect(
+      (await bearer(credential.token, `/secrets/${secrets[0].id}/${action}`, {})).statusCode,
+    ).toBe(404);
+  }
+
+  const changed = await bearer(credential.token, `/secrets/${secrets[1].id}/versions`, {
+    expected_revision: 1,
+    value: 'replacement',
+  });
+
+  expect(changed.statusCode, changed.body).toBe(200);
+
+  expect(
+    (await bearer(credential.token, `/secrets/${secrets[1].id}/revoke`, { expected_revision: 2 }))
+      .statusCode,
+  ).toBe(200);
+});
+
+it('filters execution and notification relationships using the same allowed project and environment', async () => {
+  const { allowed, excluded, deployments, credential } = await environmentFixture();
+  const rows = [];
+
+  for (const [project, deployment, environment] of [
+    [allowed, deployments[0], f.environments.production],
+    [allowed, allowed.deployment, f.environments.staging],
+    [excluded, deployments[1], f.environments.production],
+  ] as const) {
+    const agent = randomUUID();
+    const target = randomUUID();
+    const attempt = randomUUID();
+    const endpoint = randomUUID();
+    const delivery = randomUUID();
+    const notificationAttempt = randomUUID();
+
+    const event = (
+      await db.query('SELECT id FROM deployment_events WHERE deployment_id=$1', [deployment.id])
+    ).rows[0].id;
+
+    await db.query(
+      'INSERT INTO deployment_agents(id,organisation_id,name,certificate_fingerprint) VALUES($1,$2,$3,$4)',
+      [agent, f.org, 'Agent', sha256(agent)],
+    );
+
+    await db.query(
+      `INSERT INTO deployment_targets(id,organisation_id,project_id,environment_id,agent_id,name,labels)
+      VALUES($1,$2,$3,$4,$5,'Target','{}')`,
+      [target, f.org, project.id, environment, agent],
+    );
+
+    await db.query(
+      `INSERT INTO deployment_attempts(id,organisation_id,deployment_id,target_id,agent_id,state)
+      VALUES($1,$2,$3,$4,$5,'failed')`,
+      [attempt, f.org, deployment.id, target, agent],
+    );
+
+    await db.query(
+      `INSERT INTO notification_endpoints(id,organisation_id,name,origin,credentials,project_id,environment_id,statuses)
+      VALUES($1,$2,'Endpoint','https://example.com','{}',$3,$4,'{failed}')`,
+      [endpoint, f.org, project.id, environment],
+    );
+
+    await db.query(
+      `INSERT INTO notification_deliveries(id,organisation_id,endpoint_id,event_id,deployment_id,payload,status)
+      VALUES($1,$2,$3,$4,$5,'{}','failed')`,
+      [delivery, f.org, endpoint, event, deployment.id],
+    );
+
+    await db.query(
+      'INSERT INTO notification_attempts(id,organisation_id,delivery_id,attempt) VALUES($1,$2,$3,1)',
+      [notificationAttempt, f.org, delivery],
+    );
+
+    rows.push({
+      agents: agent,
+      targets: target,
+      attempts: attempt,
+      'notification-endpoints': endpoint,
+      'notification-deliveries': delivery,
+      'notification-attempts': notificationAttempt,
+    });
+  }
+
+  const connection = randomUUID();
+  const imported = randomUUID();
+
+  await db.query(
+    `INSERT INTO provider_connections (
+      id, organisation_id, project_id, created_by, provider, name, repository,
+      repository_id, workflow_id, branch, artifact_name, credentials
+    ) VALUES ($1, $2, $3, $4, 'github-actions', 'Shared CI', 'owner/repo', '1', '1', 'main', 'application', '{}')`,
+    [connection, f.org, allowed.id, f.operator.id],
+  );
+
+  await db.query(
+    `INSERT INTO artifact_imports (
+      id, organisation_id, project_id, connection_id, requested_by, run_id, run_attempt, status
+    ) VALUES ($1, $2, $3, $4, $5, '1', 1, 'failed')`,
+    [imported, f.org, allowed.id, connection, f.operator.id],
+  );
+
+  for (const [resource, id] of [
+    ['connections', connection],
+    ['imports', imported],
+  ]) {
+    expect((await bearer(credential.token, `/resources/${resource}`)).json().total).toBe(0);
+    expect((await bearer(credential.token, `/resources/${resource}/${id}`)).statusCode).toBe(404);
+  }
+
+  expect((await bearer(credential.token, '/integrations')).json()).toMatchObject({
+    connections: [],
+    imports: [],
+  });
+
+  expect(
+    (await bearer(credential.token, `/integrations/${connection}/state`, { enabled: false }))
+      .statusCode,
+  ).toBe(403);
+
+  expect((await bearer(credential.token, `/imports/${imported}/retry`, {})).statusCode).toBe(403);
+
+  // This agent has the right project on one target, and the right environment on another.
+  await db.query('UPDATE deployment_targets SET agent_id=$1 WHERE id=$2', [
+    rows[1].agents,
+    rows[2].targets,
+  ]);
+
+  for (const resource of Object.keys(rows[0]) as (keyof (typeof rows)[0])[]) {
+    const page = await bearer(credential.token, `/resources/${resource}`);
+
+    expect(page.statusCode, page.body).toBe(200);
+    expect(page.json().total).toBe(1);
+    expect(page.json().items[0].id).toBe(rows[0][resource]);
+
+    for (const row of rows.slice(1)) {
+      expect(
+        (await bearer(credential.token, `/resources/${resource}/${row[resource]}`)).statusCode,
+      ).toBe(404);
+    }
+  }
+
+  const execution = await bearer(credential.token, '/execution');
+
+  expect(execution.statusCode, execution.body).toBe(200);
+
+  for (const resource of ['agents', 'targets', 'attempts'] as const) {
+    expect(execution.json()[resource].map((row: { id: string }) => row.id)).toEqual([
+      rows[0][resource],
+    ]);
+  }
+
+  for (const row of rows.slice(1)) {
+    expect(
+      (
+        await bearer(
+          credential.token,
+          `/notifications/endpoints/${row['notification-endpoints']}/state`,
+          {},
+        )
+      ).statusCode,
+    ).toBe(404);
+
+    expect(
+      (
+        await bearer(
+          credential.token,
+          `/notifications/deliveries/${row['notification-deliveries']}/retry`,
+          {},
+        )
+      ).statusCode,
+    ).toBe(404);
+  }
+
+  expect(
+    (await bearer(credential.token, '/notifications/endpoints', { project_id: allowed.id }))
+      .statusCode,
+  ).toBe(403);
+
+  expect(
+    (
+      await bearer(credential.token, '/notifications/endpoints', {
+        project_id: allowed.id,
+        environment_id: f.environments.staging,
+      })
+    ).statusCode,
+  ).toBe(403);
+
+  expect(
+    (
+      await bearer(
+        credential.token,
+        `/notifications/deliveries/${rows[0]['notification-deliveries']}/retry`,
+        {},
+      )
+    ).statusCode,
+  ).toBe(200);
+
+  // Global endpoints and their histories remain hidden, even for a permitted deployment.
+  await db.query('UPDATE notification_endpoints SET environment_id=NULL WHERE id=$1', [
+    rows[0]['notification-endpoints'],
+  ]);
+
+  for (const resource of [
+    'notification-endpoints',
+    'notification-deliveries',
+    'notification-attempts',
+  ]) {
+    expect((await bearer(credential.token, `/resources/${resource}`)).json().total).toBe(0);
+  }
+
+  expect(
+    (
+      await bearer(
+        credential.token,
+        `/notifications/deliveries/${rows[0]['notification-deliveries']}/retry`,
+        {},
+      )
+    ).statusCode,
+  ).toBe(404);
+});
+
+it('evaluates promotion policy without exposing prerequisite environment evidence', async () => {
+  const { allowed, deployments, input, credential } = await environmentFixture();
+  const target = randomUUID();
+  const agent = randomUUID();
+
+  await api(`/deployments/${deployments[0].id}/cancel`, {});
+
+  await db.query(
+    `UPDATE deployments SET status='succeeded', result_code='HTTP_VERIFIED' WHERE id=$1`,
+    [allowed.deployment.id],
+  );
+
+  await db.query(
+    'INSERT INTO deployment_agents(id,organisation_id,name,certificate_fingerprint) VALUES($1,$2,$3,$4)',
+    [agent, f.org, 'Prerequisite agent', sha256(agent)],
+  );
+
+  await db.query(
+    `INSERT INTO deployment_targets(id,organisation_id,project_id,environment_id,agent_id,name,labels)
+    VALUES($1,$2,$3,$4,$5,'Prerequisite target','{}')`,
+    [target, f.org, allowed.id, f.environments.staging, agent],
+  );
+
+  await db.query(
+    `INSERT INTO deployment_attempts(id,organisation_id,deployment_id,target_id,agent_id,state,result_code,fence)
+    VALUES($1,$2,$3,$4,$5,'succeeded','HTTP_VERIFIED',1)`,
+    [randomUUID(), f.org, allowed.deployment.id, target, agent],
+  );
+
+  const policy = await api(`/environments/${f.environments.production}/promotion-policy`, {
+    promotion_from_environment_id: f.environments.staging,
+    expected_revision: 1,
+  });
+
+  expect(policy.statusCode, policy.body).toBe(200);
+  const promotionPath = `/releases/${allowed.release.id}/promotion?environment_id=${f.environments.production}`;
+  const inspected = await bearer(credential.token, promotionPath);
+
+  expect(inspected.statusCode, inspected.body).toBe(200);
+
+  expect(inspected.json()).toMatchObject({
+    eligible: true,
+    source_deployment_id: null,
+    promotion_from_environment_id: null,
+    prerequisite_restricted: true,
+  });
+
+  expect(
+    (
+      await bearer(
+        credential.token,
+        `/releases/${allowed.release.id}/promotion?environment_id=${f.environments.staging}`,
+      )
+    ).statusCode,
+  ).toBe(403);
+
+  const request = { release_id: allowed.release.id, environment_id: f.environments.production };
+  const key = randomUUID();
+
+  const deploy = () =>
+    app.inject({
+      method: 'POST',
+      url: '/api/v1/deployments',
+      payload: request,
+      headers: { authorization: `Bearer ${credential.token}`, 'idempotency-key': key },
+    });
+
+  const created = await deploy();
+
+  expect(created.statusCode, created.body).toBe(200);
+  expect(created.json().promotion_source_deployment_id).toBeNull();
+  expect(created.json().policy_snapshot.promotion_from_environment_id).toBeNull();
+  expect((await deploy()).json().promotion_source_deployment_id).toBeNull();
+
+  for (const path of [
+    '/snapshot',
+    '/resources/environments',
+    '/resources/deployments',
+    `/resources/environments/${f.environments.production}`,
+    `/resources/deployments/${created.json().id}`,
+  ]) {
+    const result = await bearer(credential.token, path);
+
+    expect(result.statusCode, result.body).toBe(200);
+    expect(result.body).not.toContain(f.environments.staging);
+    expect(result.body).not.toContain(allowed.deployment.id);
+    expect(result.body).not.toContain('Staging');
+  }
+
+  const broad = await api('/identity/tokens', {
+    ...input,
+    environment_ids: [f.environments.production, f.environments.staging],
+  });
+
+  expect((await bearer(broad.json().token, promotionPath)).json().source_deployment_id).toBe(
+    allowed.deployment.id,
+  );
+
+  expect(
+    (await api(`/resources/deployments/${created.json().id}`)).json()
+      .promotion_source_deployment_id,
+  ).toBe(allowed.deployment.id);
+
+  // Environment scope never grants permissions excluded by the token.
+  const reader = await api('/identity/tokens', { ...input, permissions: ['read'] });
+
+  expect(
+    (await bearer(reader.json().token, `/deployments/${created.json().id}/cancel`, {})).statusCode,
+  ).toBe(403);
+
+  expect((await api(`/resources/deployments/${created.json().id}`)).json().status).toBe(
+    'awaiting_approval',
+  );
 });

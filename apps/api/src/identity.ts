@@ -30,6 +30,18 @@ export const tokenInput = z
         'Choose distinct permissions including read.',
       ),
     expires_in_days: z.number().int().min(1).max(90),
+    environment_ids: z
+      .array(
+        z
+          .string()
+          .uuid()
+          .transform((id) => id.toLowerCase()),
+      )
+      .min(1)
+      .max(100)
+      .refine((ids) => new Set(ids).size === ids.length, 'Choose distinct environments.')
+      .nullable()
+      .optional(),
     project_ids: z
       .array(z.string().uuid())
       .min(1)
@@ -816,6 +828,23 @@ export class Identity {
       }
     }
 
+    const environmentIds = input.environment_ids ?? null;
+
+    if (environmentIds) {
+      const environments = await tx.query(
+        'SELECT id FROM environments WHERE organisation_id=$1 AND id=ANY($2::uuid[]) FOR SHARE',
+        [p.organisation_id, environmentIds],
+      );
+
+      if (environments.rowCount !== environmentIds.length) {
+        throw new DomainError(
+          'NOT_FOUND',
+          'One or more selected environments are unavailable.',
+          404,
+        );
+      }
+    }
+
     const token = `keel_${newOpaque()}`;
 
     const row = (
@@ -831,6 +860,7 @@ export class Identity {
               permissions,
               name,
               project_ids,
+              environment_ids,
               expires_at
             )
           VALUES
@@ -843,13 +873,15 @@ export class Identity {
               $6,
               $7,
               $8,
-              now() + $9 * interval '1 day'
+              $9,
+              now() + $10 * interval '1 day'
             )
           RETURNING
             id,
             name,
             permissions,
             project_ids,
+            environment_ids,
             expires_at,
             created_at
         `,
@@ -862,6 +894,7 @@ export class Identity {
           input.permissions,
           input.name,
           projectIds,
+          environmentIds,
           input.expires_in_days,
         ],
       )
@@ -871,6 +904,7 @@ export class Identity {
       name: input.name,
       permissions: input.permissions,
       project_ids: projectIds,
+      environment_ids: environmentIds,
       expires_at: row.expires_at,
     });
 

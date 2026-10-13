@@ -21,6 +21,7 @@ type Token = {
   email: string;
   permissions: Permission[];
   project_ids: string[] | null;
+  environment_ids: string[] | null;
   expires_at: string;
   revoked_at: string | null;
 };
@@ -56,6 +57,10 @@ export class WorkspaceAccess {
   editingRole: WorkspaceRole | null = null;
   allPermissions: Permission[] = ['read', 'write', 'approve', 'manage_secrets'];
   tokenScope = 'workspace';
+  environmentScope = 'workspace';
+  selectedEnvironment = '';
+  selectedEnvironmentName = '';
+  tokenEnvironments: { id: string; name: string }[] = [];
   selectedProject = '';
   selectedProjectName = '';
   tokenProjects: { id: string; name: string }[] = [];
@@ -244,6 +249,29 @@ export class WorkspaceAccess {
     this.tokenProjects = this.tokenProjects.filter((project) => project.id !== id);
   }
 
+  environmentChanged = (environment?: { id: string; name?: string }) => {
+    this.selectedEnvironmentName = environment?.name || '';
+  };
+
+  addEnvironment() {
+    if (
+      this.selectedEnvironment &&
+      !this.tokenEnvironments.some((environment) => environment.id === this.selectedEnvironment)
+    ) {
+      this.tokenEnvironments = [
+        ...this.tokenEnvironments,
+        {
+          id: this.selectedEnvironment,
+          name: this.selectedEnvironmentName || this.selectedEnvironment,
+        },
+      ];
+    }
+  }
+
+  removeEnvironment(id: string) {
+    this.tokenEnvironments = this.tokenEnvironments.filter((environment) => environment.id !== id);
+  }
+
   saveAuthPolicy() {
     return this.run(async () => {
       await this.api.request('/identity/auth-policy', 'POST', {
@@ -308,6 +336,11 @@ export class WorkspaceAccess {
       const selectedProjects =
         this.tokenScope === 'workspace' ? null : this.tokenProjects.map((project) => project.id);
 
+      const selectedEnvironments =
+        this.environmentScope === 'workspace'
+          ? null
+          : this.tokenEnvironments.map((environment) => environment.id);
+
       const result = await this.api.request<{ token?: string }>(
         rotate ? `/identity/tokens/${rotate.id}/rotate` : '/identity/tokens',
         'POST',
@@ -320,6 +353,7 @@ export class WorkspaceAccess {
             : this.permissions,
           expires_in_days: Number(this.days),
           project_ids: rotate ? rotate.project_ids : selectedProjects,
+          environment_ids: rotate ? rotate.environment_ids : selectedEnvironments,
         },
       );
 

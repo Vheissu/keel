@@ -1,4 +1,4 @@
-import { projectCondition } from './project-access.js';
+import { scopeCondition } from './environment-access.js';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import {
@@ -21,13 +21,13 @@ export async function registerExecutionRoutes(api: FastifyInstance, execution: E
           deployment_agents t
         WHERE
           organisation_id = $1
-          AND ($2::uuid[] IS NULL OR (${projectCondition('agents', '$2')}))
+          AND ${scopeCondition('agents', '$2', '$3')}
         ORDER BY
           created_at DESC
         LIMIT
           200
       `,
-      [org, req.principal.project_ids ?? null],
+      [org, req.principal.project_ids ?? null, req.principal.environment_ids ?? null],
     );
 
     const targets = await execution.control.db.query(
@@ -38,13 +38,13 @@ export async function registerExecutionRoutes(api: FastifyInstance, execution: E
           deployment_targets t
         WHERE
           organisation_id = $1
-          AND ($2::uuid[] IS NULL OR (${projectCondition('targets', '$2')}))
+          AND ${scopeCondition('targets', '$2', '$3')}
         ORDER BY
           created_at DESC
         LIMIT
           200
       `,
-      [org, req.principal.project_ids ?? null],
+      [org, req.principal.project_ids ?? null, req.principal.environment_ids ?? null],
     );
 
     const attempts = await execution.control.db.query(
@@ -66,13 +66,13 @@ export async function registerExecutionRoutes(api: FastifyInstance, execution: E
           deployment_attempts t
         WHERE
           organisation_id = $1
-          AND ($2::uuid[] IS NULL OR (${projectCondition('attempts', '$2')}))
+          AND ${scopeCondition('attempts', '$2', '$3')}
         ORDER BY
           created_at DESC
         LIMIT
           200
       `,
-      [org, req.principal.project_ids ?? null],
+      [org, req.principal.project_ids ?? null, req.principal.environment_ids ?? null],
     );
 
     return { agents: agents.rows, targets: targets.rows, attempts: attempts.rows };

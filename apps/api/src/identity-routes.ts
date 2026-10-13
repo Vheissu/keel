@@ -570,6 +570,7 @@ export async function registerIdentityRoutes(api: FastifyInstance, identity?: Id
             t.name,
             t.permissions,
             t.project_ids,
+            t.environment_ids,
             t.expires_at,
             t.revoked_at,
             t.created_at,
@@ -624,7 +625,7 @@ export async function registerIdentityRoutes(api: FastifyInstance, identity?: Id
                 AND revoked_at IS NULL
                 AND expires_at > now()
               RETURNING
-                id, project_ids
+                id, project_ids, environment_ids
             `,
             [id, req.principal.organisation_id, req.principal.user_id],
           );
@@ -635,6 +636,10 @@ export async function registerIdentityRoutes(api: FastifyInstance, identity?: Id
 
           if (input.project_ids === undefined) {
             input.project_ids = old.rows[0].project_ids;
+          }
+
+          if (input.environment_ids === undefined) {
+            input.environment_ids = old.rows[0].environment_ids;
           }
 
           await control.audit(tx, req.principal, 'api_token.rotated', id);

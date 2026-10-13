@@ -1,4 +1,9 @@
-import { enforceProjectRequest, projectCondition } from './project-access.js';
+import {
+  enforceEnvironmentRequest,
+  scopeCondition,
+  redactEnvironmentEvidence,
+} from './environment-access.js';
+import { enforceProjectRequest } from './project-access.js';
 import { Identity } from './identity.js';
 import { registerAuthRoutes, registerIdentityRoutes } from './identity-routes.js';
 import { registerNotificationRoutes } from './notifications.js';
@@ -185,6 +190,13 @@ export async function createApp(
       });
 
       api.addHook('preHandler', async (req) => enforceProjectRequest(service.db, req));
+      api.addHook('preHandler', async (req) => enforceEnvironmentRequest(service.db, req));
+
+      api.addHook('preSerialization', async (req, _reply, payload) =>
+        req.principal?.environment_ids
+          ? redactEnvironmentEvidence(payload, req.principal.environment_ids)
+          : payload,
+      );
 
       const mutation = <T>(
         req: FastifyRequest,
@@ -231,9 +243,8 @@ export async function createApp(
               'deployments',
               'audit_events',
             ]) {
-              const scoped = p.project_ids != null;
-              const condition = scoped ? ` AND ${projectCondition(table, '$2', 't')}` : '';
-              const values = scoped ? [p.organisation_id, p.project_ids] : [p.organisation_id];
+              const condition = ` AND ${scopeCondition(table, '$2', '$3')}`;
+              const values = [p.organisation_id, p.project_ids ?? null, p.environment_ids ?? null];
 
               result[table === 'audit_events' ? 'audit' : table] = (
                 await tx.query(
@@ -281,6 +292,7 @@ export async function createApp(
                   WHERE
                     d.organisation_id = $1
                     AND d.project_id = ANY ($2::UUID[])
+                    AND ($3::uuid[] IS NULL OR d.environment_id=ANY($3::uuid[]))
                   ORDER BY
                     d.project_id,
                     d.environment_id,
@@ -290,6 +302,7 @@ export async function createApp(
                 [
                   p.organisation_id,
                   (result.projects as { id: string }[]).map((project) => project.id),
+                  p.environment_ids ?? null,
                 ],
               )
             ).rows;
@@ -308,8 +321,9 @@ export async function createApp(
                       organisation_id = $1
                       AND status = 'awaiting_approval'
                       AND ($2::uuid[] IS NULL OR project_id=ANY($2::uuid[]))
+                      AND ($3::uuid[] IS NULL OR environment_id=ANY($3::uuid[]))
                   `,
-                  [p.organisation_id, p.project_ids ?? null],
+                  [p.organisation_id, p.project_ids ?? null, p.environment_ids ?? null],
                 )
               ).rows[0].count,
             );

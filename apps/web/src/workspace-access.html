@@ -226,6 +226,7 @@
             <tr>
               <th>Email</th>
               <th>Role</th>
+              <th>Environment access</th>
               <th>Expires</th>
               <th>Status</th>
               <th>Action</th>
@@ -312,8 +313,50 @@
           </li>
         </ul>
         <p class="help">
-          Choose 1–100 projects. Shared environment metadata is readable. Workspace administration,
-          audit history and infrastructure changes require workspace access.
+          Choose 1–100 projects. Environment access follows the selection below. Workspace
+          administration, audit history and infrastructure changes require workspace access.
+        </p>
+      </template>
+      <label for="token-environment-scope">Token environment access</label>
+      <select id="token-environment-scope" value.bind="environmentScope" disabled.bind="busy">
+        <option value="workspace">All workspace environments</option>
+        <option value="environments">Selected environments</option>
+      </select>
+      <template if.bind="environmentScope === 'environments'">
+        <resource-picker
+          api.bind="api"
+          resource="environments"
+          label="Token environment"
+          input-id="token-environment"
+          value.bind="selectedEnvironment"
+          changed.bind="environmentChanged"
+        ></resource-picker>
+        <button
+          class="button secondary"
+          type="button"
+          click.trigger="addEnvironment()"
+          disabled.bind="busy || !selectedEnvironment || tokenEnvironments.length >= 100"
+        >
+          Add environment
+        </button>
+        <ul>
+          <li repeat.for="environment of tokenEnvironments">
+            ${environment.name}
+            <button
+              class="button secondary"
+              type="button"
+              click.trigger="removeEnvironment(environment.id)"
+              disabled.bind="busy"
+              aria-label.bind="'Remove ' + environment.name + ' from token'"
+            >
+              Remove environment
+            </button>
+          </li>
+        </ul>
+        <p class="help">
+          Choose 1–100 environments. Project and environment selections both apply. Shared artifacts
+          and release manifests remain readable. Publishing and integration changes require access
+          to all environments.
         </p>
       </template>
       <fieldset>
@@ -334,7 +377,7 @@
       <button
         class="button primary"
         type="submit"
-        disabled.bind="busy || !policyLoaded || !authPolicy.allow_api_tokens || (tokenScope === 'projects' && !tokenProjects.length)"
+        disabled.bind="busy || !policyLoaded || !authPolicy.allow_api_tokens || (tokenScope === 'projects' && !tokenProjects.length) || (environmentScope === 'environments' && !tokenEnvironments.length)"
       >
         Create API token
       </button>
@@ -347,6 +390,7 @@
             <th>Owner</th>
             <th>Permissions</th>
             <th>Project access</th>
+            <th>Environment access</th>
             <th>Expires</th>
             <th>Status</th>
             <th>Actions</th>
@@ -362,6 +406,13 @@
               workspace projects'}
               <small class="muted" if.bind="token.project_ids">
                 ${token.project_ids.join(', ')}
+              </small>
+            </td>
+            <td>
+              ${token.environment_ids ? token.environment_ids.length + ' selected environment(s)' :
+              'All workspace environments'}
+              <small class="muted" if.bind="token.environment_ids">
+                ${token.environment_ids.join(', ')}
               </small>
             </td>
             <td>${formatDate(token.expires_at)}</td>

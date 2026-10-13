@@ -50,9 +50,17 @@ Tokens belong to their creator and one workspace. Choose explicit permissions an
 
 Choose **All workspace projects** or **Selected projects** when creating a token. A selected-project token covers 1–100 projects in that workspace. Its project list stays fixed until rotation; omitted `project_ids` during rotation preserves the old selection. An explicit array replaces the selection, and explicit `null` grants workspace-wide project access. Only the signed-in creator can make that change.
 
-Project restrictions apply to resource lists, exact counts, snapshots, downloads, publishing, deployments, approvals, rollback, integration credentials/imports, deployment secrets and notification destinations/retries. Related agent and attempt metadata is limited to the selected projects. Shared environment metadata, provider information and notification configuration remain readable. Scoped tokens cannot create projects, register or change agents/targets, edit environment policy or read workspace audit history. Notifications attached to a workspace-wide destination are excluded, even for an allowed deployment. Browser administration remains separate from delivery permissions.
+Project restrictions apply to resource lists, exact counts, snapshots, downloads, publishing, deployments, approvals, rollback, integration credentials/imports, deployment secrets and notification destinations/retries. Related agent and attempt metadata is limited to the selected projects. Environment metadata remains readable within any environment restriction; provider information and notification configuration remain readable. Scoped tokens cannot create projects, register or change agents/targets, edit environment policy or read workspace audit history. Notifications attached to a workspace-wide destination are excluded, even for an allowed deployment. Browser administration remains separate from delivery permissions.
 
-Use the token as `KEEL_TOKEN` in the CLI; the API applies the same project checks to CLI and browser requests. A scoped token cannot retrieve an idempotent response created with a broader project scope.
+Choose **Selected environments** to restrict a token to 1–100 environments. Project and environment selections are independent, and both apply when set. For example, selecting Project A and Production allows deployments only for Project A in Production. Scope never adds permissions or bypasses approval requirements.
+
+Environment restrictions cover environment records, deployments, secrets, targets, attempts, rollback and notification history, including snapshot totals and approval counts. An agent is visible only when one of its targets matches both selections. Notification destinations must have an explicit allowed environment; deliveries to destinations covering all environments are hidden. Projects, artifacts and immutable release manifests remain readable within the project selection, including the manifest’s configuration for every environment. Environment-scoped tokens cannot publish artifacts or releases, access integrations, or perform workspace administration and infrastructure changes.
+
+Promotion checks still evaluate prerequisites outside the selected environments. The response reports eligibility and `prerequisite_restricted: true`, with the prerequisite name, environment ID and deployment evidence set to `null`. Persisted policy snapshots and audit evidence retain their original values. Rollback candidates must belong to the same permitted environment as the source deployment.
+
+The environment selection follows the same rotation rules as the project selection: omitting `environment_ids` preserves it, an array replaces it, and explicit `null` grants access to all workspace environments. Existing tokens keep access to all environments until replaced with a restricted token.
+
+Use the token as `KEEL_TOKEN` in the CLI; the API applies the same scope checks to CLI and browser requests. Pagination cursors and idempotent responses are bound to both scope selections.
 
 Copy the token when it is created or rotated. Keel stores only its SHA-256 hash. Rotation atomically revokes the old token and issues a replacement; revocation and expiry block subsequent requests. Administrators can revoke another member's token, but only its creator can rotate it. Tokens cannot manage memberships, invitations or other tokens. Those operations require a browser session.
 
@@ -98,7 +106,7 @@ This clears MFA, revokes all sessions and API tokens, invalidates password-reset
 
 Restore retains and verifies encrypted authenticator secrets, while invalidating pending challenges, setup and recovery codes. Generate new recovery codes after signing in with the authenticator. MFA settings and the last used code step reflect the backup date; use operator recovery if the restored authenticator is no longer available.
 
-SAML, SCIM, email delivery and environment-scoped tokens remain later work. Workspace creation and account recovery are server operations.
+SAML, SCIM and email delivery remain later work. Workspace creation and account recovery are server operations.
 
 ## Passkeys
 
@@ -141,14 +149,14 @@ Cookie-authenticated `/api/v1` requests select an active membership with `X-Work
 
 Workspace access routes live under `/api/v1/identity`. Writes require an `Idempotency-Key`. `GET /members`, `/invitations` and `/tokens` return `{items, more}` in pages of 50, with an optional nonnegative `offset` up to 100000. These administration lists use offset pagination, so refresh after concurrent changes.
 
-| POST route                | Body                                                 |
-| ------------------------- | ---------------------------------------------------- |
-| `/invitations`            | `{email, role}`                                      |
-| `/invitations/:id/revoke` | `{}`                                                 |
-| `/members/:userId`        | `{role}`; `null` removes membership                  |
-| `/tokens`                 | `{name, permissions, expires_in_days, project_ids?}` |
-| `/tokens/:id/rotate`      | `{name, permissions, expires_in_days, project_ids?}` |
-| `/tokens/:id/revoke`      | `{}`                                                 |
+| POST route                | Body                                                                   |
+| ------------------------- | ---------------------------------------------------------------------- |
+| `/invitations`            | `{email, role}`                                                        |
+| `/invitations/:id/revoke` | `{}`                                                                   |
+| `/members/:userId`        | `{role}`; `null` removes membership                                    |
+| `/tokens`                 | `{name, permissions, expires_in_days, project_ids?, environment_ids?}` |
+| `/tokens/:id/rotate`      | `{name, permissions, expires_in_days, project_ids?, environment_ids?}` |
+| `/tokens/:id/revoke`      | `{}`                                                                   |
 
 `role` accepts a built-in identifier or an active custom-role UUID from this workspace. `GET /roles` returns all built-in and active custom roles as `{items}`; custom entries include `revision`. Role writes require an owner browser session:
 
@@ -158,7 +166,7 @@ Workspace access routes live under `/api/v1/identity`. Writes require an `Idempo
 | `/roles/:id/update`  | `{name, permissions, expected_revision}` |
 | `/roles/:id/archive` | `{expected_revision}`                    |
 
-On token creation, omitted or `null` `project_ids` means all workspace projects. An array must contain 1–100 distinct project UUIDs from this workspace; an empty array is rejected. Token metadata and listings include the selected IDs, without exposing token values.
+On token creation, omitted or `null` `project_ids` or `environment_ids` means all workspace resources of that kind. Each array must contain 1–100 distinct UUIDs from this workspace; empty arrays and foreign IDs are rejected. Token metadata, listings and creation audit events include both selections, without exposing token values. A failed rotation leaves the original token active.
 
 Security references: [OWASP password storage](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html) and [CSRF prevention](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html).
 

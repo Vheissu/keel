@@ -61,12 +61,12 @@
   <resource-picker
     api.bind="api"
     resource="environments"
-    label="Notification environment (optional)"
+    label.bind="environmentScoped ? 'Notification environment' : 'Notification environment (optional)'"
     input-id="notification-environment"
     value.bind="environmentId"
-    optional.bind="true"
+    optional.bind="!environmentScoped"
   ></resource-picker>
-  <p class="muted" if.bind="!projectScoped">
+  <p class="muted" if.bind="!projectScoped && !environmentScoped">
     An empty scope includes all projects or environments in this workspace.
   </p>
   <fieldset>

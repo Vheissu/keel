@@ -526,7 +526,7 @@ try {
   assert.equal((await api('/snapshot')).organisation.id, snapshot.organisation.id);
 
   console.log(
-    'Creating a custom role and checking a project-scoped token with the runtime database role.',
+    'Creating a custom role and checking project and environment token scopes with the runtime database role.',
   );
 
   const customRole = await http(
@@ -542,10 +542,11 @@ try {
   const scopedToken = await http(
     '/api/v1/identity/tokens',
     {
-      name: 'Project recovery drill',
+      name: 'Scoped recovery drill',
       permissions: ['read'],
       expires_in_days: 1,
       project_ids: [project.id],
+      environment_ids: [staging.id],
     },
     '',
     false,
@@ -563,6 +564,11 @@ try {
   );
 
   assert.deepEqual(scopedSnapshot.json().audit, []);
+
+  assert.deepEqual(
+    scopedSnapshot.json().environments.map((row: { id: string }) => row.id),
+    [staging.id],
+  );
 
   assert.equal(
     (await http('/api/v1/projects', { name: 'Denied', slug: 'denied' }, scopedToken.json().token))
@@ -721,6 +727,7 @@ try {
     .items.find((item: { id: string }) => item.id === scopedToken.json().id);
 
   assert.deepEqual(retainedToken.project_ids, [project.id]);
+  assert.deepEqual(retainedToken.environment_ids, [staging.id]);
   assert.ok(retainedToken.revoked_at);
 
   const replacement = await http(
@@ -798,7 +805,7 @@ try {
   );
 
   console.log(
-    'PASS: TLS, least-privilege runtime, stop barrier, durable restart, encrypted backup, corruption rejection, fresh-volume restore, retained bytes and keys, agent and identity quarantine, retained MFA, SSO configuration, passkey enrollment and quarantine, policy recovery, custom-role retention, project-token scope and quarantine, and recovery-code invalidation.',
+    'PASS: TLS, least-privilege runtime, stop barrier, durable restart, encrypted backup, corruption rejection, fresh-volume restore, retained bytes and keys, agent and identity quarantine, retained MFA, SSO configuration, passkey enrollment and quarantine, policy recovery, custom-role retention, project and environment token scope and quarantine, and recovery-code invalidation.',
   );
 } finally {
   for (const [directory, project] of [

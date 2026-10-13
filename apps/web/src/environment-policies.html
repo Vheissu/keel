@@ -48,7 +48,8 @@
           approval required'}
         </td>
         <td>
-          ${environment.prerequisite_name || (environment.promotion_from_environment_id ?
+          ${environment.prerequisite_restricted ? 'Prerequisite outside token access' :
+          environment.prerequisite_name || (environment.promotion_from_environment_id ?
           environment.promotion_from_environment_id : 'No prerequisite')}
         </td>
         <td if.bind="canApprove">

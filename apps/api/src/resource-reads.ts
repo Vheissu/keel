@@ -1,4 +1,4 @@
-import { projectCondition } from './project-access.js';
+import { scopeCondition } from './environment-access.js';
 import { endpointColumns, deliveryColumns } from './notifications.js';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
@@ -217,6 +217,7 @@ export async function listResource(
   name: string,
   input: unknown,
   projectIds: string[] | null = null,
+  environmentIds: string[] | null = null,
 ) {
   const definition = resource(name);
   const query = querySchema.parse(input);
@@ -237,7 +238,14 @@ export async function listResource(
 
   const scope = createHash('sha256')
     .update(
-      JSON.stringify([org, name, q, Object.entries(filters).sort(), projectIds?.slice().sort()]),
+      JSON.stringify([
+        org,
+        name,
+        q,
+        Object.entries(filters).sort(),
+        projectIds?.slice().sort(),
+        environmentIds?.slice().sort(),
+      ]),
     )
     .digest('hex');
 
@@ -255,9 +263,7 @@ export async function listResource(
         return `$${values.length}`;
       };
 
-      if (projectIds) {
-        conditions.push(projectCondition(name, parameter(projectIds)));
-      }
+      conditions.push(scopeCondition(name, parameter(projectIds), parameter(environmentIds)));
 
       for (const [key, value] of Object.entries(filters)) {
         conditions.push(`t.${key} = ${parameter(value)}`);
@@ -356,6 +362,7 @@ export async function registerResourceReads(api: FastifyInstance, db: Database) 
       req.params.resource,
       req.query,
       req.principal.project_ids ?? null,
+      req.principal.environment_ids ?? null,
     );
   });
 
@@ -374,9 +381,14 @@ export async function registerResourceReads(api: FastifyInstance, db: Database) 
           WHERE
             t.organisation_id = $1
             AND t.id = $2
-            AND ($3::uuid[] IS NULL OR (${projectCondition(req.params.resource, '$3')}))
+            AND ${scopeCondition(req.params.resource, '$3', '$4')}
         `,
-        [req.principal.organisation_id, id, req.principal.project_ids ?? null],
+        [
+          req.principal.organisation_id,
+          id,
+          req.principal.project_ids ?? null,
+          req.principal.environment_ids ?? null,
+        ],
       );
 
       if (!result.rows[0]) {

@@ -395,7 +395,12 @@ export class RollbackService {
       agent_name: checked.agentName,
       environment_name: environment.name,
       requires_approval: requiresApproval(environment, checked.config),
-      promotion_source_deployment_id: checked.evidence,
+      promotion_source_deployment_id:
+        p.environment_ids &&
+        environment.promotion_from_environment_id &&
+        !p.environment_ids.includes(environment.promotion_from_environment_id)
+          ? null
+          : checked.evidence,
       strategy: 'recreate',
       health_path: checked.config.verify.http.path,
       warning:

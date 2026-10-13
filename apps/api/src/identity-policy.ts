@@ -65,6 +65,7 @@ export async function authenticateToken(
           a.name,
           t.permissions,
           t.project_ids,
+          t.environment_ids,
           t.id AS token_id,
           t.user_id,
           m.role,
