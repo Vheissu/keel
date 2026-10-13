@@ -1,3 +1,4 @@
+import { enforceProjectRequest, projectCondition } from './project-access.js';
 import { Identity } from './identity.js';
 import { registerAuthRoutes, registerIdentityRoutes } from './identity-routes.js';
 import { registerNotificationRoutes } from './notifications.js';
@@ -183,6 +184,8 @@ export async function createApp(
         requirePermission(req.principal, 'read');
       });
 
+      api.addHook('preHandler', async (req) => enforceProjectRequest(service.db, req));
+
       const mutation = <T>(
         req: FastifyRequest,
         work: (tx: Transaction) => Promise<T>,
@@ -228,30 +231,35 @@ export async function createApp(
               'deployments',
               'audit_events',
             ]) {
+              const scoped = p.project_ids != null;
+              const condition = scoped ? ` AND ${projectCondition(table, '$2', 't')}` : '';
+              const values = scoped ? [p.organisation_id, p.project_ids] : [p.organisation_id];
+
               result[table === 'audit_events' ? 'audit' : table] = (
                 await tx.query(
                   `
                     SELECT
                       *
                     FROM
-                      ${table}
+                      ${table} t
                     WHERE
-                      organisation_id = $1
+                      organisation_id = $1 ${condition}
                     ORDER BY
                       created_at DESC,
                       id DESC
                     LIMIT
                       200
                   `,
-                  [p.organisation_id],
+                  values,
                 )
               ).rows;
 
               totals[table] = Number(
                 (
-                  await tx.query(`SELECT count(*) FROM ${table} WHERE organisation_id=$1`, [
-                    p.organisation_id,
-                  ])
+                  await tx.query(
+                    `SELECT count(*) FROM ${table} t WHERE organisation_id=$1 ${condition}`,
+                    values,
+                  )
                 ).rows[0].count,
               );
             }
@@ -299,8 +307,9 @@ export async function createApp(
                     WHERE
                       organisation_id = $1
                       AND status = 'awaiting_approval'
+                      AND ($2::uuid[] IS NULL OR project_id=ANY($2::uuid[]))
                   `,
-                  [p.organisation_id],
+                  [p.organisation_id, p.project_ids ?? null],
                 )
               ).rows[0].count,
             );

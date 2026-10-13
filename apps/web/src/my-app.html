@@ -75,7 +75,7 @@
         </button>
         <button
           class="button primary"
-          if.bind="canWrite && (page === 'Overview' || page === 'Projects')"
+          if.bind="canWrite && !projectScoped && (page === 'Overview' || page === 'Projects')"
           click.trigger="open('project')"
         >
           <span aria-hidden="true">＋</span>
@@ -397,7 +397,11 @@
               <boat-mark></boat-mark>
               <h3>Your first release starts here.</h3>
               <p>Add a project, publish an artifact, and create an immutable release.</p>
-              <button class="button primary" if.bind="canWrite" click.trigger="open('project')">
+              <button
+                class="button primary"
+                if.bind="canWrite && !projectScoped"
+                click.trigger="open('project')"
+              >
                 Create project
               </button>
             </div>
@@ -696,13 +700,13 @@
         projects.bind="data.projects"
         environments.bind="data.environments"
         releases.bind="data.releases"
-        can-write.bind="canWrite"
+        can-write.bind="canWrite && !projectScoped"
       ></targets-panel>
       <environment-policies
         if.bind="page === 'Environments'"
         api.bind="api"
         environments.bind="environments"
-        can-approve.bind="canApprove"
+        can-approve.bind="canApprove && !projectScoped"
         refresh-workspace.bind="() => refresh()"
       ></environment-policies>
       <secrets-panel
@@ -724,8 +728,12 @@
         if.bind="page === 'Notifications'"
         api.bind="api"
         can-write.bind="canWrite"
+        project-scoped.bind="projectScoped"
       ></notifications-panel>
       <template if.bind="page === 'Audit log'">
+        <p class="help" if.bind="projectScoped">
+          Workspace audit history requires a token with access to all workspace projects.
+        </p>
         <div class="table-wrap">
           <table>
             <thead>

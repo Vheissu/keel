@@ -36,6 +36,7 @@ interface Attempt {
 export class NotificationsPanel {
   @bindable api!: Api;
   @bindable canWrite = false;
+  @bindable projectScoped = false;
   endpoints!: ResourcePage<Endpoint>;
   deliveries!: ResourcePage<Delivery>;
   attempts: ResourcePage<Attempt> | null = null;

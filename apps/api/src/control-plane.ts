@@ -71,6 +71,10 @@ export class ControlPlane {
       );
     }
 
+    if (principal.project_ids) {
+      fingerprint = sha256(JSON.stringify([fingerprint, [...principal.project_ids].sort()]));
+    }
+
     return transaction(this.db, async (tx) => {
       await lockPrincipal(tx, principal);
 

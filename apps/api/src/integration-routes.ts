@@ -31,13 +31,14 @@ export async function registerIntegrationRoutes(api: FastifyInstance, service: I
           provider_connections
         WHERE
           organisation_id = $1
+          AND ($2::uuid[] IS NULL OR project_id=ANY($2::uuid[]))
         ORDER BY
           created_at DESC,
           id DESC
         LIMIT
           200
       `,
-      [req.principal.organisation_id],
+      [req.principal.organisation_id, req.principal.project_ids ?? null],
     );
 
     const imports = await service.control.db.query(
@@ -48,13 +49,14 @@ export async function registerIntegrationRoutes(api: FastifyInstance, service: I
           artifact_imports
         WHERE
           organisation_id = $1
+          AND ($2::uuid[] IS NULL OR project_id=ANY($2::uuid[]))
         ORDER BY
           created_at DESC,
           id DESC
         LIMIT
           200
       `,
-      [req.principal.organisation_id],
+      [req.principal.organisation_id, req.principal.project_ids ?? null],
     );
 
     return {

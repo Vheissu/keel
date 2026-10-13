@@ -26,6 +26,29 @@ export const rolePermissions: Record<Role, Permission[]> = {
   reader: ['read'],
 };
 
+export async function resolveRole(
+  db: Database | Transaction,
+  org: string,
+  role: string,
+): Promise<Permission[]> {
+  if (Object.hasOwn(rolePermissions, role)) {
+    return [...rolePermissions[role as Role]];
+  }
+
+  const row = (
+    await db.query(
+      'SELECT permissions FROM workspace_roles WHERE organisation_id=$1 AND id=$2 AND archived_at IS NULL',
+      [org, role],
+    )
+  ).rows[0];
+
+  if (!row) {
+    throw new DomainError('ROLE_NOT_FOUND', 'Active workspace role not found.', 404);
+  }
+
+  return row.permissions;
+}
+
 export const unauthenticated = () =>
   new DomainError('UNAUTHENTICATED', 'Sign in again or use a valid API token.', 401);
 
@@ -41,6 +64,7 @@ export async function authenticateToken(
           t.actor_id,
           a.name,
           t.permissions,
+          t.project_ids,
           t.id AS token_id,
           t.user_id,
           m.role,
@@ -69,8 +93,10 @@ export async function authenticateToken(
   }
 
   if (row.user_id) {
+    const permissions = await resolveRole(db, row.organisation_id, row.role);
+
     row.permissions = row.permissions.filter((permission: Permission) =>
-      rolePermissions[row.role as Role].includes(permission),
+      permissions.includes(permission),
     );
   }
 
@@ -112,7 +138,7 @@ export async function lockPrincipal(tx: Transaction, p: Principal) {
     throw unauthenticated();
   }
 
-  const permissions = rolePermissions[member.role as Role];
+  const permissions = await resolveRole(tx, p.organisation_id, member.role);
 
   if (
     p.permissions.some((permission) => !permissions.includes(permission)) ||

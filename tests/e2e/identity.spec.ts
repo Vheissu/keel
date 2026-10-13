@@ -524,3 +524,158 @@ test('enrolls a passkey, signs in, completes MFA and removes the credential', as
 
   await cdp.send('WebAuthn.removeVirtualAuthenticator', { authenticatorId });
 });
+
+test('manages custom roles and issues a token for selected projects', async ({ page, browser }) => {
+  const projectId = randomUUID();
+  const excludedId = randomUUID();
+
+  for (const [id, name] of [
+    [projectId, 'Selected project'],
+    [excludedId, 'Excluded project'],
+  ]) {
+    await db.query('INSERT INTO projects(id, organisation_id, name, slug) VALUES($1,$2,$3,$4)', [
+      id,
+      workspace,
+      name,
+      id,
+    ]);
+  }
+
+  await page.goto(link);
+  await page.getByLabel('Your name', { exact: true }).fill('Workspace owner');
+  await page.getByLabel('Password (at least 15 characters)', { exact: true }).fill(password);
+  await page.getByRole('button', { name: 'Create account and join' }).click();
+  await page.getByRole('link', { name: 'Workspace access', exact: true }).click();
+  await page.getByLabel('Role name', { exact: true }).fill('Delivery reviewer');
+
+  await page
+    .getByRole('group', { name: 'Role permissions' })
+    .getByRole('checkbox', { name: 'approve', exact: true })
+    .check();
+
+  await page.getByRole('button', { name: 'Create custom role', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Custom role created.');
+
+  const roleRow = page
+    .getByRole('row')
+    .filter({ has: page.getByRole('cell', { name: 'Delivery reviewer', exact: true }) });
+
+  await expect(roleRow).toContainText('read, approve');
+  await page.getByLabel('Invitation role').selectOption({ label: 'Delivery reviewer' });
+  await page.getByLabel('Invitation email').fill('custom-role@example.com');
+  await page.getByRole('button', { name: 'Create invitation', exact: true }).click();
+  await expect(page.getByLabel('Invitation link', { exact: true })).toBeVisible();
+  await roleRow.getByRole('button', { name: 'Archive role', exact: true }).click();
+
+  await expect(page.getByRole('alert')).toContainText(
+    'Reassign members and revoke pending invitations',
+  );
+
+  await page.getByRole('button', { name: 'Revoke invitation', exact: true }).click();
+  await roleRow.getByRole('button', { name: 'Edit role', exact: true }).click();
+  await page.getByLabel('Role name', { exact: true }).fill('Delivery reviewer updated');
+  await page.getByRole('button', { name: 'Save custom role', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Role updated.');
+  await page.getByLabel('Token name').fill('Selected project CI');
+
+  await page
+    .getByRole('group', { name: 'Token permissions' })
+    .getByRole('checkbox', { name: 'write', exact: true })
+    .check();
+
+  await page
+    .getByRole('group', { name: 'Token permissions' })
+    .getByRole('checkbox', { name: 'approve', exact: true })
+    .check();
+
+  await page.getByLabel('Token access').selectOption('projects');
+  await expect(page.getByRole('button', { name: 'Create API token', exact: true })).toBeDisabled();
+  await page.getByLabel('Token project', { exact: true }).selectOption(projectId);
+  await page.getByRole('button', { name: 'Add project', exact: true }).click();
+  await page.getByRole('button', { name: 'Create API token', exact: true }).click();
+  const value = await page.getByLabel('New API token', { exact: true }).inputValue();
+
+  const snapshot = await app.inject({
+    method: 'GET',
+    url: '/api/v1/snapshot',
+    headers: { authorization: `Bearer ${value}` },
+  });
+
+  expect(snapshot.statusCode, snapshot.body).toBe(200);
+
+  expect(snapshot.json().projects.map((project: { id: string }) => project.id)).toEqual([
+    projectId,
+  ]);
+
+  await page.getByRole('button', { name: 'Rotate token', exact: true }).click();
+  const rotated = await page.getByLabel('New API token', { exact: true }).inputValue();
+
+  expect(rotated).not.toBe(value);
+
+  const excluded = await app.inject({
+    method: 'GET',
+    url: `/api/v1/resources/projects/${excludedId}`,
+    headers: { authorization: `Bearer ${rotated}` },
+  });
+
+  expect(excluded.statusCode).toBe(404);
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+
+  await page.screenshot({
+    path: 'output/playwright/custom-roles-project-tokens-desktop.png',
+    fullPage: true,
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  await page.screenshot({
+    path: 'output/playwright/custom-roles-project-tokens-mobile.png',
+    fullPage: true,
+  });
+
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+
+  await page
+    .getByRole('row')
+    .filter({ has: page.getByRole('cell', { name: 'Delivery reviewer updated', exact: true }) })
+    .getByRole('button', { name: 'Archive role', exact: true })
+    .click();
+
+  await expect(page.getByRole('status').filter({ hasText: 'Custom role archived.' })).toBeVisible();
+
+  const scopedContext = await browser.newContext();
+  const scopedPage = await scopedContext.newPage();
+
+  scopedPage.on('pageerror', (error) => errors.push(error.message));
+  await scopedPage.goto('/');
+  await scopedPage.getByLabel('API token', { exact: true }).fill(rotated);
+  await scopedPage.getByRole('button', { name: 'Connect workspace', exact: true }).click();
+  await expect(scopedPage.getByRole('heading', { name: 'Your delivery pipeline' })).toBeVisible();
+  await expect(scopedPage.getByRole('button', { name: 'New project', exact: true })).toHaveCount(0);
+  await scopedPage.getByRole('link', { name: 'Projects', exact: true }).click();
+
+  await expect(scopedPage.getByRole('cell', { name: /^Selected project / })).toBeVisible();
+
+  await expect(scopedPage.getByRole('cell', { name: /^Excluded project / })).toHaveCount(0);
+
+  await scopedPage.getByRole('link', { name: 'Targets', exact: true }).click();
+
+  await expect(
+    scopedPage.getByRole('heading', { name: 'Private deployment agents', exact: true }),
+  ).toBeVisible();
+
+  await expect(scopedPage.getByRole('button', { name: 'Register agent', exact: true })).toHaveCount(
+    0,
+  );
+
+  await scopedPage.getByRole('link', { name: 'Environments', exact: true }).click();
+  await expect(scopedPage.getByRole('button', { name: /Edit .* promotion policy/ })).toHaveCount(0);
+  await scopedPage.getByRole('link', { name: 'Notifications', exact: true }).click();
+
+  await expect(
+    scopedPage.getByRole('heading', { name: 'Deployment notifications', exact: true }),
+  ).toBeVisible();
+
+  await expect(scopedPage.getByRole('alert').filter({ hasText: 'Could not load' })).toHaveCount(0);
+  await scopedContext.close();
+});

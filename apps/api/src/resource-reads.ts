@@ -1,3 +1,4 @@
+import { projectCondition } from './project-access.js';
 import { endpointColumns, deliveryColumns } from './notifications.js';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
@@ -210,7 +211,13 @@ function decode(value: string, scope: string): Cursor {
   }
 }
 
-export async function listResource(db: Database, org: string, name: string, input: unknown) {
+export async function listResource(
+  db: Database,
+  org: string,
+  name: string,
+  input: unknown,
+  projectIds: string[] | null = null,
+) {
   const definition = resource(name);
   const query = querySchema.parse(input);
   const { cursor: encoded, limit = 25, q = '', ...filters } = query;
@@ -229,7 +236,9 @@ export async function listResource(db: Database, org: string, name: string, inpu
   }
 
   const scope = createHash('sha256')
-    .update(JSON.stringify([org, name, q, Object.entries(filters).sort()]))
+    .update(
+      JSON.stringify([org, name, q, Object.entries(filters).sort(), projectIds?.slice().sort()]),
+    )
     .digest('hex');
 
   const cursor = encoded ? decode(encoded, scope) : null;
@@ -245,6 +254,10 @@ export async function listResource(db: Database, org: string, name: string, inpu
 
         return `$${values.length}`;
       };
+
+      if (projectIds) {
+        conditions.push(projectCondition(name, parameter(projectIds)));
+      }
 
       for (const [key, value] of Object.entries(filters)) {
         conditions.push(`t.${key} = ${parameter(value)}`);
@@ -337,7 +350,13 @@ export async function registerResourceReads(api: FastifyInstance, db: Database) 
   api.get<{ Params: { resource: string } }>('/resources/:resource', async (req, reply) => {
     reply.header('Cache-Control', 'no-store');
 
-    return listResource(db, req.principal.organisation_id, req.params.resource, req.query);
+    return listResource(
+      db,
+      req.principal.organisation_id,
+      req.params.resource,
+      req.query,
+      req.principal.project_ids ?? null,
+    );
   });
 
   api.get<{ Params: { resource: string; id: string } }>(
@@ -355,8 +374,9 @@ export async function registerResourceReads(api: FastifyInstance, db: Database) 
           WHERE
             t.organisation_id = $1
             AND t.id = $2
+            AND ($3::uuid[] IS NULL OR (${projectCondition(req.params.resource, '$3')}))
         `,
-        [req.principal.organisation_id, id],
+        [req.principal.organisation_id, id, req.principal.project_ids ?? null],
       );
 
       if (!result.rows[0]) {

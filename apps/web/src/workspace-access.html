@@ -65,6 +65,83 @@
       </button>
     </form>
   </section>
+  <section if.bind="principal.role === 'owner'">
+    <h2>Custom roles</h2>
+    <p>
+      Choose delivery permissions for a workspace role. Custom roles do not grant workspace
+      administration. Changes apply to existing members and their tokens.
+    </p>
+    <form class="target-form" submit.trigger:prevent="saveRole()">
+      <label for="custom-role-name">Role name</label>
+      <input
+        id="custom-role-name"
+        required
+        maxlength="100"
+        value.bind="roleName"
+        disabled.bind="busy"
+      />
+      <fieldset>
+        <legend>Role permissions</legend>
+        <label class="check-label" repeat.for="permission of allPermissions">
+          <input
+            type="checkbox"
+            model.bind="permission"
+            checked.bind="rolePermissions"
+            disabled.bind="busy || permission === 'read'"
+          />
+          ${permission}
+        </label>
+      </fieldset>
+      <button class="button primary" type="submit" disabled.bind="busy">
+        ${editingRole ? 'Save custom role' : 'Create custom role'}
+      </button>
+      <button
+        if.bind="editingRole"
+        class="button secondary"
+        type="button"
+        click.trigger="clearRole()"
+        disabled.bind="busy"
+      >
+        Cancel role edit
+      </button>
+    </form>
+    <div class="table-wrap" if.bind="customRoles.length">
+      <table>
+        <thead>
+          <tr>
+            <th>Role</th>
+            <th>Permissions</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr repeat.for="custom of customRoles">
+            <td>${custom.name}</td>
+            <td>${custom.permissions.join(', ')}</td>
+            <td>
+              <button
+                class="button secondary"
+                click.trigger="editRole(custom)"
+                disabled.bind="busy"
+              >
+                Edit role
+              </button>
+              <button
+                class="button danger"
+                click.trigger="archiveRole(custom)"
+                disabled.bind="busy"
+              >
+                Archive role
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="help">
+      Before archiving a role, reassign its members and revoke its pending invitations.
+    </p>
+  </section>
   <template if.bind="admin">
     <section>
       <h2>Members</h2>
@@ -90,9 +167,11 @@
                   value.bind="member.role"
                   disabled.bind="busy"
                 >
-                  <option repeat.for="choice of roles" value.bind="choice">${choice}</option>
+                  <option repeat.for="choice of roles" value.bind="choice.id">
+                    ${choice.name}
+                  </option>
                 </select>
-                <span else>${member.role}</span>
+                <span else>${roleLabel(member.role)}</span>
               </td>
               <td>
                 <template if.bind="editable(member)">
@@ -132,7 +211,7 @@
         <input id="invite-email" type="email" required maxlength="254" value.bind="email" />
         <label for="invite-role">Invitation role</label>
         <select id="invite-role" value.bind="role">
-          <option repeat.for="choice of roles" value.bind="choice">${choice}</option>
+          <option repeat.for="choice of roles" value.bind="choice.id">${choice.name}</option>
         </select>
         <p class="help">
           Owners manage administrators and other owners. Administrators manage delivery and other
@@ -155,7 +234,7 @@
           <tbody>
             <tr repeat.for="invite of invitations.items">
               <td>${invite.email}</td>
-              <td>${invite.role}</td>
+              <td>${roleLabel(invite.role)}</td>
               <td>${formatDate(invite.expires_at)}</td>
               <td>
                 ${invite.accepted_at ? 'Accepted' : invite.revoked_at ? 'Revoked' : 'Pending until
@@ -196,6 +275,47 @@
       <input id="token-name" required maxlength="100" value.bind="name" />
       <label for="token-days">Token lifetime (days)</label>
       <input id="token-days" type="number" required min="1" max="90" value.bind="days" />
+      <label for="token-scope">Token access</label>
+      <select id="token-scope" value.bind="tokenScope" disabled.bind="busy">
+        <option value="workspace">All workspace projects</option>
+        <option value="projects">Selected projects</option>
+      </select>
+      <template if.bind="tokenScope === 'projects'">
+        <resource-picker
+          api.bind="api"
+          resource="projects"
+          label="Token project"
+          input-id="token-project"
+          value.bind="selectedProject"
+          changed.bind="projectChanged"
+        ></resource-picker>
+        <button
+          class="button secondary"
+          type="button"
+          click.trigger="addProject()"
+          disabled.bind="busy || !selectedProject || tokenProjects.length >= 100"
+        >
+          Add project
+        </button>
+        <ul>
+          <li repeat.for="project of tokenProjects">
+            ${project.name}
+            <button
+              class="button secondary"
+              type="button"
+              click.trigger="removeProject(project.id)"
+              disabled.bind="busy"
+              aria-label.bind="'Remove ' + project.name + ' from token'"
+            >
+              Remove project
+            </button>
+          </li>
+        </ul>
+        <p class="help">
+          Choose 1–100 projects. Shared environment metadata is readable. Workspace administration,
+          audit history and infrastructure changes require workspace access.
+        </p>
+      </template>
       <fieldset>
         <legend>Token permissions</legend>
         <label class="check-label" repeat.for="permission of principal.permissions">
@@ -214,7 +334,7 @@
       <button
         class="button primary"
         type="submit"
-        disabled.bind="busy || !policyLoaded || !authPolicy.allow_api_tokens"
+        disabled.bind="busy || !policyLoaded || !authPolicy.allow_api_tokens || (tokenScope === 'projects' && !tokenProjects.length)"
       >
         Create API token
       </button>
@@ -226,6 +346,7 @@
             <th>Name</th>
             <th>Owner</th>
             <th>Permissions</th>
+            <th>Project access</th>
             <th>Expires</th>
             <th>Status</th>
             <th>Actions</th>
@@ -236,6 +357,13 @@
             <td>${token.name}</td>
             <td>${token.email}</td>
             <td>${token.permissions.join(', ')}</td>
+            <td>
+              ${token.project_ids ? token.project_ids.length + ' selected project(s)' : 'All
+              workspace projects'}
+              <small class="muted" if.bind="token.project_ids">
+                ${token.project_ids.join(', ')}
+              </small>
+            </td>
             <td>${formatDate(token.expires_at)}</td>
             <td>${token.revoked_at ? 'Revoked' : tokenActive(token) ? 'Active' : 'Expired'}</td>
             <td>

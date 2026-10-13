@@ -12,7 +12,7 @@ Resource lists and form selectors search the full collection and load 25, 50 or 
 
 Deployment notifications send signed HTTPS webhooks with durable retries and delivery history. See [notification setup and receiver contract](docs/notifications.md).
 
-Invitation-only email/password accounts, workspace roles and expiring API tokens are available by setting `KEEL_PUBLIC_URL`. See [identity setup](docs/identity.md) for first-owner provisioning, membership, token rotation and password recovery.
+Invitation-only email/password accounts, built-in and custom workspace roles, and expiring API tokens with optional project restrictions are available by setting `KEEL_PUBLIC_URL`. See [identity setup](docs/identity.md) for first-owner provisioning, membership, token rotation and password recovery.
 
 ## Run locally
 

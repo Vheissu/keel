@@ -222,6 +222,10 @@ export class MyApp {
     window.location.hash = this.path(page);
   }
 
+  get projectScoped() {
+    return this.data?.principal.project_ids != null;
+  }
+
   get canWrite() {
     return this.data?.principal.permissions.includes('write') ?? false;
   }

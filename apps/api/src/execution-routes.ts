@@ -1,3 +1,4 @@
+import { projectCondition } from './project-access.js';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import {
@@ -17,15 +18,16 @@ export async function registerExecutionRoutes(api: FastifyInstance, execution: E
         SELECT
           *
         FROM
-          deployment_agents
+          deployment_agents t
         WHERE
           organisation_id = $1
+          AND ($2::uuid[] IS NULL OR (${projectCondition('agents', '$2')}))
         ORDER BY
           created_at DESC
         LIMIT
           200
       `,
-      [org],
+      [org, req.principal.project_ids ?? null],
     );
 
     const targets = await execution.control.db.query(
@@ -33,15 +35,16 @@ export async function registerExecutionRoutes(api: FastifyInstance, execution: E
         SELECT
           *
         FROM
-          deployment_targets
+          deployment_targets t
         WHERE
           organisation_id = $1
+          AND ($2::uuid[] IS NULL OR (${projectCondition('targets', '$2')}))
         ORDER BY
           created_at DESC
         LIMIT
           200
       `,
-      [org],
+      [org, req.principal.project_ids ?? null],
     );
 
     const attempts = await execution.control.db.query(
@@ -60,15 +63,16 @@ export async function registerExecutionRoutes(api: FastifyInstance, execution: E
           created_at,
           updated_at
         FROM
-          deployment_attempts
+          deployment_attempts t
         WHERE
           organisation_id = $1
+          AND ($2::uuid[] IS NULL OR (${projectCondition('attempts', '$2')}))
         ORDER BY
           created_at DESC
         LIMIT
           200
       `,
-      [org],
+      [org, req.principal.project_ids ?? null],
     );
 
     return { agents: agents.rows, targets: targets.rows, attempts: attempts.rows };

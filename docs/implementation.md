@@ -51,9 +51,12 @@ The control-plane foundation, GitHub ingestion, Bitbucket publishing and Docker 
 - Owner-managed SSO/MFA requirements, browser-session age and API-token policies, with transactional enforcement and operator recovery.
 - Passkey enrollment, discoverable sign-in and removal with WebAuthn verification, single-use challenges and existing MFA/policy enforcement.
 
+- Owner-managed custom roles with revision checks, invitation/member assignment and immediate effective-permission changes.
+- Project-scoped managed tokens with filtered reads, guarded delivery operations, scope-preserving rotation and matching access-management controls.
+
 ## Next increment
 
-Add custom workspace roles and project-scoped API tokens. SAML, SCIM, SSH, additional deployment strategies and automated rollback remain later work.
+Add SSH deployment targets through private agents. SAML, SCIM, environment-scoped tokens, additional deployment strategies and automated rollback remain later work.
 
 ## Decisions and constraints
 
@@ -63,7 +66,7 @@ Artifact storage uses the local filesystem by default, or S3 through the same `A
 
 SQL queries scope every organisation-owned API read, and composite foreign keys prevent cross-organisation and cross-project references. PostgreSQL RLS is not enabled. The development database role can administer its evaluation database. The self-hosted package uses separate migration and runtime roles; its runtime role has no DDL or Temporal database access. Immutable triggers prevent ordinary updates and deletes, not changes by a database administrator.
 
-The optional hosted identity mode uses invitation-only accounts and HttpOnly session cookies. Enabling it rejects legacy bootstrap tokens; the local bootstrap remains available when it is disabled. Managed tokens are workspace- and permission-scoped, but not project- or environment-scoped. OIDC SSO providers are provisioned by a server operator; account linking is explicit and membership remains invitation-only. Passkeys provide device-verified sign-in for existing accounts, with enrollment and removal in Account security. Enrolled MFA and workspace authentication policies still apply. SAML, SCIM, custom roles and email delivery remain unimplemented. See [account setup and recovery](identity.md).
+The optional hosted identity mode uses invitation-only accounts and HttpOnly session cookies. Enabling it rejects legacy bootstrap tokens; the local bootstrap remains available when it is disabled. Managed tokens have explicit permissions and optional project restrictions; environment-specific token restrictions remain unimplemented. OIDC SSO providers are provisioned by a server operator; account linking is explicit and membership remains invitation-only. Passkeys provide device-verified sign-in for existing accounts, with enrollment and removal in Account security. Enrolled MFA and workspace authentication policies still apply. Owners can define custom delivery roles. SAML, SCIM and email delivery remain unimplemented. See [account setup and recovery](identity.md).
 
 Deployment outbox entries are delivered by the Temporal worker. Artifact ingestion retains its separate PostgreSQL-backed worker. Redis, runbooks, tenants, scheduled releases, and high-availability packaging remain unimplemented. See [Docker agent setup and limits](deployment-agents.md), including the 25 MiB archive cap and same-host certificate recovery and the absence of force-unlock or host reassignment. Production defaults to requiring verified staging of the exact release before admission. Approvers can edit prerequisites; accepted requests retain their admission snapshot. See [promotion and rollback](promotion-and-rollback.md) and [deployment secrets](deployment-secrets.md) for policy, key management and recovery boundaries.
 

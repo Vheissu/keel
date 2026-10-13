@@ -29,20 +29,30 @@ An existing account accepts additional invitations after signing in with the inv
 
 Open **Workspace access** after signing in. All signed-in members can manage their own tokens and change their password. Owners and administrators can list members, manage invitations and revoke workspace tokens.
 
-| Role           | Delivery access                      | Membership access                                        |
-| -------------- | ------------------------------------ | -------------------------------------------------------- |
-| Owner          | Read, write, approve, manage secrets | Manage all roles and invitations                         |
-| Administrator  | Read, write, approve, manage secrets | Manage operators, approvers, secret managers and readers |
-| Operator       | Read and write                       | None                                                     |
-| Approver       | Read and approve                     | None                                                     |
-| Secret manager | Read and manage secrets              | None                                                     |
-| Reader         | Read                                 | None                                                     |
+| Role           | Delivery access                      | Membership access                             |
+| -------------- | ------------------------------------ | --------------------------------------------- |
+| Owner          | Read, write, approve, manage secrets | Manage all roles and invitations              |
+| Administrator  | Read, write, approve, manage secrets | Manage delivery roles, including custom roles |
+| Operator       | Read and write                       | None                                          |
+| Approver       | Read and approve                     | None                                          |
+| Secret manager | Read and manage secrets              | None                                          |
+| Reader         | Read                                 | None                                          |
 
 A workspace must retain an owner, including during concurrent changes. Membership removal immediately blocks new workspace requests and revokes that member's workspace tokens. The actor remains in audit history and is reused if the person rejoins, so reinvitation cannot bypass the ban on approving your own deployment. Membership in other workspaces is unaffected.
+
+Owners can create up to 100 custom roles in **Workspace access**. Each role includes `read` and any combination of `write`, `approve` and `manage_secrets`. Custom roles do not grant member, role or authentication-policy administration. Administrators can assign custom roles to delivery members and invitations; only owners can create, edit or archive them.
+
+Changes apply to existing sessions and tokens on their next request. Writes recheck current permissions under the workspace lock. The editor uses a revision number to reject stale changes. Before archiving a role, reassign its active members and revoke its unexpired invitations. Archived definitions remain available to database history, but cannot be assigned again. Built-in roles cannot be edited or archived.
 
 ## Managed tokens
 
 Tokens belong to their creator and one workspace. Choose explicit permissions and a lifetime of 1–90 days. `read` is mandatory. Effective permissions are the intersection of the token's original grant and the creator's current role; a role change cannot grant a token permissions it never had.
+
+Choose **All workspace projects** or **Selected projects** when creating a token. A selected-project token covers 1–100 projects in that workspace. Its project list stays fixed until rotation; omitted `project_ids` during rotation preserves the old selection. An explicit array replaces the selection, and explicit `null` grants workspace-wide project access. Only the signed-in creator can make that change.
+
+Project restrictions apply to resource lists, exact counts, snapshots, downloads, publishing, deployments, approvals, rollback, integration credentials/imports, deployment secrets and notification destinations/retries. Related agent and attempt metadata is limited to the selected projects. Shared environment metadata, provider information and notification configuration remain readable. Scoped tokens cannot create projects, register or change agents/targets, edit environment policy or read workspace audit history. Notifications attached to a workspace-wide destination are excluded, even for an allowed deployment. Browser administration remains separate from delivery permissions.
+
+Use the token as `KEEL_TOKEN` in the CLI; the API applies the same project checks to CLI and browser requests. A scoped token cannot retrieve an idempotent response created with a broader project scope.
 
 Copy the token when it is created or rotated. Keel stores only its SHA-256 hash. Rotation atomically revokes the old token and issues a replacement; revocation and expiry block subsequent requests. Administrators can revoke another member's token, but only its creator can rotate it. Tokens cannot manage memberships, invitations or other tokens. Those operations require a browser session.
 
@@ -88,7 +98,7 @@ This clears MFA, revokes all sessions and API tokens, invalidates password-reset
 
 Restore retains and verifies encrypted authenticator secrets, while invalidating pending challenges, setup and recovery codes. Generate new recovery codes after signing in with the authenticator. MFA settings and the last used code step reflect the backup date; use operator recovery if the restored authenticator is no longer available.
 
-SAML, SCIM, email delivery, custom roles and project-scoped tokens remain later work. Workspace creation and account recovery are server operations.
+SAML, SCIM, email delivery and environment-scoped tokens remain later work. Workspace creation and account recovery are server operations.
 
 ## Passkeys
 
@@ -131,14 +141,24 @@ Cookie-authenticated `/api/v1` requests select an active membership with `X-Work
 
 Workspace access routes live under `/api/v1/identity`. Writes require an `Idempotency-Key`. `GET /members`, `/invitations` and `/tokens` return `{items, more}` in pages of 50, with an optional nonnegative `offset` up to 100000. These administration lists use offset pagination, so refresh after concurrent changes.
 
-| POST route                | Body                                   |
-| ------------------------- | -------------------------------------- |
-| `/invitations`            | `{email, role}`                        |
-| `/invitations/:id/revoke` | `{}`                                   |
-| `/members/:userId`        | `{role}`; `null` removes membership    |
-| `/tokens`                 | `{name, permissions, expires_in_days}` |
-| `/tokens/:id/rotate`      | `{name, permissions, expires_in_days}` |
-| `/tokens/:id/revoke`      | `{}`                                   |
+| POST route                | Body                                                 |
+| ------------------------- | ---------------------------------------------------- |
+| `/invitations`            | `{email, role}`                                      |
+| `/invitations/:id/revoke` | `{}`                                                 |
+| `/members/:userId`        | `{role}`; `null` removes membership                  |
+| `/tokens`                 | `{name, permissions, expires_in_days, project_ids?}` |
+| `/tokens/:id/rotate`      | `{name, permissions, expires_in_days, project_ids?}` |
+| `/tokens/:id/revoke`      | `{}`                                                 |
+
+`role` accepts a built-in identifier or an active custom-role UUID from this workspace. `GET /roles` returns all built-in and active custom roles as `{items}`; custom entries include `revision`. Role writes require an owner browser session:
+
+| POST route           | Body                                     |
+| -------------------- | ---------------------------------------- |
+| `/roles`             | `{name, permissions}`                    |
+| `/roles/:id/update`  | `{name, permissions, expected_revision}` |
+| `/roles/:id/archive` | `{expected_revision}`                    |
+
+On token creation, omitted or `null` `project_ids` means all workspace projects. An array must contain 1–100 distinct project UUIDs from this workspace; an empty array is rejected. Token metadata and listings include the selected IDs, without exposing token values.
 
 Security references: [OWASP password storage](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html) and [CSRF prevention](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html).
 

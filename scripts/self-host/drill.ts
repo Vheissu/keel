@@ -525,9 +525,54 @@ try {
   token = managed.json().token;
   assert.equal((await api('/snapshot')).organisation.id, snapshot.organisation.id);
 
+  console.log(
+    'Creating a custom role and checking a project-scoped token with the runtime database role.',
+  );
+
+  const customRole = await http(
+    '/api/v1/identity/roles',
+    { name: 'Recovery reviewer', permissions: ['read', 'approve'] },
+    '',
+    false,
+    sessionHeaders,
+  );
+
+  assert.equal(customRole.status, 200);
+
+  const scopedToken = await http(
+    '/api/v1/identity/tokens',
+    {
+      name: 'Project recovery drill',
+      permissions: ['read'],
+      expires_in_days: 1,
+      project_ids: [project.id],
+    },
+    '',
+    false,
+    sessionHeaders,
+  );
+
+  assert.equal(scopedToken.status, 200);
+  const scopedSnapshot = await http('/api/v1/snapshot', undefined, scopedToken.json().token);
+
+  assert.equal(scopedSnapshot.status, 200);
+
+  assert.deepEqual(
+    scopedSnapshot.json().projects.map((row: { id: string }) => row.id),
+    [project.id],
+  );
+
+  assert.deepEqual(scopedSnapshot.json().audit, []);
+
+  assert.equal(
+    (await http('/api/v1/projects', { name: 'Denied', slug: 'denied' }, scopedToken.json().token))
+      .status,
+    403,
+  );
+
   const pending = await http(
     '/api/v1/identity/invitations',
-    { email: 'pending@example.com', role: 'reader' },
+    { email: 'pending@example.com', role: customRole.json().id },
     '',
     false,
     sessionHeaders,
@@ -646,6 +691,38 @@ try {
 
   assert.deepEqual(restoredSecurity.json().passkeys, []);
 
+  const restoredHeaders = {
+    cookie: nextCookie,
+    origin: installation.publicUrl,
+    'x-csrf-token': nextSession.json().csrf,
+    'x-workspace-id': snapshot.organisation.id,
+  };
+
+  const restoredRoles = await http('/api/v1/identity/roles', undefined, '', false, restoredHeaders);
+
+  const retainedRole = restoredRoles
+    .json()
+    .items.find((role: { id: string }) => role.id === customRole.json().id);
+
+  assert.equal(retainedRole.name, 'Recovery reviewer');
+  assert.deepEqual(retainedRole.permissions, ['read', 'approve']);
+  assert.equal((await http('/api/v1/snapshot', undefined, scopedToken.json().token)).status, 401);
+
+  const restoredTokens = await http(
+    '/api/v1/identity/tokens',
+    undefined,
+    '',
+    false,
+    restoredHeaders,
+  );
+
+  const retainedToken = restoredTokens
+    .json()
+    .items.find((item: { id: string }) => item.id === scopedToken.json().id);
+
+  assert.deepEqual(retainedToken.project_ids, [project.id]);
+  assert.ok(retainedToken.revoked_at);
+
   const replacement = await http(
     '/api/v1/identity/tokens',
     { name: 'After restore', permissions: ['read', 'write'], expires_in_days: 1 },
@@ -721,7 +798,7 @@ try {
   );
 
   console.log(
-    'PASS: TLS, least-privilege runtime, stop barrier, durable restart, encrypted backup, corruption rejection, fresh-volume restore, retained bytes and keys, agent and identity quarantine, retained MFA, SSO configuration, passkey enrollment and quarantine, policy recovery and recovery-code invalidation.',
+    'PASS: TLS, least-privilege runtime, stop barrier, durable restart, encrypted backup, corruption rejection, fresh-volume restore, retained bytes and keys, agent and identity quarantine, retained MFA, SSO configuration, passkey enrollment and quarantine, policy recovery, custom-role retention, project-token scope and quarantine, and recovery-code invalidation.',
   );
 } finally {
   for (const [directory, project] of [

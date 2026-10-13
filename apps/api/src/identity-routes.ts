@@ -1,3 +1,4 @@
+import { registerWorkspaceRoles } from './workspace-roles.js';
 import { Passkeys } from './passkeys.js';
 import { Sso } from './sso.js';
 import {
@@ -274,6 +275,8 @@ export async function registerIdentityRoutes(api: FastifyInstance, identity?: Id
   if (!identity) {
     return;
   }
+
+  await registerWorkspaceRoles(api, identity);
 
   const control = identity.control;
 
@@ -566,6 +569,7 @@ export async function registerIdentityRoutes(api: FastifyInstance, identity?: Id
             t.user_id,
             t.name,
             t.permissions,
+            t.project_ids,
             t.expires_at,
             t.revoked_at,
             t.created_at,
@@ -620,13 +624,17 @@ export async function registerIdentityRoutes(api: FastifyInstance, identity?: Id
                 AND revoked_at IS NULL
                 AND expires_at > now()
               RETURNING
-                id
+                id, project_ids
             `,
             [id, req.principal.organisation_id, req.principal.user_id],
           );
 
           if (!old.rowCount) {
             throw new DomainError('NOT_FOUND', 'Active token not found.', 404);
+          }
+
+          if (input.project_ids === undefined) {
+            input.project_ids = old.rows[0].project_ids;
           }
 
           await control.audit(tx, req.principal, 'api_token.rotated', id);

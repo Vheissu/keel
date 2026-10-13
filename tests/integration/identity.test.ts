@@ -12,7 +12,7 @@ import { createApp } from '../../apps/api/src/app.js';
 import { ControlPlane } from '../../apps/api/src/control-plane.js';
 import { LocalArtifactStore, sha256 } from '../../apps/api/src/artifact-store.js';
 import { identityAdmin } from '../../apps/operations/src/identity-admin.js';
-import { fixture, testDatabaseUrl } from '../fixtures.js';
+import { fixture, testDatabaseUrl, deploymentProcess } from '../fixtures.js';
 
 const schema = `identity_${randomUUID().replaceAll('-', '')}`;
 const admin = new pg.Pool({ connectionString: testDatabaseUrl });
@@ -1075,4 +1075,723 @@ it('caps retained sessions, supports self-revocation and keeps account controls 
   expect(result.json()).toMatchObject({ signed_out: true, revoked: 1 });
   expect(result.headers['set-cookie']).toContain('Max-Age=0');
   expect((await security(latest)).statusCode).toBe(401);
+});
+
+it('creates, assigns and updates custom roles without granting workspace administration', async () => {
+  const created = await api('/identity/roles', {
+    name: 'Release reviewers',
+    permissions: ['read', 'write', 'approve'],
+  });
+
+  expect(created.statusCode, created.body).toBe(200);
+  const role = created.json();
+  const reviewer = await member(role.id);
+  const credential = await token(reviewer, ['read', 'write', 'approve']);
+  const oldPrincipal = await control.authenticate(credential.token);
+
+  expect(
+    (await api('/identity/roles', { name: 'Escalation', permissions: ['read'] }, reviewer))
+      .statusCode,
+  ).toBe(403);
+
+  expect((await api('/identity/members', undefined, reviewer)).statusCode).toBe(403);
+
+  expect((await api('/identity/roles')).json().items).toEqual(
+    expect.arrayContaining([expect.objectContaining({ id: role.id, builtin: false })]),
+  );
+
+  expect(
+    (await api(`/identity/roles/${role.id}/archive`, { expected_revision: 1 })).json().error.code,
+  ).toBe('ROLE_IN_USE');
+
+  const updated = await api(`/identity/roles/${role.id}/update`, {
+    name: 'Release reviewers',
+    permissions: ['read', 'approve'],
+    expected_revision: 1,
+  });
+
+  expect(updated.statusCode, updated.body).toBe(200);
+
+  expect(
+    (
+      await api(`/identity/roles/${role.id}/update`, {
+        name: 'Stale edit',
+        permissions: ['read'],
+        expected_revision: 1,
+      })
+    ).statusCode,
+  ).toBe(409);
+
+  expect((await api('/snapshot', undefined, reviewer)).json().principal.permissions).toEqual([
+    'read',
+    'approve',
+  ]);
+
+  expect((await bearer(credential.token)).json().principal.permissions).toEqual([
+    'read',
+    'approve',
+  ]);
+
+  expect(
+    (await bearer(credential.token, '/projects', { name: 'Denied', slug: 'denied' })).statusCode,
+  ).toBe(403);
+
+  await expect(
+    control.mutate(oldPrincipal, randomUUID(), 'stale-role', async () => ({ leaked: true })),
+  ).rejects.toMatchObject({ code: 'ACCESS_CHANGED' });
+
+  expect((await api(`/identity/members/${reviewer.userId}`, { role: 'reader' })).statusCode).toBe(
+    200,
+  );
+
+  expect(
+    (await api(`/identity/roles/${role.id}/archive`, { expected_revision: 2 })).statusCode,
+  ).toBe(200);
+
+  expect((await api(`/identity/members/${reviewer.userId}`, { role: role.id })).statusCode).toBe(
+    404,
+  );
+
+  expect(
+    (await api('/identity/invitations', { email: 'archived@example.com', role: role.id }))
+      .statusCode,
+  ).toBe(404);
+});
+
+it('protects built-in roles, cross-workspace assignments and pending custom-role invitations', async () => {
+  expect((await api('/identity/roles', { name: 'Owner', permissions: ['read'] })).statusCode).toBe(
+    400,
+  );
+
+  expect((await api('/identity/roles', { name: 'Bad', permissions: ['write'] })).statusCode).toBe(
+    400,
+  );
+
+  expect(
+    (await api('/identity/roles', { name: 'Bad', permissions: ['read', 'manage_members'] }))
+      .statusCode,
+  ).toBe(400);
+
+  const administrator = await member('admin');
+
+  expect(
+    (await api('/identity/roles', { name: 'No', permissions: ['read'] }, administrator)).statusCode,
+  ).toBe(403);
+
+  const role = (
+    await api('/identity/roles', { name: 'Release observer', permissions: ['read'] })
+  ).json();
+
+  expect(
+    (await api('/identity/roles', { name: 'release observer', permissions: ['read'] })).statusCode,
+  ).toBe(409);
+
+  const invitation = await invite(role.id);
+
+  expect(
+    (await api(`/identity/roles/${role.id}/archive`, { expected_revision: 1 })).statusCode,
+  ).toBe(409);
+
+  expect(
+    (await api('/identity/invitations', { email: 'foreign@example.com', role: randomUUID() }))
+      .statusCode,
+  ).toBe(404);
+
+  const other = await fixture(db);
+
+  await expect(
+    db.query('UPDATE workspace_invitations SET organisation_id=$1 WHERE id=$2', [
+      other.org,
+      invitation.id,
+    ]),
+  ).rejects.toMatchObject({ code: '23503' });
+
+  await api(`/identity/invitations/${invitation.id}/revoke`, {});
+
+  expect(
+    (await api(`/identity/roles/${role.id}/archive`, { expected_revision: 1 })).statusCode,
+  ).toBe(200);
+
+  // Acceptance rechecks the role under the workspace lock, even if invitation state is stale.
+  await db.query('UPDATE workspace_invitations SET revoked_at=NULL WHERE id=$1', [invitation.id]);
+
+  const staleInvite = await auth('/accept', {
+    token: invitation.token,
+    name: 'Stale invitation',
+    password,
+  });
+
+  expect(staleInvite.statusCode).toBe(404);
+  expect(staleInvite.json().error.code).toBe('ROLE_NOT_FOUND');
+});
+
+async function scopedFixture() {
+  const projects = [];
+
+  for (const name of ['Allowed', 'Excluded']) {
+    const project = (await api('/projects', { name, slug: name.toLowerCase() })).json();
+    const bytes = Buffer.from(`artifact for ${name}`);
+
+    const upload = await app.inject({
+      method: 'POST',
+      url: `/api/v1/artifacts?project_id=${project.id}&name=application&version=1&digest=${sha256(bytes)}`,
+      payload: bytes,
+      headers: {
+        origin,
+        cookie: owner.cookie,
+        'x-csrf-token': owner.csrf,
+        'x-workspace-id': owner.workspace,
+        'idempotency-key': randomUUID(),
+        'content-type': 'application/octet-stream',
+      },
+    });
+
+    expect(upload.statusCode, upload.body).toBe(200);
+
+    const release = await api('/releases', {
+      project_id: project.id,
+      artifact_id: upload.json().id,
+      version: '1',
+      process: deploymentProcess(),
+    });
+
+    expect(release.statusCode, release.body).toBe(200);
+
+    const deployment = await api('/deployments', {
+      release_id: release.json().id,
+      environment_id: f.environments.staging,
+    });
+
+    expect(deployment.statusCode, deployment.body).toBe(200);
+
+    projects.push({
+      ...project,
+      artifact: upload.json(),
+      release: release.json(),
+      deployment: deployment.json(),
+    });
+  }
+
+  const scoped = await api('/identity/tokens', {
+    name: 'Project CI',
+    permissions: ['read', 'write', 'approve', 'manage_secrets'],
+    expires_in_days: 30,
+    project_ids: [projects[0].id],
+  });
+
+  expect(scoped.statusCode, scoped.body).toBe(200);
+
+  return { allowed: projects[0], excluded: projects[1], credential: scoped.json() };
+}
+
+it('filters scoped snapshots, counts, resource pages and artifact downloads', async () => {
+  const { allowed, excluded, credential } = await scopedFixture();
+  const snapshot = await bearer(credential.token);
+
+  expect(snapshot.statusCode, snapshot.body).toBe(200);
+
+  expect(snapshot.json().projects.map((project: { id: string }) => project.id)).toEqual([
+    allowed.id,
+  ]);
+
+  expect(snapshot.json().totals).toMatchObject({
+    projects: 1,
+    artifacts: 1,
+    releases: 1,
+    deployments: 1,
+    audit_events: 0,
+  });
+
+  expect(snapshot.json().audit).toEqual([]);
+  expect(snapshot.json().environment_states).toHaveLength(1);
+  expect(snapshot.body).not.toContain(excluded.id);
+  expect(snapshot.json().environments).toHaveLength(2);
+
+  for (const [resource, allowedId, deniedId] of [
+    ['projects', allowed.id, excluded.id],
+    ['artifacts', allowed.artifact.id, excluded.artifact.id],
+    ['releases', allowed.release.id, excluded.release.id],
+    ['deployments', allowed.deployment.id, excluded.deployment.id],
+  ]) {
+    const page = await bearer(credential.token, `/resources/${resource}?limit=1`);
+
+    expect(page.statusCode, page.body).toBe(200);
+    expect(page.json().total).toBe(1);
+    expect(page.json().items[0].id).toBe(allowedId);
+
+    expect((await bearer(credential.token, `/resources/${resource}/${deniedId}`)).statusCode).toBe(
+      404,
+    );
+
+    expect((await bearer(credential.token, `/resources/${resource}/${allowedId}`)).statusCode).toBe(
+      200,
+    );
+  }
+
+  expect((await bearer(credential.token, `/artifacts/${allowed.artifact.id}/download`)).body).toBe(
+    'artifact for Allowed',
+  );
+
+  expect(
+    (await bearer(credential.token, `/artifacts/${excluded.artifact.id}/download`)).statusCode,
+  ).toBe(404);
+
+  expect(
+    (await bearer(credential.token, `/resources/deployments?project_id=${excluded.id}`)).json()
+      .total,
+  ).toBe(0);
+
+  const broaderPage = (await api('/resources/projects?limit=1')).json();
+
+  expect(
+    (await bearer(credential.token, `/resources/projects?cursor=${broaderPage.next_cursor}`))
+      .statusCode,
+  ).toBe(400);
+
+  for (const route of [
+    '/integrations',
+    '/execution',
+    '/resources/audit',
+    '/resources/agents',
+    '/resources/targets',
+    '/resources/attempts',
+    '/resources/notification-deliveries',
+    '/resources/notification-attempts',
+  ]) {
+    const response = await bearer(credential.token, route);
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.body).not.toContain(excluded.id);
+  }
+});
+
+it('enforces project scopes before writes, approval, rollback, secret access and replay', async () => {
+  const { allowed, excluded, credential } = await scopedFixture();
+
+  expect(
+    (await bearer(credential.token, `/deployments/${allowed.deployment.id}/cancel`, {})).statusCode,
+  ).toBe(200);
+
+  for (const action of ['cancel', 'approve', 'reject']) {
+    expect(
+      (await bearer(credential.token, `/deployments/${excluded.deployment.id}/${action}`, {}))
+        .statusCode,
+    ).toBe(404);
+  }
+
+  for (const path of [
+    `/deployments/${excluded.deployment.id}/rollback-candidates`,
+    `/deployments/${excluded.deployment.id}/secret-bindings`,
+    `/releases/${excluded.release.id}/promotion?environment_id=${f.environments.staging}`,
+  ]) {
+    expect((await bearer(credential.token, path)).statusCode).toBe(404);
+  }
+
+  expect(
+    (
+      await bearer(credential.token, '/rollback-plans', {
+        source_deployment_id: allowed.deployment.id,
+        candidate_deployment_id: excluded.deployment.id,
+      })
+    ).statusCode,
+  ).toBe(404);
+
+  expect(
+    (
+      await bearer(credential.token, '/deployments', {
+        release_id: excluded.release.id,
+        environment_id: f.environments.staging,
+      })
+    ).statusCode,
+  ).toBe(404);
+
+  expect(
+    (
+      await bearer(credential.token, '/releases', {
+        project_id: excluded.id,
+        artifact_id: excluded.artifact.id,
+        version: '2',
+        process: deploymentProcess(),
+      })
+    ).statusCode,
+  ).toBe(403);
+
+  expect(
+    (
+      await bearer(
+        credential.token,
+        `/secrets?project_id=${excluded.id}&environment_id=${f.environments.staging}`,
+      )
+    ).statusCode,
+  ).toBe(403);
+
+  expect((await bearer(credential.token, '/secrets', { project_id: excluded.id })).statusCode).toBe(
+    403,
+  );
+
+  expect(
+    (await bearer(credential.token, '/integrations/github', { project_id: excluded.id }))
+      .statusCode,
+  ).toBe(403);
+
+  expect(
+    (await bearer(credential.token, '/notifications/endpoints', { project_id: excluded.id }))
+      .statusCode,
+  ).toBe(403);
+
+  for (const path of [
+    '/projects',
+    '/agents',
+    '/targets',
+    `/agents/${randomUUID()}/certificate`,
+    `/environments/${f.environments.staging}/promotion-policy`,
+    '/identity/tokens',
+  ]) {
+    expect((await bearer(credential.token, path, {})).statusCode).toBe(403);
+  }
+
+  const input = {
+    project_id: allowed.id,
+    artifact_id: allowed.artifact.id,
+    version: '2',
+    process: deploymentProcess(),
+  };
+
+  const key = randomUUID();
+
+  expect((await api('/releases', input, owner, key)).statusCode).toBe(200);
+
+  const replay = await app.inject({
+    method: 'POST',
+    url: '/api/v1/releases',
+    payload: input,
+    headers: { authorization: `Bearer ${credential.token}`, 'idempotency-key': key },
+  });
+
+  expect(replay.statusCode).toBe(409);
+  const published = await bearer(credential.token, '/releases', { ...input, version: '3' });
+
+  expect(published.statusCode, published.body).toBe(200);
+
+  expect(
+    (
+      await bearer(credential.token, '/deployments', {
+        release_id: published.json().id,
+        environment_id: f.environments.staging,
+      })
+    ).statusCode,
+  ).toBe(200);
+});
+
+it('validates project selection and preserves scope through token rotation', async () => {
+  const { allowed, excluded, credential } = await scopedFixture();
+  const input = { name: 'Scoped CI', permissions: ['read', 'write'], expires_in_days: 30 };
+  const other = await fixture(db);
+  const foreignId = randomUUID();
+
+  await db.query('INSERT INTO projects(id, organisation_id, name, slug) VALUES($1,$2,$3,$4)', [
+    foreignId,
+    other.org,
+    'Foreign',
+    'foreign',
+  ]);
+
+  for (const project_ids of [[], [allowed.id, allowed.id], [null]]) {
+    expect((await api('/identity/tokens', { ...input, project_ids })).statusCode).toBe(400);
+  }
+
+  expect((await api('/identity/tokens', { ...input, project_ids: [foreignId] })).statusCode).toBe(
+    404,
+  );
+
+  expect(
+    (await api('/identity/tokens', { ...input, project_ids: [randomUUID()] })).statusCode,
+  ).toBe(404);
+
+  const rotated = await api(`/identity/tokens/${credential.id}/rotate`, input);
+
+  expect(rotated.statusCode, rotated.body).toBe(200);
+  expect(rotated.json().project_ids).toEqual([allowed.id]);
+  expect((await bearer(credential.token)).statusCode).toBe(401);
+
+  expect(
+    (await bearer(rotated.json().token, `/resources/projects/${excluded.id}`)).statusCode,
+  ).toBe(404);
+
+  const multiple = await api('/identity/tokens', {
+    ...input,
+    project_ids: [allowed.id, excluded.id],
+  });
+
+  expect((await bearer(multiple.json().token, '/resources/projects')).json().total).toBe(2);
+  const listing = (await api('/identity/tokens')).json();
+
+  expect(
+    listing.items.find((item: { id: string }) => item.id === rotated.json().id).project_ids,
+  ).toEqual([allowed.id]);
+});
+
+it('isolates integration, execution and notification metadata and related mutations', async () => {
+  const { allowed, excluded, credential } = await scopedFixture();
+  const created = [];
+
+  for (const project of [allowed, excluded]) {
+    const agent = randomUUID();
+    const target = randomUUID();
+    const attempt = randomUUID();
+    const connection = randomUUID();
+    const imported = randomUUID();
+    const endpoint = randomUUID();
+    const delivery = randomUUID();
+    const notificationAttempt = randomUUID();
+
+    const event = (
+      await db.query('SELECT id FROM deployment_events WHERE deployment_id=$1', [
+        project.deployment.id,
+      ])
+    ).rows[0].id;
+
+    await db.query(
+      'INSERT INTO deployment_agents(id,organisation_id,name,certificate_fingerprint) VALUES($1,$2,$3,$4)',
+      [agent, f.org, project.name, sha256(agent)],
+    );
+
+    await db.query(
+      `
+      INSERT INTO
+        deployment_targets (
+          id,
+          organisation_id,
+          project_id,
+          environment_id,
+          agent_id,
+          name,
+          labels
+        )
+      VALUES
+        ($1, $2, $3, $4, $5, $6, $7)
+    `,
+      [target, f.org, project.id, f.environments.staging, agent, project.name, {}],
+    );
+
+    await db.query(
+      'INSERT INTO deployment_attempts(id,organisation_id,deployment_id,target_id,agent_id,state) VALUES($1,$2,$3,$4,$5,$6)',
+      [attempt, f.org, project.deployment.id, target, agent, 'failed'],
+    );
+
+    await db.query(
+      `
+      INSERT INTO
+        provider_connections (
+          id,
+          organisation_id,
+          project_id,
+          created_by,
+          provider,
+          name,
+          repository,
+          repository_id,
+          workflow_id,
+          branch,
+          artifact_name,
+          credentials
+        )
+      VALUES
+        (
+          $1,
+          $2,
+          $3,
+          $4,
+          'github-actions',
+          $5,
+          'owner/repo',
+          '1',
+          '1',
+          'main',
+          'application',
+          '{}'
+        )
+    `,
+      [connection, f.org, project.id, f.operator.id, project.name],
+    );
+
+    await db.query(
+      `
+      INSERT INTO
+        artifact_imports (
+          id,
+          organisation_id,
+          project_id,
+          connection_id,
+          requested_by,
+          run_id,
+          run_attempt,
+          status
+        )
+      VALUES
+        ($1, $2, $3, $4, $5, '1', 1, 'failed')
+    `,
+      [imported, f.org, project.id, connection, f.operator.id],
+    );
+
+    await db.query(
+      `
+      INSERT INTO
+        notification_endpoints (
+          id,
+          organisation_id,
+          name,
+          origin,
+          credentials,
+          project_id,
+          statuses
+        )
+      VALUES
+        (
+          $1,
+          $2,
+          $3,
+          'https://example.com',
+          '{}',
+          $4,
+          '{failed}'
+        )
+    `,
+      [endpoint, f.org, project.name, project.id],
+    );
+
+    await db.query(
+      `
+      INSERT INTO
+        notification_deliveries (
+          id,
+          organisation_id,
+          endpoint_id,
+          event_id,
+          deployment_id,
+          payload,
+          status
+        )
+      VALUES
+        ($1, $2, $3, $4, $5, '{}', 'failed')
+    `,
+      [delivery, f.org, endpoint, event, project.deployment.id],
+    );
+
+    await db.query(
+      'INSERT INTO notification_attempts(id,organisation_id,delivery_id,attempt) VALUES($1,$2,$3,1)',
+      [notificationAttempt, f.org, delivery],
+    );
+
+    created.push({
+      agents: agent,
+      targets: target,
+      attempts: attempt,
+      connections: connection,
+      imports: imported,
+      'notification-endpoints': endpoint,
+      'notification-deliveries': delivery,
+      'notification-attempts': notificationAttempt,
+    });
+  }
+
+  for (const resource of Object.keys(created[0]) as (keyof (typeof created)[0])[]) {
+    const page = await bearer(credential.token, `/resources/${resource}`);
+
+    expect(page.statusCode, page.body).toBe(200);
+    expect(page.json().total).toBe(1);
+    expect(page.json().items[0].id).toBe(created[0][resource]);
+
+    expect(
+      (await bearer(credential.token, `/resources/${resource}/${created[1][resource]}`)).statusCode,
+    ).toBe(404);
+  }
+
+  const execution = (await bearer(credential.token, '/execution')).json();
+  const integrations = (await bearer(credential.token, '/integrations')).json();
+
+  expect(execution.agents.map((row: { id: string }) => row.id)).toEqual([created[0].agents]);
+  expect(execution.targets.map((row: { id: string }) => row.id)).toEqual([created[0].targets]);
+  expect(execution.attempts.map((row: { id: string }) => row.id)).toEqual([created[0].attempts]);
+
+  expect(integrations.connections.map((row: { id: string }) => row.id)).toEqual([
+    created[0].connections,
+  ]);
+
+  expect(integrations.imports.map((row: { id: string }) => row.id)).toEqual([created[0].imports]);
+  const deniedConnection = created[1].connections;
+
+  for (const action of ['state', 'credentials', 'bitbucket-credentials', 'imports']) {
+    expect(
+      (await bearer(credential.token, `/integrations/${deniedConnection}/${action}`, {}))
+        .statusCode,
+    ).toBe(404);
+  }
+
+  expect(
+    (await bearer(credential.token, `/integrations/${deniedConnection}/pipelines`)).statusCode,
+  ).toBe(404);
+
+  expect(
+    (await bearer(credential.token, `/imports/${created[1].imports}/retry`, {})).statusCode,
+  ).toBe(404);
+
+  expect(
+    (
+      await bearer(
+        credential.token,
+        `/notifications/endpoints/${created[1]['notification-endpoints']}/state`,
+        { enabled: false, expected_revision: 1 },
+      )
+    ).statusCode,
+  ).toBe(404);
+
+  expect(
+    (
+      await bearer(
+        credential.token,
+        `/notifications/deliveries/${created[1]['notification-deliveries']}/retry`,
+        {},
+      )
+    ).statusCode,
+  ).toBe(404);
+
+  expect(
+    (
+      await bearer(
+        credential.token,
+        `/notifications/deliveries/${created[0]['notification-deliveries']}/retry`,
+        {},
+      )
+    ).statusCode,
+  ).toBe(200);
+
+  expect(
+    (
+      await bearer(credential.token, `/integrations/${created[0].connections}/state`, {
+        enabled: false,
+      })
+    ).statusCode,
+  ).toBe(200);
+
+  // A workspace-wide endpoint must remain inaccessible even when one delivery belongs to an allowed project.
+  await db.query('UPDATE notification_endpoints SET project_id=NULL WHERE id=$1', [
+    created[0]['notification-endpoints'],
+  ]);
+
+  expect((await bearer(credential.token, '/resources/notification-deliveries')).json().total).toBe(
+    0,
+  );
+
+  expect((await bearer(credential.token, '/resources/notification-attempts')).json().total).toBe(0);
+
+  expect(
+    (
+      await bearer(
+        credential.token,
+        `/notifications/endpoints/${created[0]['notification-endpoints']}/state`,
+        { enabled: false, expected_revision: 1 },
+      )
+    ).statusCode,
+  ).toBe(404);
 });

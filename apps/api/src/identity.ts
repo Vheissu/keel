@@ -7,12 +7,12 @@ import { transaction, type Transaction } from '../../../packages/database/src/in
 import { DomainError, type Principal } from '../../../packages/domain/src/index.js';
 import type { ControlPlane } from './control-plane.js';
 import { sha256 } from './artifact-store.js';
-import { rolePermissions, roles, type Role, unauthenticated } from './identity-policy.js';
+import { resolveRole, roles, unauthenticated } from './identity-policy.js';
 import { hashPassword, verifyPassword, passwordInput } from './passwords.js';
 
 export const emailInput = z.string().trim().toLowerCase().email().max(254);
 
-export const roleInput = z.enum(roles);
+export const roleInput = z.union([z.enum(roles), z.string().uuid()]);
 
 export const opaqueInput = z.string().regex(/^[a-zA-Z0-9_-]{43}$/);
 
@@ -30,6 +30,13 @@ export const tokenInput = z
         'Choose distinct permissions including read.',
       ),
     expires_in_days: z.number().int().min(1).max(90),
+    project_ids: z
+      .array(z.string().uuid())
+      .min(1)
+      .max(100)
+      .refine((ids) => new Set(ids).size === ids.length, 'Choose distinct projects.')
+      .nullable()
+      .optional(),
   })
   .strict();
 
@@ -206,7 +213,7 @@ export class Identity {
       organisation_id: organisation,
       actor_id: member.actor_id,
       name: session.name,
-      permissions: [...rolePermissions[member.role as Role]],
+      permissions: await resolveRole(this.control.db, organisation, member.role),
       user_id: session.user_id,
       session_id: session.session_id,
       role: member.role,
@@ -445,7 +452,7 @@ export class Identity {
     }
   }
 
-  invitation(tx: Transaction, organisationId: string, email: string, role: Role) {
+  invitation(tx: Transaction, organisationId: string, email: string, role: string) {
     return createInvitation(tx, this.origin, organisationId, email, role);
   }
 
@@ -546,6 +553,8 @@ export class Identity {
       if (!invite) {
         throw new DomainError('INVITATION_INVALID', 'Invitation is unavailable.');
       }
+
+      await resolveRole(tx, invite.organisation_id, invite.role);
 
       let userId = session?.user_id;
 
@@ -655,8 +664,12 @@ export class Identity {
     });
   }
 
-  async changeMember(tx: Transaction, p: Principal, userId: string, role: Role | null) {
+  async changeMember(tx: Transaction, p: Principal, userId: string, role: string | null) {
     this.admin(p);
+
+    if (role) {
+      await resolveRole(tx, p.organisation_id, role);
+    }
 
     const member = (
       await tx.query(
@@ -790,6 +803,19 @@ export class Identity {
       throw new DomainError('FORBIDDEN', 'Tokens cannot exceed your workspace permissions.', 403);
     }
 
+    const projectIds = input.project_ids ?? null;
+
+    if (projectIds) {
+      const projects = await tx.query(
+        'SELECT id FROM projects WHERE organisation_id=$1 AND id=ANY($2::uuid[]) FOR SHARE',
+        [p.organisation_id, projectIds],
+      );
+
+      if (projects.rowCount !== projectIds.length) {
+        throw new DomainError('NOT_FOUND', 'One or more selected projects are unavailable.', 404);
+      }
+    }
+
     const token = `keel_${newOpaque()}`;
 
     const row = (
@@ -804,6 +830,7 @@ export class Identity {
               token_hash,
               permissions,
               name,
+              project_ids,
               expires_at
             )
           VALUES
@@ -815,12 +842,14 @@ export class Identity {
               $5,
               $6,
               $7,
-              now() + $8 * interval '1 day'
+              $8,
+              now() + $9 * interval '1 day'
             )
           RETURNING
             id,
             name,
             permissions,
+            project_ids,
             expires_at,
             created_at
         `,
@@ -832,6 +861,7 @@ export class Identity {
           sha256(token),
           input.permissions,
           input.name,
+          projectIds,
           input.expires_in_days,
         ],
       )
@@ -840,6 +870,7 @@ export class Identity {
     await this.control.audit(tx, p, 'api_token.created', row.id, {
       name: input.name,
       permissions: input.permissions,
+      project_ids: projectIds,
       expires_at: row.expires_at,
     });
 
@@ -852,8 +883,10 @@ export async function createInvitation(
   origin: string,
   organisationId: string,
   email: string,
-  role: Role,
+  role: string,
 ) {
+  await resolveRole(tx, organisationId, role);
+
   await tx.query(
     `
       UPDATE workspace_invitations

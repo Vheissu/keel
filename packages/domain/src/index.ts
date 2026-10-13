@@ -9,6 +9,7 @@ export interface Principal {
   session_id?: string;
   token_id?: string;
   role?: string;
+  project_ids?: string[] | null;
 }
 
 export interface Project {
