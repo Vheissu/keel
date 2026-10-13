@@ -70,10 +70,14 @@ Pass a stable `--idempotency-key` when retrying after an uncertain response. Sec
 
 ## Agent delivery and logging
 
-Rebuild and restart the Go agent for this stage. It advertises `deployment-secrets-v1` when polling. An older agent can still execute releases without secrets and perform cleanup, but cannot claim a new deployment with secret bindings. Unclaimed work eventually reports `AGENT_UNAVAILABLE`.
+Rebuild and restart the Go agent for this stage. It advertises `deployment-secrets-v1` when polling. An older agent can still execute releases without secrets and perform cleanup for releases without hooks, but cannot claim a new deployment with secret bindings. Unclaimed work eventually reports `AGENT_UNAVAILABLE`.
 
 Only the registered agent with a current lease for that deployment can call the gateway's `/agent/v1/secrets` endpoint. Wrong agents, expired leases, cancelled work, retired certificates and cleanup-only assignments cannot retrieve values. The response disables caching. Decryption authenticates the workspace, project, environment, secret identity and version using AES-256-GCM authenticated data. Values never enter job contracts or Temporal history.
 
 After verifying the target and artifact, the agent passes environment values to Docker through an anonymous stdin pipe using `--env-file /dev/stdin`. There are no plaintext temporary files, secret command arguments or secret additions to the agent process's environment. Container variables follow Docker's [environment-file syntax](https://docs.docker.com/reference/cli/docker/container/run/#env); the single-line constraint prevents additional variables being injected through line breaks.
 
 Keel accepts fixed progress phases and result codes, not free-text agent output. Docker output, HTTP response bodies and application logs are not uploaded. API secret errors are generic, and audit/idempotency records contain metadata only. This is an exclusion policy rather than a general-purpose log masking engine: application logs remain the application's responsibility. The application, the Docker daemon and administrators with access to that host can read container environment values. Secret files, multiline values and external vault references are later work.
+
+## Lifecycle hook selection
+
+Each [lifecycle hook](lifecycle-hooks.md) opts into a subset of environment variables by name. Omission supplies no Keel secrets; image-baked variables remain available. The application receives the full environment mapping. Hook output is discarded and Docker logging is disabled, but the container and Docker administrators can inspect its environment. Never put secret values in retained hook commands.

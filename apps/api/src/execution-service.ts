@@ -59,6 +59,12 @@ export const resultInput = leaseInput
       'CANCELLED',
       'RECONCILED',
       'TARGET_NOT_ALLOWED',
+      'PRE_HOOK_FAILED',
+      'PRE_HOOK_TIMEOUT',
+      'POST_HOOK_FAILED',
+      'POST_HOOK_TIMEOUT',
+      'HOOK_NETWORK_UNAVAILABLE',
+      'HOOK_STATE_FAILED',
     ]),
   })
   .strict();
@@ -77,6 +83,8 @@ export const progressInput = leaseInput
       'loading_image',
       'replacing_container',
       'starting_candidate',
+      'pre_hook',
+      'post_hook',
       'switching_traffic',
       'verifying_http',
       'cleaning_up',
@@ -642,6 +650,7 @@ export class ExecutionService {
     supportsSecrets = false,
     supportsSSH = false,
     supportsBlueGreen = false,
+    supportsHooks = false,
   ) {
     return transaction(this.control.db, async (tx) => {
       await this.lockAgent(tx, agent);
@@ -672,6 +681,14 @@ export class ExecutionService {
                     OR (t.capability = 'ssh-docker-recreate-v1' AND $5::boolean)
                     OR (t.capability = 'docker-blue-green-v1' AND $6::boolean)
                   )
+              )
+            )
+            AND (
+              $7::boolean
+              OR NOT EXISTS (
+                SELECT 1 FROM releases r JOIN environments e ON e.organisation_id = r.organisation_id
+                WHERE r.organisation_id = d.organisation_id AND r.id = d.release_id AND e.id = d.environment_id
+                  AND r.manifest->'process'->'spec'->'environments'->e.slug ? 'hooks'
               )
             )
             AND (
@@ -708,6 +725,7 @@ export class ExecutionService {
           supportsSecrets,
           supportsSSH,
           supportsBlueGreen,
+          supportsHooks,
         ],
       );
 
@@ -814,6 +832,7 @@ export class ExecutionService {
         target_id: a.target_id,
         capability: targetFence.capability,
         strategy: process.spec.environments[env.slug].strategy,
+        hooks: process.spec.environments[env.slug].hooks ?? null,
         digest: release.manifest.artifact.digest,
         size: release.manifest.artifact.size,
         image_id: process.spec.artifact.dockerImageId,

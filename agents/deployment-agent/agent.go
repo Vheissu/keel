@@ -106,6 +106,13 @@ func (a *Agent) execute(parent context.Context, j Job) {
 		a = &copy
 	}
 
+	if j.Hooks != nil {
+		if err := a.prepareLifecycle(j); err != nil {
+			log.Printf("Cannot prepare lifecycle state; reconciliation required: %v", err)
+			return
+		}
+	}
+
 	ctx, cancel := context.WithCancelCause(parent)
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -129,14 +136,24 @@ func (a *Agent) execute(parent context.Context, j Job) {
 
 	recovery := ""
 	// Blue/green always confirms the route, including failures before candidate creation.
-	if code != "HTTP_VERIFIED" && (target.BlueGreen != nil || code != "SECRET_UNAVAILABLE") {
+	if code != "HTTP_VERIFIED" && (j.Hooks != nil || target.BlueGreen != nil || code != "SECRET_UNAVAILABLE") {
 		cleanupContext, stop := context.WithTimeout(context.Background(), 30*time.Second)
 		a.progress(cleanupContext, j, "cleaning_up")
 		var err error
-		if target.BlueGreen != nil {
-			recovery, err = a.recoverBlueGreen(cleanupContext, j)
-		} else {
-			err = a.cleanup(cleanupContext, j)
+		applicationStarted := true
+		if j.Hooks != nil {
+			err = a.cleanupHooks(cleanupContext, j)
+			if err == nil {
+				applicationStarted, err = a.applicationStarted(j)
+			}
+		}
+
+		if err == nil {
+			if target.BlueGreen != nil {
+				recovery, err = a.recoverBlueGreen(cleanupContext, j)
+			} else if applicationStarted {
+				err = a.cleanup(cleanupContext, j)
+			}
 		}
 
 		stop()

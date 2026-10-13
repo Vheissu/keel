@@ -18,6 +18,7 @@ type BlueGreenConfig struct {
 }
 
 type Target struct {
+	HookNetwork   string           `json:"hook_network,omitempty"`
 	BlueGreen     *BlueGreenConfig `json:"blue_green,omitempty"`
 	SSH           *SSHConfig       `json:"ssh,omitempty"`
 	HostPort      int              `json:"host_port"`
@@ -41,7 +42,8 @@ type Lease struct {
 }
 
 type Job struct {
-	Strategy string `json:"strategy"`
+	Hooks    *LifecycleHooks `json:"hooks,omitempty"`
+	Strategy string          `json:"strategy"`
 	slot     string
 	Lease
 	Capability  string `json:"capability"`
@@ -73,6 +75,7 @@ type Agent struct {
 var uuidPattern = regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`)
 var digestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var imagePattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+var hookNetworkPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$`)
 
 func validateConfig(c Config) error {
 	u, err := url.Parse(c.Gateway)
@@ -92,6 +95,14 @@ func validateConfig(c Config) error {
 	for id, t := range c.Targets {
 		if !uuidPattern.MatchString(id) || t.HostPort < 1024 || t.HostPort > 65535 || t.ContainerPort < 1024 || t.ContainerPort > 65535 {
 			return errors.New("target IDs and unprivileged, unique host ports are required")
+		}
+
+		if t.HookNetwork != "" && !hookNetworkPattern.MatchString(t.HookNetwork) {
+			return errors.New("hook network must be a local Docker network name")
+		}
+
+		if t.HookNetwork == "host" || t.HookNetwork == "none" {
+			return errors.New("hook network cannot use host or none mode")
 		}
 
 		host := "local"
@@ -140,6 +151,10 @@ func validateJob(j Job) error {
 		}
 	} else if j.Strategy != "" && j.Strategy != "recreate" {
 		return errors.New("target requires recreate strategy")
+	}
+
+	if err := validateHooks(j.Hooks); err != nil {
+		return err
 	}
 
 	if j.Mode == "cleanup" {

@@ -141,7 +141,7 @@ The separate HTTPS gateway provides `POST /agent/v1/poll`, `/heartbeat`, `/artif
 
 `POST /api/v1/agents/:id/certificate` takes `certificate_fingerprint` and `same_host_agent_stopped: true`, with write permission and an idempotency key. The agent must be drained or revoked and have no running/reconciling lease. Replacement retains the agent ID and target locks, permanently retires the old fingerprint and leaves the agent draining. Resume is blocked until outstanding reconciliation completes.
 
-The private mTLS gateway accepts `POST /agent/v1/progress` with the current lease fields and a fixed `phase`: `downloading`, `loading_image`, `replacing_container`, `verifying_http` or `cleaning_up`. Recovery/cancellation permits only `cleaning_up`. No free-text output is accepted. `/api/v1/execution` exposes `phase` and `phase_updated_at` per attempt. See [same-host recovery](deployment-agents.md#replace-or-recover-an-agent-certificate).
+The private mTLS gateway accepts `POST /agent/v1/progress` with the current lease fields and a fixed `phase`: `downloading`, `loading_image`, `pre_hook`, `replacing_container`, `starting_candidate`, `switching_traffic`, `verifying_http`, `post_hook` or `cleaning_up`. Recovery/cancellation permits only `cleaning_up`. No free-text output is accepted. `/api/v1/execution` exposes `phase` and `phase_updated_at` per attempt. See [same-host recovery](deployment-agents.md#replace-or-recover-an-agent-certificate).
 
 ## Promotion policy and rollback plans
 
@@ -182,3 +182,9 @@ Gateway polling accepts `{ "capabilities": ["deployment-secrets-v1"] }`. Omissio
 | `GET /resources/notification-attempts`     | read       | Attempt history; optional `delivery_id` filter                                                         |
 
 All writes require an idempotency key. Resource collections support ordinary pagination, search and scoped `/:id` lookups. Destination creation accepts at most 8 KiB and returns neither the URL path/query nor signing secret. Delivery status is `pending`, `sending`, `retrying`, `delivered`, `failed` or `cancelled`. See [notification setup, signatures and retry semantics](notifications.md).
+
+## Deployment lifecycle hooks
+
+Process environments accept optional `hooks: {preDeploy?, postDeploy?}`. Each hook requires `command` (1–32 nonempty argument strings, each at most 256 characters without control characters) and `timeoutSeconds` (integer, 1–120). Optional `secrets` selects up to 32 unique variables declared by the environment. Optional `network` accepts `none` (default) or `target`, which requires the private agent’s configured Docker network. Unknown fields, empty hook objects and undeclared secret variables are rejected. There is no continue-on-failure policy.
+
+Polling agents advertise `deployment-hooks-v1` alongside their existing capabilities. Both deployment and cleanup jobs for hook-bearing releases require this capability and include the retained hook definitions. Cleanup jobs cannot retrieve secrets and never execute hooks. Progress adds `pre_hook` and `post_hook`; fixed failure codes add `PRE_HOOK_FAILED`, `PRE_HOOK_TIMEOUT`, `POST_HOOK_FAILED`, `POST_HOOK_TIMEOUT`, `HOOK_NETWORK_UNAVAILABLE` and `HOOK_STATE_FAILED`. Only completion of hooks and final HTTP verification permits success. Rollback review warns when hooks will run again. See [execution limits and failure behavior](lifecycle-hooks.md).

@@ -221,8 +221,20 @@ export class TargetsPanel {
       RECONCILED:
         'Cleanup confirmed. The interrupted release did not succeed; request a new deployment when ready.',
       CANCELLED: 'Cancellation cleanup confirmed.',
+      PRE_HOOK_FAILED:
+        'The pre-deploy hook failed. The existing application was preserved. Check its command, image runtime and selected secrets before creating a new request.',
+      PRE_HOOK_TIMEOUT:
+        'The pre-deploy hook exceeded its time limit. The existing application was preserved. Check for partial external changes before retrying.',
+      POST_HOOK_FAILED:
+        'The post-deploy hook failed after application verification. Cleanup removed the candidate or restored the previous blue/green route. Check for partial external changes before retrying.',
+      POST_HOOK_TIMEOUT:
+        'The post-deploy hook exceeded its time limit. Check the cleanup outcome and any partial external changes before retrying.',
+      HOOK_NETWORK_UNAVAILABLE:
+        'A hook requested target networking, but the agent has no hook network configured. Configure the target’s Docker network before submitting a new request.',
+      HOOK_STATE_FAILED:
+        'The agent could not persist lifecycle state. Check its original state directory and available disk space before retrying.',
       AGENT_UNAVAILABLE:
-        'The agent did not claim this deployment. Check its connection, certificate, draining state and support for deployment secrets and SSH targets.',
+        'The agent did not claim this deployment. Check its connection, certificate, draining state and support for the release’s secrets, hooks and target strategy.',
     };
 
     return (

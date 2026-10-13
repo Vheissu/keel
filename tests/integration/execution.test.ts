@@ -736,3 +736,44 @@ it('rejects blue/green on SSH and rejects recovery claims from recreate agents',
     (await db.query('SELECT result_code FROM deployments WHERE id=$1', [d.id])).rows[0].result_code,
   ).toBe('INCOMPATIBLE_TARGET_STRATEGY');
 });
+
+it('requires hook capability for deployment and recovery and retains the hook contract', async () => {
+  const original = (await db.query('SELECT * FROM releases WHERE id=$1', [release.id])).rows[0];
+  const process = original.manifest.process;
+  const hooks = { preDeploy: { command: ['/bin/task'], timeoutSeconds: 5 } };
+
+  process.spec.environments.staging.hooks = hooks;
+
+  const artifact = (await db.query('SELECT id FROM artifacts WHERE project_id=$1', [project.id]))
+    .rows[0];
+
+  release = await mutate((tx) =>
+    control.release(tx, p, {
+      project_id: project.id,
+      artifact_id: artifact.id,
+      version: 'hooks',
+      process,
+    }),
+  );
+
+  const d = await requestDeployment();
+
+  await execution.tick(f.org, d.id);
+  expect(await execution.claim(agent, true, true, true)).toBeNull();
+  const job = (await execution.claim(agent, true, true, true, true))!;
+
+  expect(job.hooks).toEqual(hooks);
+  await execution.progress(agent, { ...lease(job), phase: 'pre_hook' });
+
+  await db.query(
+    "UPDATE deployment_attempts SET lease_expires_at=now()-interval '1 second' WHERE id=$1",
+    [job.attempt_id],
+  );
+
+  await execution.tick(f.org, d.id);
+  expect(await execution.claim(agent, true, true, true)).toBeNull();
+  const cleanup = (await execution.claim(agent, true, true, true, true))!;
+
+  expect(cleanup).toMatchObject({ mode: 'cleanup', hooks, secret_count: 0 });
+  await execution.complete(agent, { ...lease(cleanup), outcome: 'failed', code: 'RECONCILED' });
+});

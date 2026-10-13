@@ -95,3 +95,39 @@ describe('deployment process contract', () => {
     expect(() => parseProcess(process)).toThrow('At least one environment');
   });
 });
+
+it('bounds lifecycle hooks and limits their secrets to declared environment variables', () => {
+  const process = deploymentProcess();
+
+  const valid = {
+    command: ['/bin/task', 'literal $VALUE'],
+    timeoutSeconds: 120,
+    secrets: ['PASSWORD'],
+    network: 'none',
+  };
+
+  Object.assign(process.spec.environments.staging, {
+    secrets: { PASSWORD: { secret: 'DATABASE_PASSWORD' } },
+    hooks: { preDeploy: valid },
+  });
+
+  expect(parseProcess(process).spec.environments.staging.hooks?.preDeploy).toEqual(valid);
+
+  for (const hook of [
+    { ...valid, command: [] },
+    { ...valid, command: ['x'.repeat(257)] },
+    { ...valid, command: Array(33).fill('x') },
+    { ...valid, command: ['bad\ncommand'] },
+    { ...valid, timeoutSeconds: 0 },
+    { ...valid, timeoutSeconds: 121 },
+    { ...valid, timeoutSeconds: 1.5 },
+    { ...valid, secrets: ['UNDECLARED'] },
+    { ...valid, secrets: ['PASSWORD', 'PASSWORD'] },
+    { ...valid, network: 'host' },
+    { ...valid, environment: { PASSWORD: 'inline-value' } },
+    { ...valid, onFailure: 'continue' },
+  ]) {
+    Object.assign(process.spec.environments.staging, { hooks: { preDeploy: hook } });
+    expect(() => parseProcess(process)).toThrow();
+  }
+});

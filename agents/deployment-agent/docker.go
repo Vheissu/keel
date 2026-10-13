@@ -243,10 +243,43 @@ func (a *Agent) deploy(ctx context.Context, j Job, t Target) string {
 	}
 	defer clear(secretInput)
 
-	if j.Strategy == "blue-green" {
-		return a.deployBlueGreen(ctx, j, t, secretInput)
+	if j.Hooks != nil {
+		for _, hook := range []*LifecycleHook{j.Hooks.PreDeploy, j.Hooks.PostDeploy} {
+			if hook != nil && hook.Network == "target" && t.HookNetwork == "" {
+				return "HOOK_NETWORK_UNAVAILABLE"
+			}
+		}
+		if code := a.runHook(ctx, j, t, "pre", j.Hooks.PreDeploy, secretInput); code != "" {
+			return code
+		}
 	}
 
+	var code string
+	if j.Strategy == "blue-green" {
+		code = a.deployBlueGreen(ctx, j, t, secretInput)
+	} else {
+		code = a.deployRecreate(ctx, j, t, secretInput)
+	}
+
+	if code != "HTTP_VERIFIED" || j.Hooks == nil || j.Hooks.PostDeploy == nil {
+		return code
+	}
+
+	if code = a.runHook(ctx, j, t, "post", j.Hooks.PostDeploy, secretInput); code != "" {
+		return code
+	}
+
+	if j.Strategy == "blue-green" {
+		state, err := a.readRoute(j.TargetID)
+		if err != nil || state.Active.Attempt != j.AttemptID {
+			return "HEALTH_FAILED"
+		}
+		j.slot = state.Active.Slot
+	}
+	return a.verifyContainer(ctx, j, t, 1)
+}
+
+func (a *Agent) deployRecreate(ctx context.Context, j Job, t Target, secretInput []byte) string {
 	// Recheck immediately before replacing the target. Heartbeats also cancel in-flight work.
 	action, err := a.confirmLease(ctx, j)
 	if err != nil {
@@ -256,6 +289,10 @@ func (a *Agent) deploy(ctx context.Context, j Job, t Target) string {
 
 	if action != "continue" {
 		return "CANCELLED"
+	}
+
+	if a.markApplicationStarted(j) != nil {
+		return "HOOK_STATE_FAILED"
 	}
 
 	a.progress(ctx, j, "replacing_container")
@@ -301,13 +338,17 @@ func (a *Agent) startAndVerify(ctx context.Context, j Job, t Target, secretInput
 		return "DOCKER_FAILED"
 	}
 
+	return a.verifyContainer(ctx, j, t, 30)
+}
+
+func (a *Agent) verifyContainer(ctx context.Context, j Job, t Target, attempts int) string {
 	a.progress(ctx, j, "verifying_http")
 	health := a.health
 	if health == nil {
 		health = localHealth
 	}
 
-	for tries := 0; tries < 30; tries++ {
+	for tries := 0; tries < attempts; tries++ {
 		if ctx.Err() != nil {
 			return abortCode(ctx)
 		}

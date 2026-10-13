@@ -53,7 +53,7 @@ Keep the agent configuration and keys readable only by its OS account. Docker so
 
 ## Deploy to a Linux host over SSH
 
-Select **Docker over SSH** when registering the target. API clients set `capability` to `ssh-docker-recreate-v1`; omission preserves the existing local Docker default. The release uses the same pinned image, archive, HTTP path and recreate strategy. Promotion, approved rollback and scoped deployment secrets use the existing release flow. This transport deploys containers; arbitrary shell hooks, file-copy deployments and systemd service management are not implemented.
+Select **Docker over SSH** when registering the target. API clients set `capability` to `ssh-docker-recreate-v1`; omission preserves the existing local Docker default. The release uses the same pinned image, archive, HTTP path and recreate strategy. Promotion, approved rollback and scoped deployment secrets use the existing release flow. This transport deploys containers; host shell commands, file-copy deployments and systemd service management are not implemented.
 
 The private agent needs OpenSSH's `ssh` executable. The remote Linux host needs an SSH server, Docker Engine at `/var/run/docker.sock`, the Docker CLI and the matching Keel helper binary. Install the helper from this checkout for the remote host's architecture:
 
@@ -160,3 +160,7 @@ Before switching traffic, failure or cancellation removes the candidate and leav
 A crash or an expired lease requires a cleanup-only assignment with a higher fence. The environment stays locked until recovery is confirmed. A failed cleanup, corrupt route file or unavailable Docker daemon leaves reconciliation outstanding. A lost success response does not trigger local cleanup: if the server committed success, the new route stays active; otherwise lease expiry starts recovery. Keep the original state directory when restarting or replacing a certificate. Do not delete, copy back an old version of, or hand-edit `route-<target-id>.json` to unlock a target.
 
 This is a single-host HTTP strategy. The proxy runs inside the agent, so restarting or stopping the agent interrupts application traffic; container restart policy remains `no`. Gateway outages alone do not stop the proxy. Two application containers must fit on the host and tolerate running concurrently against shared data. Requests already in progress keep their selected backend across a route switch, but there is no connection-drain guarantee when a later deployment removes that slot. Arbitrary TCP routing, SSH blue/green, multi-host traffic control, automatic rollback after a completed deployment and database recovery are not implemented.
+
+## Lifecycle hooks
+
+Releases may declare bounded pre- and post-deploy container hooks for every supported target strategy. Rebuild the agent and gateway to enable `deployment-hooks-v1`. Hooks require `/bin/timeout` in the retained image, receive only explicitly selected secrets and have no network access by default. Preserve lifecycle state alongside fences and blue/green route files. See [hook contracts, limits and recovery](lifecycle-hooks.md) before enabling them.

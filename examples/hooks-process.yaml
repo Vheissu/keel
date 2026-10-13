@@ -1,0 +1,30 @@
+apiVersion: keel.dev/v1alpha1
+kind: DeploymentProcess
+metadata:
+  name: docker-web-with-hooks
+spec:
+  artifact:
+    source: release
+    name: application
+    # Replace with the retained image ID. The image needs /bin/timeout and these commands.
+    dockerImageId: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  environments:
+    staging:
+      strategy: recreate
+      targetSelector:
+        labels: { app: web, tier: staging }
+      secrets:
+        APP_DATABASE_URL:
+          secret: DATABASE_URL
+      hooks:
+        preDeploy:
+          command: [/app/bin/migrate, --compatible]
+          timeoutSeconds: 60
+          secrets: [APP_DATABASE_URL]
+          # The private target must configure hook_network for database access.
+          network: target
+        postDeploy:
+          command: [/app/bin/check-release]
+          timeoutSeconds: 15
+      verify:
+        http: { path: /health }

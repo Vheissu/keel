@@ -57,9 +57,12 @@ The control-plane foundation, GitHub ingestion, Bitbucket publishing and local/S
 - Project- and environment-scoped managed tokens with intersected access, filtered reads and counts, guarded delivery operations, scope-preserving rotation and matching access-management controls.
 - Scoped promotion checks retain policy enforcement while withholding prerequisite evidence outside the token’s environment selection.
 
+- Pre- and post-deploy container hooks with required timeouts, resource limits, explicit secret selection and operator-controlled networking.
+- Capability-gated hook assignments, durable lifecycle journals, cleanup-only crash recovery and phase-specific failure guidance for local/SSH recreate and local blue/green.
+
 ## Next increment
 
-Add deployment lifecycle hooks with explicit execution limits, secret handling and failure behavior. SAML, SCIM, non-container SSH deployments, multi-host strategies and automated rollback remain later work.
+Add reviewed runbooks for bounded operational tasks using the existing agent, secret and approval boundaries. SAML, SCIM, non-container SSH deployments, multi-host strategies and automated rollback remain later work.
 
 ## Decisions and constraints
 
@@ -71,7 +74,7 @@ SQL queries scope every organisation-owned API read, and composite foreign keys 
 
 The optional hosted identity mode uses invitation-only accounts and HttpOnly session cookies. Enabling it rejects legacy bootstrap tokens; the local bootstrap remains available when it is disabled. Managed tokens have explicit permissions and optional project and environment restrictions. Both selections apply when present; shared artifacts and release manifests remain readable, while publishing requires access to all environments. OIDC SSO providers are provisioned by a server operator; account linking is explicit and membership remains invitation-only. Passkeys provide device-verified sign-in for existing accounts, with enrollment and removal in Account security. Enrolled MFA and workspace authentication policies still apply. Owners can define custom delivery roles. SAML, SCIM and email delivery remain unimplemented. See [account setup and recovery](identity.md).
 
-Deployment outbox entries are delivered by the Temporal worker. Artifact ingestion retains its separate PostgreSQL-backed worker. Redis, runbooks, tenants, scheduled releases, and high-availability packaging remain unimplemented. See [Docker agent setup and limits](deployment-agents.md), including the 25 MiB archive cap and same-host certificate recovery and the absence of force-unlock or host reassignment. Production defaults to requiring verified staging of the exact release before admission. Approvers can edit prerequisites; accepted requests retain their admission snapshot. See [promotion and rollback](promotion-and-rollback.md) and [deployment secrets](deployment-secrets.md) for policy, key management and recovery boundaries.
+Deployment outbox entries are delivered by the Temporal worker. Artifact ingestion retains its separate PostgreSQL-backed worker. Redis, runbooks, tenants, scheduled releases, and high-availability packaging remain unimplemented. See [Docker agent setup and limits](deployment-agents.md), including the 25 MiB archive cap and same-host certificate recovery and the absence of force-unlock or host reassignment. Production defaults to requiring verified staging of the exact release before admission. Approvers can edit prerequisites; accepted requests retain their admission snapshot. See [promotion and rollback](promotion-and-rollback.md), [deployment secrets](deployment-secrets.md) and [lifecycle hooks](lifecycle-hooks.md) for policy, key management and recovery boundaries.
 
 The dashboard shows the newest request per environment, including its pending/cancelled state. It does not claim that this is the currently deployed version. The overview and legacy snapshot endpoints retain a 200-record window. Resource screens and selectors use cursor pagination over the full collection. The overview resolves the newest request for each displayed project and environment independently of that window. Search and exact counts run in PostgreSQL; there is no search index or distributed general-purpose rate limiter. Hosted login attempts have a shared per-account budget in PostgreSQL.
 

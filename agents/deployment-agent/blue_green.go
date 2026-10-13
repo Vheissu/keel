@@ -61,12 +61,16 @@ func (a *Agent) readRoute(targetID string) (blueGreenState, error) {
 // Persist before routing or deleting containers. Atomic rename lets requests see
 // either complete route, while fsync makes a confirmed recovery survive a restart.
 func (a *Agent) writeRoute(targetID string, state blueGreenState) error {
-	data, err := json.Marshal(state)
+	return writeStateFile(a.routePath(targetID), state)
+}
+
+func writeStateFile(path string, value any) error {
+	data, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
 
-	file, err := os.CreateTemp(a.config.StateDirectory, ".route-*")
+	file, err := os.CreateTemp(filepath.Dir(path), ".state-*")
 	if err != nil {
 		return err
 	}
@@ -85,11 +89,11 @@ func (a *Agent) writeRoute(targetID string, state blueGreenState) error {
 		return err
 	}
 
-	if err = os.Rename(file.Name(), a.routePath(targetID)); err != nil {
+	if err = os.Rename(file.Name(), path); err != nil {
 		return err
 	}
 
-	directory, err := os.Open(a.config.StateDirectory)
+	directory, err := os.Open(filepath.Dir(path))
 	if err != nil {
 		return err
 	}
@@ -145,6 +149,11 @@ func (a *Agent) deployBlueGreen(ctx context.Context, j Job, t Target, secretInpu
 	if action != "continue" {
 		return "CANCELLED"
 	}
+
+	if a.markApplicationStarted(j) != nil {
+		return "HOOK_STATE_FAILED"
+	}
+
 	a.progress(ctx, j, "starting_candidate")
 	if a.cleanup(ctx, j) != nil {
 		return "DOCKER_FAILED"

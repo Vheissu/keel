@@ -407,7 +407,7 @@ export class RollbackService {
           : checked.evidence,
       strategy: checked.config.strategy,
       health_path: checked.config.verify.http.path,
-      warning: `This redeploys application code using ${checked.config.strategy}.${checked.config.strategy === 'recreate' ? ' It causes downtime.' : ''} It does not restore databases, undo migrations or reverse external side effects. Check compatibility before proceeding.`,
+      warning: `This redeploys application code using ${checked.config.strategy}.${checked.config.strategy === 'recreate' ? ' It causes downtime.' : ''}${checked.config.hooks ? ' Lifecycle hooks run again; check that they are safe to repeat.' : ''} It does not restore databases, undo migrations or reverse external side effects. Check compatibility before proceeding.`,
     };
   }
 

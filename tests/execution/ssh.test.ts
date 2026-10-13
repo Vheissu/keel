@@ -210,6 +210,14 @@ it('deploys over verified SSH, rejects an untrusted host and reconciles interrup
     strategy: 'recreate',
     verify: { http: { path: '/' } },
     secrets: { APP_PASSWORD: { secret: 'PASSWORD' } },
+    hooks: {
+      preDeploy: {
+        command: ['/bin/sh', '-c', 'test -n "$APP_PASSWORD" && echo "$APP_PASSWORD"'],
+        timeoutSeconds: 10,
+        secrets: ['APP_PASSWORD'],
+      },
+      postDeploy: { command: ['/bin/sh', '-c', 'test -z "$APP_PASSWORD"'], timeoutSeconds: 10 },
+    },
   });
 
   const release = await mutate<{ id: string }>((tx) =>

@@ -25,6 +25,8 @@ Open **Deployments → Plan rollback** on the latest finished deployment that ac
 
 Choose a release and select **Review rollback plan**. Keel verifies the retained bytes, checks the current promotion policy, and requires the saved process to select the same single Docker target with an active agent. The review shows the release, digest, target, HTTP path, approval requirement and expiry. Creating a plan records an audit event but does not reserve the target or start deployment.
 
+The retained release’s [lifecycle hooks](lifecycle-hooks.md) run again during rollback. Check that their commands are safe to repeat against current data and services. A successful hook or restored blue/green route cannot undo external changes.
+
 Review application compatibility before selecting **Request rollback**. Docker recreate causes downtime. Redeploying application code does not restore databases, undo migrations, remove data written by a newer version, or reverse external effects. Keel cannot determine that compatibility for you; the request records your acknowledgement of this boundary.
 
 A plan can be requested once, within 15 minutes. At request time Keel rechecks retained bytes, target history, environment locks, promotion policy and the policy revision. New target work or changed policy requires a new review. The request follows the ordinary approval flow, with immutable links to its plan and prerequisite evidence. Expiry limits when a request can be created; it does not expire a request already awaiting approval.

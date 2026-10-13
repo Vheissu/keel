@@ -8,11 +8,38 @@ export const maxSecretReferences = 32;
 
 export const maxSecretValueBytes = 8192;
 
+const lifecycleHook = z
+  .object({
+    command: z
+      .array(
+        z
+          .string()
+          .min(1)
+          .max(256)
+          .regex(/^[^\x00-\x1f\x7f]*$/),
+      )
+      .min(1)
+      .max(32),
+    timeoutSeconds: z.number().int().min(1).max(120),
+    secrets: z
+      .array(secretName)
+      .max(maxSecretReferences)
+      .refine((names) => new Set(names).size === names.length)
+      .optional(),
+    network: z.enum(['none', 'target']).optional(),
+  })
+  .strict();
+
 const environment = z
   .object({
     strategy: z.enum(['recreate', 'rolling', 'blue-green']),
     targetSelector: z.object({ labels: z.record(z.string().min(1), z.string().min(1)) }).strict(),
     requiresApproval: z.boolean().optional(),
+    hooks: z
+      .object({ preDeploy: lifecycleHook.optional(), postDeploy: lifecycleHook.optional() })
+      .strict()
+      .refine((hooks) => !!hooks.preDeploy || !!hooks.postDeploy, 'Declare at least one hook.')
+      .optional(),
     secrets: z
       .record(secretName, z.object({ secret: secretName }).strict())
       .refine(
@@ -38,7 +65,20 @@ const environment = z
       .strict()
       .optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((config, context) => {
+    for (const [phase, hook] of Object.entries(config.hooks ?? {})) {
+      for (const name of hook.secrets ?? []) {
+        if (!Object.hasOwn(config.secrets ?? {}, name)) {
+          context.addIssue({
+            code: 'custom',
+            path: ['hooks', phase, 'secrets'],
+            message: `Hook secret ${name} must reference an environment secret variable.`,
+          });
+        }
+      }
+    }
+  });
 
 export const processSchema = z
   .object({
