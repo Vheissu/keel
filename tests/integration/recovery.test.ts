@@ -90,7 +90,7 @@ it('verifies all retained artifacts and encrypted versions and fails for corrupt
     }),
   );
 
-  expect(await verify(db)).toMatchObject({ migrations: 10, artifacts: 1, secret_versions: 1 });
+  expect(await verify(db)).toMatchObject({ migrations: 11, artifacts: 1, secret_versions: 1 });
   vi.stubEnv('KEEL_DEPLOYMENT_SECRET_KEY', randomBytes(32).toString('base64'));
   await expect(verify(db)).rejects.toThrow('decrypt');
   await writeFile(join(root, f.org, digest), 'tampered');
@@ -189,4 +189,78 @@ it('refuses a clean stop while a deployment is queued or running', async () => {
   await expect(quiescent(db)).rejects.toThrow('active work');
   await db.query("UPDATE deployments SET status='running' WHERE id=$1", [deployment.id]);
   await expect(quiescent(db)).rejects.toThrow('active work');
+});
+
+it('verifies retained MFA secrets and quarantines recovery codes, challenges and pending setup', async () => {
+  const userId = randomUUID();
+  const sessionId = randomUUID();
+  const vault = new CredentialVault(process.env.KEEL_CREDENTIAL_KEY!, 'mfa');
+  const encrypted = vault.encrypt(userId, 'totp', randomBytes(20).toString('base64'));
+
+  await db.query(
+    `
+      INSERT INTO
+        users (
+          id,
+          email,
+          name,
+          password_hash,
+          mfa_secret,
+          mfa_enabled_at
+        )
+      VALUES
+        ($1, 'mfa@example.com', 'MFA', 'unused', $2, now())
+    `,
+    [userId, encrypted],
+  );
+
+  await db.query(
+    `
+      INSERT INTO
+        browser_sessions (id, user_id, token_hash, expires_at)
+      VALUES
+        ($1, $2, 'session', now() + interval '1 hour')
+    `,
+    [sessionId, userId],
+  );
+
+  await db.query(
+    `
+      INSERT INTO
+        mfa_enrollments (user_id, session_id, secret, expires_at)
+      VALUES
+        ($1, $2, $3, now() + interval '10 minutes')
+    `,
+    [userId, sessionId, encrypted],
+  );
+
+  await db.query(
+    `
+      INSERT INTO
+        mfa_challenges (token_hash, user_id, expires_at)
+      VALUES
+        ('challenge', $1, now() + interval '5 minutes')
+    `,
+    [userId],
+  );
+
+  await db.query("INSERT INTO mfa_recovery_codes(user_id,code_hash) VALUES($1,'code')", [userId]);
+  expect(await verify(db)).toMatchObject({ mfa_accounts: 1 });
+  await quarantine(db);
+
+  expect(
+    (await db.query('SELECT mfa_secret FROM users WHERE id=$1', [userId])).rows[0].mfa_secret,
+  ).toEqual(encrypted);
+
+  for (const table of ['mfa_enrollments', 'mfa_challenges', 'mfa_recovery_codes']) {
+    expect((await db.query(`SELECT 1 FROM ${table}`)).rowCount).toBe(0);
+  }
+
+  expect(
+    (await db.query('SELECT revoked_at FROM browser_sessions WHERE id=$1', [sessionId])).rows[0]
+      .revoked_at,
+  ).not.toBeNull();
+
+  vi.stubEnv('KEEL_CREDENTIAL_KEY', randomBytes(32).toString('base64'));
+  await expect(verify(db)).rejects.toThrow('decrypt');
 });

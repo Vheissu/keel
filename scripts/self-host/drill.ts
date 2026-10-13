@@ -1,3 +1,4 @@
+import { authenticatorCode } from '../../tests/authenticator.js';
 import assert from 'node:assert/strict';
 import { randomUUID, randomBytes, X509Certificate } from 'node:crypto';
 import { mkdir, readFile, writeFile, rm, cp } from 'node:fs/promises';
@@ -353,7 +354,7 @@ try {
   );
 
   assert.equal(accepted.status, 200);
-  const cookie = accepted.headers['set-cookie']![0].split(';')[0];
+  let cookie = accepted.headers['set-cookie']![0].split(';')[0];
 
   assert.ok(accepted.headers['set-cookie']![0].includes('Secure'));
   const session = await http('/api/auth/session', undefined, '', false, { cookie });
@@ -364,6 +365,37 @@ try {
     'x-csrf-token': session.json().csrf,
     'x-workspace-id': snapshot.organisation.id,
   };
+
+  const enrollment = await http(
+    '/api/auth/mfa/enroll',
+    { current_password: ownerPassword },
+    '',
+    false,
+    sessionHeaders,
+  );
+
+  assert.equal(enrollment.status, 200);
+  const setupKey = enrollment.json().secret;
+
+  const confirmation = await http(
+    '/api/auth/mfa/confirm',
+    { code: authenticatorCode(setupKey, -1) },
+    '',
+    false,
+    sessionHeaders,
+  );
+
+  assert.equal(confirmation.status, 200);
+  cookie = confirmation.headers['set-cookie']![0].split(';')[0];
+  sessionHeaders.cookie = cookie;
+  sessionHeaders['x-csrf-token'] = confirmation.json().csrf;
+  const oldRecoveryCode = confirmation.json().recovery_codes[0];
+
+  const mfaVerification = JSON.parse(
+    await compose(original, installation, ['run', '--rm', '--no-deps', 'operations', 'verify']),
+  );
+
+  assert.equal(mfaVerification.mfa_accounts, 1);
 
   const managed = await http(
     '/api/v1/identity/tokens',
@@ -467,7 +499,29 @@ try {
   );
 
   assert.equal(login.status, 200);
-  const nextCookie = login.headers['set-cookie']![0].split(';')[0];
+  assert.equal(login.json().mfa_required, true);
+  assert.equal(login.headers['set-cookie'], undefined);
+
+  const oldCode = await http(
+    '/api/auth/mfa/challenge',
+    { challenge: login.json().challenge, code: oldRecoveryCode },
+    '',
+    false,
+    { origin: installation.publicUrl },
+  );
+
+  assert.equal(oldCode.status, 403);
+
+  const verifiedLogin = await http(
+    '/api/auth/mfa/challenge',
+    { challenge: login.json().challenge, code: authenticatorCode(setupKey) },
+    '',
+    false,
+    { origin: installation.publicUrl },
+  );
+
+  assert.equal(verifiedLogin.status, 200);
+  const nextCookie = verifiedLogin.headers['set-cookie']![0].split(';')[0];
   const nextSession = await http('/api/auth/session', undefined, '', false, { cookie: nextCookie });
 
   const replacement = await http(
@@ -536,7 +590,7 @@ try {
     JSON.parse(
       await compose(recovered, restored, ['run', '--rm', '--no-deps', 'operations', 'verify']),
     ),
-    verified,
+    mfaVerification,
   );
 
   await assert.rejects(
@@ -545,7 +599,7 @@ try {
   );
 
   console.log(
-    'PASS: TLS, least-privilege runtime, stop barrier, durable restart, encrypted backup, corruption rejection, fresh-volume restore, retained bytes and keys, agent and identity quarantine.',
+    'PASS: TLS, least-privilege runtime, stop barrier, durable restart, encrypted backup, corruption rejection, fresh-volume restore, retained bytes and keys, agent and identity quarantine, retained MFA and recovery-code invalidation.',
   );
 } finally {
   for (const [directory, project] of [

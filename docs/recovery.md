@@ -50,3 +50,5 @@ Verify the artifact download, release history, approval queue, secrets metadata 
 `npm run test:self-host` builds and exercises a disposable packaged installation, including encrypted backup and fresh-volume recovery. It requires Docker and available ports, and removes only its own test projects and volumes. The ordinary test suite also checks archive authentication failures, key handling, retained-byte corruption and agent quarantine.
 
 Run a drill with your own off-host backup and image archive before relying on this procedure. Record the backup age, restore duration, verification counts and any manual agent reconciliation; those measurements determine your actual recovery point and recovery time.
+
+Hosted accounts retain their encrypted MFA authenticator secret after restore. Pending MFA challenges, setup and recovery codes are invalidated to prevent reuse of codes consumed after the backup. Sign in with the authenticator and replace recovery codes, or follow [operator MFA recovery](identity.md#mfa-and-active-sessions). The restore verifier checks that retained MFA secrets decrypt with the restored credential key.

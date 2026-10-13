@@ -134,6 +134,19 @@ export async function lockPrincipal(tx: Transaction, p: Principal) {
             AND user_id = $2
             AND revoked_at IS NULL
             AND expires_at > now()
+            AND last_seen_at > now() - interval '1 hour'
+            AND (
+              mfa_verified
+              OR NOT EXISTS (
+                SELECT
+                  1
+                FROM
+                  users
+                WHERE
+                  id = $2
+                  AND mfa_secret IS NOT NULL
+              )
+            )
           FOR SHARE
         `,
         [p.session_id, p.user_id],

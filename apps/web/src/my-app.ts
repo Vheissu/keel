@@ -24,6 +24,7 @@ const pages = [
   'Notifications',
   'Audit log',
   'Workspace access',
+  'Account security',
 ] as const;
 
 type Named = {
@@ -67,6 +68,8 @@ export class MyApp {
   selectedWorkspace = '';
   email = '';
   password = '';
+  mfaChallenge = '';
+  mfaCode = '';
   accountName = '';
   inviteToken = '';
   resetToken = '';
@@ -202,6 +205,7 @@ export class MyApp {
       Notifications: 'Delivery history and webhook destinations for deployment events.',
       Integrations: 'Connect existing CI workflows and retain their build artifacts.',
       'Audit log': 'A record of changes and the people behind them.',
+      'Account security': 'Authenticator protection and active browser sessions.',
       'Workspace access': 'Workspace members, invitations and API tokens.',
     }[this.page];
   }
@@ -344,8 +348,20 @@ export class MyApp {
     this.error = '';
 
     try {
-      await this.api.auth('/login', { email: this.email, password: this.password });
+      const result = await this.api.auth<{ mfa_required?: boolean; challenge?: string }>('/login', {
+        email: this.email,
+        password: this.password,
+      });
+
       this.password = '';
+
+      if (result.mfa_required && result.challenge) {
+        this.mfaChallenge = result.challenge;
+        this.mfaCode = '';
+
+        return;
+      }
+
       await this.restoreAccount();
 
       if (!this.inviteToken) {
@@ -354,6 +370,32 @@ export class MyApp {
     } catch (error) {
       this.handleError(error);
     } finally {
+      this.busy = false;
+    }
+  }
+
+  cancelMfa() {
+    this.mfaChallenge = '';
+    this.mfaCode = '';
+    this.error = '';
+  }
+
+  async verifyMfa() {
+    this.busy = true;
+    this.error = '';
+
+    try {
+      await this.api.auth('/mfa/challenge', { challenge: this.mfaChallenge, code: this.mfaCode });
+      this.mfaChallenge = '';
+      await this.restoreAccount();
+
+      if (!this.inviteToken) {
+        await this.switchWorkspace();
+      }
+    } catch (error) {
+      this.handleError(error);
+    } finally {
+      this.mfaCode = '';
       this.busy = false;
     }
   }
@@ -435,6 +477,8 @@ export class MyApp {
   }
 
   disconnect() {
+    this.mfaChallenge = '';
+    this.mfaCode = '';
     this.refreshRevision++;
     this.loading = false;
     this.api.token = '';

@@ -42,6 +42,8 @@ export class Api {
   }
 
   async auth<T>(path: string, body?: unknown): Promise<T> {
+    const identity = this.identity();
+
     const response = await fetch(`/api/auth${path}`, {
       method: body === undefined ? 'GET' : 'POST',
       headers: {
@@ -54,7 +56,21 @@ export class Api {
     const result = await response.json();
 
     if (!response.ok) {
-      throw new ApiError(result.error?.message || 'Account request failed.', response.status);
+      const error = new ApiError(
+        result.error?.message || 'Account request failed.',
+        response.status,
+      );
+
+      if (
+        response.status === 401 &&
+        path !== '/login' &&
+        this.csrf &&
+        identity === this.identity()
+      ) {
+        this.onUnauthorized?.(error);
+      }
+
+      throw error;
     }
 
     return result;

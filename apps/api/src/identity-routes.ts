@@ -1,3 +1,4 @@
+import { clearChallenges } from './account-security.js';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { transaction, type Transaction } from '../../../packages/database/src/index.js';
@@ -22,6 +23,8 @@ export async function registerAuthRoutes(app: FastifyInstance, identity?: Identi
 
   const control = identity.control;
 
+  await identity.security.register(app);
+
   await app.register(
     async (auth) => {
       auth.addHook('onRequest', async (req, reply) => {
@@ -37,9 +40,13 @@ export async function registerAuthRoutes(app: FastifyInstance, identity?: Identi
           .strict()
           .parse(req.body);
 
-        const token = await identity.login(input.email, input.password);
+        const result = await identity.login(input.email, input.password, req);
 
-        reply.header('Set-Cookie', identity.cookie(token));
+        if ('challenge' in result) {
+          return { mfa_required: true, challenge: result.challenge };
+        }
+
+        reply.header('Set-Cookie', identity.cookie(result.token));
 
         return { signed_in: true };
       });
@@ -48,9 +55,13 @@ export async function registerAuthRoutes(app: FastifyInstance, identity?: Identi
         empty.parse(req.body);
         const session = await identity.session(req);
 
-        await control.db.query('UPDATE browser_sessions SET revoked_at=now() WHERE id=$1', [
-          session!.session_id,
-        ]);
+        await transaction(control.db, async (tx) => {
+          await tx.query('SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE', [session!.user_id]);
+
+          await tx.query('UPDATE browser_sessions SET revoked_at=now() WHERE id=$1', [
+            session!.session_id,
+          ]);
+        });
 
         reply.header('Set-Cookie', identity.cookie('', true));
 
@@ -115,6 +126,7 @@ export async function registerAuthRoutes(app: FastifyInstance, identity?: Identi
                 id = $1
                 AND revoked_at IS NULL
                 AND expires_at > now()
+                AND last_seen_at > now() - interval '1 hour'
             `,
             [session.session_id],
           );
@@ -205,6 +217,7 @@ export async function registerAuthRoutes(app: FastifyInstance, identity?: Identi
 
 async function resetPassword(tx: Transaction, userId: string, hash: string) {
   await tx.query('UPDATE users SET password_hash=$2 WHERE id=$1', [userId, hash]);
+  await clearChallenges(tx, userId);
 
   await tx.query(
     'UPDATE browser_sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL',
@@ -375,18 +388,18 @@ export async function registerIdentityRoutes(api: FastifyInstance, identity?: Id
 
       const protectedInvitation = await tx.query(
         `
-        SELECT
-          1
-        FROM
-          workspace_invitations
-        WHERE
-          organisation_id = $1
-          AND email = $2
-          AND role IN ('owner', 'admin')
-          AND accepted_at IS NULL
-          AND revoked_at IS NULL
-          AND expires_at > now()
-      `,
+          SELECT
+            1
+          FROM
+            workspace_invitations
+          WHERE
+            organisation_id = $1
+            AND email = $2
+            AND role IN ('owner', 'admin')
+            AND accepted_at IS NULL
+            AND revoked_at IS NULL
+            AND expires_at > now()
+        `,
         [req.principal.organisation_id, input.email],
       );
 

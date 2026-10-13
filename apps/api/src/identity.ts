@@ -1,3 +1,4 @@
+import { AccountSecurity, accountAudit } from './account-security.js';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { FastifyRequest } from 'fastify';
 import { z } from 'zod';
@@ -58,6 +59,7 @@ export class Identity {
   readonly origin: string;
   readonly cookieName: string;
   readonly secure: boolean;
+  readonly security = new AccountSecurity(this);
 
   constructor(
     readonly control: ControlPlane,
@@ -69,6 +71,8 @@ export class Identity {
     this.secure = url.protocol === 'https:';
     this.cookieName = this.secure ? '__Host-keel_session' : 'keel_session';
   }
+
+  csrf = csrfFor;
 
   cookie(token: string, clear = false) {
     return `${this.cookieName}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${clear ? 0 : 43200}${this.secure ? '; Secure' : ''}`;
@@ -105,6 +109,7 @@ export class Identity {
               SELECT
                 s.id AS session_id,
                 s.user_id,
+                s.mfa_verified,
                 u.email,
                 u.name
               FROM
@@ -114,6 +119,11 @@ export class Identity {
                 s.token_hash = $1
                 AND s.revoked_at IS NULL
                 AND s.expires_at > now()
+                AND s.last_seen_at > now() - interval '1 hour'
+                AND (
+                  u.mfa_secret IS NULL
+                  OR s.mfa_verified
+                )
             `,
             [sha256(token)],
           )
@@ -136,8 +146,21 @@ export class Identity {
       }
     }
 
+    await this.control.db.query(
+      `
+        UPDATE browser_sessions
+        SET
+          last_seen_at = now()
+        WHERE
+          id = $1
+          AND last_seen_at < now() - interval '1 minute'
+      `,
+      [row.session_id],
+    );
+
     return { ...row, csrf: csrfFor(token) } as {
       session_id: string;
+      mfa_verified: boolean;
       user_id: string;
       email: string;
       name: string;
@@ -221,23 +244,70 @@ export class Identity {
     };
   }
 
-  async issueSession(tx: Transaction, userId: string) {
+  async issueSession(tx: Transaction, userId: string, req?: FastifyRequest, mfaVerified = false) {
     const token = newOpaque();
 
     await tx.query(
       `
         INSERT INTO
-          browser_sessions (id, user_id, token_hash, expires_at)
+          browser_sessions (
+            id,
+            user_id,
+            token_hash,
+            expires_at,
+            user_agent,
+            ip_address,
+            mfa_verified
+          )
         VALUES
-          ($1, $2, $3, now() + interval '12 hours')
+          (
+            $1,
+            $2,
+            $3,
+            now() + interval '12 hours',
+            $4,
+            $5,
+            $6
+          )
       `,
-      [randomUUID(), userId, sha256(token)],
+      [
+        randomUUID(),
+        userId,
+        sha256(token),
+        (req?.headers['user-agent'] || '').slice(0, 512),
+        (req?.ip || '').slice(0, 255),
+        mfaVerified,
+      ],
+    );
+
+    await tx.query(
+      `
+        UPDATE browser_sessions
+        SET
+          revoked_at = now()
+        WHERE
+          id IN (
+            SELECT
+              id
+            FROM
+              browser_sessions
+            WHERE
+              user_id = $1
+              AND revoked_at IS NULL
+            ORDER BY
+              created_at DESC,
+              id DESC
+            OFFSET
+              25
+          )
+      `,
+      [userId],
     );
 
     return token;
   }
 
-  async login(email: string, password: string) {
+  async attemptBudget(subject: string) {
     // A database-backed account budget applies across API instances, including unknown emails.
     await this.control.db.query(
       "DELETE FROM login_attempts WHERE window_start < now()-interval '10 minutes'",
@@ -246,24 +316,24 @@ export class Identity {
     const budget = (
       await this.control.db.query(
         `
-      INSERT INTO
-        login_attempts (subject_hash)
-      VALUES
-        ($1)
-      ON CONFLICT (subject_hash) DO UPDATE
-      SET
-        attempts = CASE
-          WHEN login_attempts.window_start < now() - interval '1 minute' THEN 1
-          ELSE login_attempts.attempts + 1
-        END,
-        window_start = CASE
-          WHEN login_attempts.window_start < now() - interval '1 minute' THEN now()
-          ELSE login_attempts.window_start
-        END
-      RETURNING
-        attempts
-    `,
-        [sha256(email)],
+          INSERT INTO
+            login_attempts (subject_hash)
+          VALUES
+            ($1)
+          ON CONFLICT (subject_hash) DO UPDATE
+          SET
+            attempts = CASE
+              WHEN login_attempts.window_start < now() - interval '1 minute' THEN 1
+              ELSE login_attempts.attempts + 1
+            END,
+            window_start = CASE
+              WHEN login_attempts.window_start < now() - interval '1 minute' THEN now()
+              ELSE login_attempts.window_start
+            END
+          RETURNING
+            attempts
+        `,
+        [sha256(subject)],
       )
     ).rows[0];
 
@@ -274,6 +344,10 @@ export class Identity {
         429,
       );
     }
+  }
+
+  async login(email: string, password: string, req?: FastifyRequest) {
+    await this.attemptBudget(email);
 
     const user = (await this.control.db.query('SELECT * FROM users WHERE email=$1', [email]))
       .rows[0];
@@ -284,14 +358,38 @@ export class Identity {
 
     return transaction(this.control.db, async (tx) => {
       const locked = (
-        await tx.query('SELECT password_hash FROM users WHERE id=$1 FOR NO KEY UPDATE', [user.id])
+        await tx.query('SELECT password_hash,mfa_secret FROM users WHERE id=$1 FOR NO KEY UPDATE', [
+          user.id,
+        ])
       ).rows[0];
 
       if (locked.password_hash !== user.password_hash) {
         throw unauthenticated();
       }
 
-      return this.issueSession(tx, user.id);
+      if (locked.mfa_secret) {
+        const challenge = newOpaque();
+
+        await tx.query('DELETE FROM mfa_challenges WHERE user_id=$1 OR expires_at<=now()', [
+          user.id,
+        ]);
+
+        await tx.query(
+          `
+            INSERT INTO
+              mfa_challenges (token_hash, user_id, expires_at)
+            VALUES
+              ($1, $2, now() + interval '5 minutes')
+          `,
+          [sha256(challenge), user.id],
+        );
+
+        return { challenge };
+      }
+
+      await accountAudit(tx, user.id, 'account.signed_in');
+
+      return { token: await this.issueSession(tx, user.id, req) };
     });
   }
 
@@ -425,7 +523,7 @@ export class Identity {
         ]);
       } else {
         // Password changes and logout revoke sessions; check again in this transaction.
-        await tx.query('SELECT id FROM users WHERE id=$1 FOR SHARE', [userId]);
+        await tx.query('SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE', [userId]);
 
         const valid = await tx.query(
           `
@@ -438,6 +536,19 @@ export class Identity {
               AND user_id = $2
               AND revoked_at IS NULL
               AND expires_at > now()
+              AND last_seen_at > now() - interval '1 hour'
+              AND (
+                mfa_verified
+                OR NOT EXISTS (
+                  SELECT
+                    1
+                  FROM
+                    users
+                  WHERE
+                    id = $2
+                    AND mfa_secret IS NOT NULL
+                )
+              )
             FOR SHARE
           `,
           [session!.session_id, userId],
@@ -496,7 +607,7 @@ export class Identity {
         { role: invite.role },
       );
 
-      return this.issueSession(tx, userId!);
+      return this.issueSession(tx, userId!, req, session?.mfa_verified ?? false);
     });
   }
 
@@ -691,15 +802,15 @@ export async function createInvitation(
 ) {
   await tx.query(
     `
-        UPDATE workspace_invitations
-        SET
-          revoked_at = now()
-        WHERE
-          organisation_id = $1
-          AND email = $2
-          AND accepted_at IS NULL
-          AND revoked_at IS NULL
-      `,
+      UPDATE workspace_invitations
+      SET
+        revoked_at = now()
+      WHERE
+        organisation_id = $1
+        AND email = $2
+        AND accepted_at IS NULL
+        AND revoked_at IS NULL
+    `,
     [organisationId, email],
   );
 
@@ -708,23 +819,23 @@ export async function createInvitation(
   const row = (
     await tx.query(
       `
-          INSERT INTO
-            workspace_invitations (
-              id,
-              organisation_id,
-              email,
-              role,
-              token_hash,
-              expires_at
-            )
-          VALUES
-            ($1, $2, $3, $4, $5, now() + interval '48 hours')
-          RETURNING
+        INSERT INTO
+          workspace_invitations (
             id,
+            organisation_id,
             email,
             role,
+            token_hash,
             expires_at
-        `,
+          )
+        VALUES
+          ($1, $2, $3, $4, $5, now() + interval '48 hours')
+        RETURNING
+          id,
+          email,
+          role,
+          expires_at
+      `,
       [randomUUID(), organisationId, email, role, sha256(token)],
     )
   ).rows[0];

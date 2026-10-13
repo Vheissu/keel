@@ -1,0 +1,173 @@
+<div class="alert error" role="alert" if.bind="error">${error}</div>
+<div class="alert success" role="status" if.bind="notice">${notice}</div>
+<template if.bind="data">
+  <section>
+    <h2>Authenticator app</h2>
+    <p>
+      ${data.mfa_enabled ? 'MFA is enabled for your account in every workspace.' : 'Add a second
+      sign-in step using an authenticator app.'}
+    </p>
+    <p class="help">
+      Enabling or disabling MFA revokes your API tokens and other browser sessions. Disabling it
+      also signs out this session.
+    </p>
+    <section if.bind="recoveryCodes.length" class="target-form">
+      <h3>Save your recovery codes</h3>
+      <p>
+        Each code works once in place of an authenticator code. Save them somewhere private. They
+        will not be shown again.
+      </p>
+      <label for="recovery-codes">Recovery codes</label>
+      <textarea
+        id="recovery-codes"
+        readonly
+        rows="10"
+        value.to-view="recoveryCodes.join('\n')"
+        autocomplete="off"
+        spellcheck="false"
+      ></textarea>
+      <button class="button secondary" click.trigger="recoveryCodes = []">I saved my codes</button>
+    </section>
+    <form
+      if.bind="!data.mfa_enabled && !secret"
+      class="target-form"
+      submit.trigger:prevent="enroll()"
+    >
+      <label for="setup-password">Current password</label>
+      <input
+        id="setup-password"
+        type="password"
+        required
+        maxlength="128"
+        autocomplete="current-password"
+        value.bind="password"
+      />
+      <button class="button primary" type="submit" disabled.bind="busy">
+        Set up authenticator
+      </button>
+    </form>
+    <form if.bind="secret" class="target-form" submit.trigger:prevent="confirm()">
+      <p>
+        In your authenticator app, add a time-based account named Keel and enter this setup key.
+        Then enter its six-digit code below. Setup expires in 10 minutes.
+      </p>
+      <label for="authenticator-key">Authenticator setup key</label>
+      <input
+        id="authenticator-key"
+        readonly
+        value.bind="secret"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <label for="setup-code">Authenticator code</label>
+      <input
+        id="setup-code"
+        required
+        pattern="[0-9]{6}"
+        maxlength="6"
+        inputmode="numeric"
+        autocomplete="one-time-code"
+        value.bind="code"
+      />
+      <button class="button primary" type="submit" disabled.bind="busy">Enable MFA</button>
+      <button
+        class="button secondary"
+        type="button"
+        disabled.bind="busy"
+        click.trigger="cancelSetup()"
+      >
+        Cancel setup
+      </button>
+    </form>
+    <form
+      if.bind="data.mfa_enabled"
+      class="target-form"
+      submit.trigger:prevent="changeFactor('recovery-codes')"
+    >
+      <p>
+        ${data.recovery_codes_remaining} recovery codes remaining. Enter your password and a fresh
+        authenticator or recovery code to change MFA.
+      </p>
+      <label for="security-password">Current password</label>
+      <input
+        id="security-password"
+        type="password"
+        required
+        maxlength="128"
+        autocomplete="current-password"
+        value.bind="password"
+      />
+      <label for="security-code">Authenticator or recovery code</label>
+      <input
+        id="security-code"
+        required
+        maxlength="64"
+        autocomplete="one-time-code"
+        value.bind="code"
+      />
+      <button class="button secondary" type="submit" disabled.bind="busy">
+        Replace recovery codes
+      </button>
+      <button
+        class="button danger"
+        type="button"
+        disabled.bind="busy || !password || !code"
+        click.trigger="changeFactor('disable')"
+      >
+        Disable MFA and sign out
+      </button>
+    </form>
+  </section>
+  <section>
+    <h2>Active sessions</h2>
+    <p>
+      Sessions expire after one hour without activity or 12 hours after sign-in. Up to 25 sessions
+      are retained. Browser details are reported by the device; network addresses may identify a
+      proxy.
+    </p>
+    <div class="action-row">
+      <button class="button secondary" disabled.bind="busy" click.trigger="run(() => load())">
+        Refresh sessions
+      </button>
+      <button
+        class="button danger"
+        disabled.bind="busy || data.sessions.length < 2"
+        click.trigger="revoke()"
+      >
+        Sign out other sessions
+      </button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Browser</th>
+            <th>Network address</th>
+            <th>Signed in</th>
+            <th>Last active</th>
+            <th>Expires</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr repeat.for="session of data.sessions; key: id">
+            <td class="session-browser">
+              <strong if.bind="session.current">This session</strong>
+              <span>${session.user_agent || 'Unknown browser'}</span>
+              <small>${session.mfa_verified ? 'MFA verified' : 'Password sign-in'}</small>
+            </td>
+            <td>${session.ip_address || 'Unknown'}</td>
+            <td>${formatDate(session.created_at)}</td>
+            <td>${formatDate(session.last_seen_at)}</td>
+            <td>${formatDate(session.expires_at)}</td>
+            <td>
+              <button class="button danger" disabled.bind="busy" click.trigger="revoke(session.id)">
+                ${session.current ? 'Sign out this session' : 'Sign out session'}
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</template>

@@ -1,3 +1,4 @@
+import { accountAudit, revokeAccountCredentials } from '../../api/src/account-security.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { transaction, type Database } from '../../../packages/database/src/index.js';
@@ -10,6 +11,37 @@ export async function identityAdmin(db: Database, args: string[], origin: string
   const [command, first, second] = args;
 
   identityOrigin(origin);
+
+  if (command === 'reset-mfa' && args.length === 2) {
+    const email = emailInput.parse(first);
+
+    await transaction(db, async (tx) => {
+      const user = (
+        await tx.query('SELECT id FROM users WHERE email=$1 FOR NO KEY UPDATE', [email])
+      ).rows[0];
+
+      if (!user) {
+        throw new Error('Account not found.');
+      }
+
+      await tx.query(
+        'UPDATE users SET mfa_secret=NULL,mfa_enabled_at=NULL,mfa_last_step=NULL WHERE id=$1',
+        [user.id],
+      );
+
+      await tx.query('DELETE FROM mfa_recovery_codes WHERE user_id=$1', [user.id]);
+
+      await tx.query(
+        'UPDATE password_resets SET used_at=now() WHERE user_id=$1 AND used_at IS NULL',
+        [user.id],
+      );
+
+      await revokeAccountCredentials(tx, user.id);
+      await accountAudit(tx, user.id, 'account.mfa_reset_by_operator');
+    });
+
+    return { reset: true };
+  }
 
   if (command === 'reset-password' && args.length === 2) {
     const email = emailInput.parse(first);
@@ -130,6 +162,6 @@ export async function identityAdmin(db: Database, args: string[], origin: string
   }
 
   throw new Error(
-    'Use invite-owner <workspace-id> <email>, create-workspace <name> <email>, or reset-password <email>.',
+    'Use invite-owner <workspace-id> <email>, create-workspace <name> <email>, reset-password <email>, or reset-mfa <email>.',
   );
 }

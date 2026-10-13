@@ -23,6 +23,7 @@ const help = `Keel self-hosted operations
   npm run self-host -- identity-owner --directory <directory> --workspace <uuid> --email <email>
   npm run self-host -- identity-create --directory <directory> --name <name> --email <email>
   npm run self-host -- identity-reset --directory <directory> --email <email>
+  npm run self-host -- identity-reset-mfa --directory <directory> --email <email>
 
 Init options: --public-url https://keel.example:8443 --https-port 8443 --agent-port 8444 --bind 127.0.0.1 --image-tag 0.1.0
 Stop requires completed deployments and reconciliation. Backups require all services stopped.
@@ -163,7 +164,9 @@ try {
           case 'identity-owner':
           case 'identity-create':
 
-          case 'identity-reset': {
+          case 'identity-reset':
+
+          case 'identity-reset-mfa': {
             if (!installation.publicUrl) {
               throw new Error('Set publicUrl in installation.json to enable hosted identity.');
             }
@@ -175,7 +178,10 @@ try {
             } else if (command === 'identity-create') {
               args = ['create-workspace', required('name'), required('email')];
             } else {
-              args = ['reset-password', required('email')];
+              args = [
+                command === 'identity-reset-mfa' ? 'reset-mfa' : 'reset-password',
+                required('email'),
+              ];
             }
 
             console.log(

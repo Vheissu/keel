@@ -66,7 +66,7 @@
       <div class="header-actions" if.bind="data">
         <button
           class="button secondary"
-          if.bind="page !== 'Integrations' && page !== 'Targets' && page !== 'Notifications'"
+          if.bind="page !== 'Integrations' && page !== 'Targets' && page !== 'Notifications' && page !== 'Account security'"
           click.trigger="refresh()"
           disabled.bind="loading || busy"
         >
@@ -112,7 +112,10 @@
       ${notice}
       <button aria-label="Dismiss notification" click.trigger="notice = ''">×</button>
     </div>
-    <section class="connect-panel" if.bind="hosted && !data">
+    <section
+      class="connect-panel"
+      if.bind="hosted && !data && !(account && page === 'Account security')"
+    >
       <h2>
         ${resetToken ? 'Reset your password' : invitation ? 'Join ' + invitation.workspace : 'Sign
         in to Keel'}
@@ -158,7 +161,7 @@
         </button>
       </form>
       <form
-        if.bind="!account && !resetToken && (!invitation || invitation.existing_account)"
+        if.bind="!account && !mfaChallenge && !resetToken && (!invitation || invitation.existing_account)"
         submit.trigger:prevent="signIn()"
       >
         <label for="email">Email</label>
@@ -177,6 +180,28 @@
           Accounts are invitation-only. For password recovery, contact your server operator.
         </p>
       </form>
+      <form if.bind="mfaChallenge" submit.trigger:prevent="verifyMfa()">
+        <h3>Verify your sign-in</h3>
+        <label for="mfa-code">Authenticator or recovery code</label>
+        <input
+          id="mfa-code"
+          required
+          maxlength="64"
+          autocomplete="one-time-code"
+          value.bind="mfaCode"
+        />
+        <button class="button primary" type="submit" disabled.bind="busy">
+          Verify and sign in
+        </button>
+        <button
+          class="button secondary"
+          type="button"
+          disabled.bind="busy"
+          click.trigger="cancelMfa()"
+        >
+          Back to sign in
+        </button>
+      </form>
       <button
         if.bind="account && invitation && invitation.existing_account"
         class="button primary"
@@ -190,7 +215,10 @@
       </p>
       <button if.bind="account" class="button secondary" click.trigger="signOut()">Sign out</button>
     </section>
-    <section class="connect-panel" if.bind="!data && !resetToken && !inviteToken">
+    <section
+      class="connect-panel"
+      if.bind="!data && !account && !mfaChallenge && !resetToken && !inviteToken"
+    >
       <boat-mark animated.bind="loading"></boat-mark>
       <h2>Connect to your workspace</h2>
       <p>Use your Keel API token to manage artifacts and releases.</p>
@@ -226,6 +254,14 @@
       <boat-mark animated.bind="true"></boat-mark>
       <span>Loading workspace…</span>
     </div>
+    <account-security
+      if.bind="account && !api.token && page === 'Account security'"
+      api.bind="api"
+      signed-out.bind="() => disconnect()"
+    ></account-security>
+    <p class="help" if.bind="data && api.token && page === 'Account security'">
+      Sign in with your account to manage MFA and sessions.
+    </p>
     <template if.bind="data">
       <workspace-access
         if.bind="page === 'Workspace access'"

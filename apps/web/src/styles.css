@@ -1349,3 +1349,15 @@ workspace-access fieldset input {
     margin: 1rem 0 0.6rem;
   }
 }
+
+.session-browser {
+  min-width: 180px;
+  max-width: 260px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.session-browser strong,
+.session-browser span {
+  display: block;
+}

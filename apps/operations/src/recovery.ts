@@ -101,6 +101,15 @@ export async function verify(db: Database) {
     notificationVault.decrypt(endpoint.organisation_id, endpoint.id, endpoint.credentials);
   }
 
+  const mfaVault = new CredentialVault(process.env.KEEL_CREDENTIAL_KEY!, 'mfa');
+
+  const accounts = (await db.query('SELECT id,mfa_secret FROM users WHERE mfa_secret IS NOT NULL'))
+    .rows;
+
+  for (const account of accounts) {
+    mfaVault.decrypt(account.id, 'totp', account.mfa_secret);
+  }
+
   const secrets = (
     await db.query(`
       SELECT
@@ -128,6 +137,7 @@ export async function verify(db: Database) {
 
   return {
     migrations: applied.length,
+    mfa_accounts: accounts.length,
     artifacts: artifacts.length,
     connections: connections.length,
     notification_endpoints: endpoints.length,
@@ -138,6 +148,10 @@ export async function verify(db: Database) {
 export async function quarantine(db: Database) {
   return transaction(db, async (tx) => {
     const organisations = (await tx.query('SELECT id FROM organisations')).rows;
+
+    await tx.query('DELETE FROM mfa_challenges');
+    await tx.query('DELETE FROM mfa_enrollments');
+    await tx.query('DELETE FROM mfa_recovery_codes');
 
     await tx.query('UPDATE browser_sessions SET revoked_at=now() WHERE revoked_at IS NULL');
 

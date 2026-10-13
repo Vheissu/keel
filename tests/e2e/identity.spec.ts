@@ -1,3 +1,4 @@
+import { authenticatorCode } from '../authenticator.js';
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { randomUUID } from 'node:crypto';
@@ -27,6 +28,7 @@ let email: string;
 let errors: string[] = [];
 
 test.beforeAll(async () => {
+  process.env.KEEL_CREDENTIAL_KEY = Buffer.alloc(32, 9).toString('base64');
   await admin.query(`CREATE SCHEMA ${schema}`);
   await migrate(db);
   root = await mkdtemp(join(tmpdir(), 'keel-identity-e2e-'));
@@ -198,4 +200,112 @@ test('switches workspaces, signs out, signs back in and changes its password', a
   await page.getByLabel('Password', { exact: true }).fill('a replacement memorable password');
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Members', exact: true })).toBeVisible();
+});
+
+test('enrolls MFA, signs in with an authenticator and recovery code, and revokes another browser', async ({
+  page,
+  browser,
+}) => {
+  await page.goto(link);
+  await page.getByLabel('Your name', { exact: true }).fill('Security owner');
+  await page.getByLabel('Password (at least 15 characters)', { exact: true }).fill(password);
+  await page.getByRole('button', { name: 'Create account and join' }).click();
+  await expect(page.getByRole('heading', { name: 'Your delivery pipeline' })).toBeVisible();
+
+  const extraWorkspace = await identityAdmin(
+    db,
+    ['create-workspace', 'Security workspace', email],
+    origin,
+  );
+
+  await page.goto(extraWorkspace.link);
+  await page.getByRole('button', { name: `Accept invitation as ${email}`, exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Your delivery pipeline' })).toBeVisible();
+
+  await page
+    .getByRole('combobox', { name: 'Workspace', exact: true })
+    .selectOption(extraWorkspace.workspace_id);
+
+  await expect(page.locator('.workspace')).toContainText('Security workspace');
+  await page.getByRole('link', { name: 'Account security', exact: true }).click();
+  await page.getByLabel('Current password', { exact: true }).fill(password);
+  await page.getByRole('button', { name: 'Set up authenticator', exact: true }).click();
+  const setupKey = await page.getByLabel('Authenticator setup key').inputValue();
+
+  await page
+    .getByLabel('Authenticator code', { exact: true })
+    .fill(authenticatorCode(setupKey, -1));
+
+  let releaseConfirmation!: () => void;
+  let confirmationStarted!: () => void;
+
+  const held = new Promise<void>((resolve) => {
+    releaseConfirmation = resolve;
+  });
+
+  const started = new Promise<void>((resolve) => {
+    confirmationStarted = resolve;
+  });
+
+  await page.route('**/api/auth/mfa/confirm', async (route) => {
+    confirmationStarted();
+    await held;
+    await route.continue();
+  });
+
+  await page.getByRole('button', { name: 'Enable MFA', exact: true }).click();
+  await started;
+  await page.getByRole('combobox', { name: 'Workspace', exact: true }).selectOption(workspace);
+  await expect(page.locator('.workspace')).toContainText('Test workspace');
+  releaseConfirmation();
+  const saved = await page.getByLabel('Recovery codes', { exact: true }).inputValue();
+  const codes = saved.split('\n');
+
+  expect(codes).toHaveLength(10);
+  await expect(page.getByRole('status')).toContainText('MFA enabled');
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.getByRole('button', { name: 'I saved my codes', exact: true }).click();
+  await page.screenshot({ path: 'output/playwright/account-security-desktop.png', fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: 'output/playwright/account-security-mobile.png', fullPage: true });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+
+  const context = await browser.newContext();
+  const second = await context.newPage();
+
+  second.on('pageerror', (error) => errors.push(error.message));
+  await second.goto('/');
+  await second.getByLabel('Email', { exact: true }).fill(email);
+  await second.getByLabel('Password', { exact: true }).fill(password);
+  await second.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(second.getByRole('heading', { name: 'Your delivery pipeline' })).toHaveCount(0);
+  await expect(second.getByRole('button', { name: 'Sign in', exact: true })).toHaveCount(0);
+
+  await second
+    .getByLabel('Authenticator or recovery code', { exact: true })
+    .fill(authenticatorCode(setupKey));
+
+  await second.getByRole('button', { name: 'Verify and sign in', exact: true }).click();
+  await expect(second.getByRole('heading', { name: 'Your delivery pipeline' })).toBeVisible();
+  await page.getByRole('button', { name: 'Refresh sessions', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Sign out session', exact: true })).toHaveCount(1);
+  await page.getByRole('button', { name: 'Sign out session', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Sign out session', exact: true })).toHaveCount(0);
+  await second.reload();
+  await expect(second.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
+  await second.getByLabel('Email', { exact: true }).fill(email);
+  await second.getByLabel('Password', { exact: true }).fill(password);
+  await second.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await second.getByLabel('Authenticator or recovery code', { exact: true }).fill(codes[0]);
+  await second.getByRole('button', { name: 'Verify and sign in', exact: true }).click();
+  await expect(second.getByRole('heading', { name: 'Your delivery pipeline' })).toBeVisible();
+  await page.getByRole('button', { name: 'Refresh sessions', exact: true }).click();
+  await expect(page.getByText('9 recovery codes remaining.', { exact: false })).toBeVisible();
+  await page.getByRole('button', { name: 'Sign out other sessions', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Sign out session', exact: true })).toHaveCount(0);
+  await page.getByLabel('Current password', { exact: true }).fill(password);
+  await page.getByLabel('Authenticator or recovery code', { exact: true }).fill(codes[1]);
+  await page.getByRole('button', { name: 'Disable MFA and sign out', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
+  await context.close();
 });
