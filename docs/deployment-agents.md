@@ -1,6 +1,6 @@
 # Private Docker and SSH deployment agents
 
-Keel can deploy a retained `docker image save` archive through a private Go agent, either on its local Docker daemon or on a Linux Docker host reached over SSH. This increment supports one Docker target per deployment, recreate, and an HTTP 200 health check. The release pins the image configuration ID as well as the archive SHA-256. No registry is needed after publishing.
+Keel can deploy a retained `docker image save` archive through a private Go agent, either on its local Docker daemon or on a Linux Docker host reached over SSH. Execution supports one Docker target per deployment, recreate on local or SSH targets, and blue/green on local targets. Both strategies require an HTTP 200 health check. The release pins the image configuration ID as well as the archive SHA-256. No registry is needed after publishing.
 
 The agent opens outbound HTTPS connections to a separate mutual-TLS gateway. It does not listen for inbound control connections. Application ports are published on the Docker host's loopback interface. Run the gateway where the private host can reach it, with a certificate for that hostname; the local instructions below use localhost.
 
@@ -140,3 +140,23 @@ The execution suite uses real PostgreSQL, Temporal, mutual TLS, the compiled Go 
 See the [Temporal TypeScript guide](https://docs.temporal.io/develop/typescript) and [Docker resource controls](https://docs.docker.com/engine/containers/resource_constraints/) for the underlying worker and runtime APIs.
 
 The execution suite also starts a disposable Linux SSH server with its own Docker daemon. It checks trusted-host deployment, rejection of an untrusted host, remote secret delivery, crash reconciliation, cancellation cleanup and a successful retry. The fixture requires permission to run a privileged Docker container; this is test infrastructure only.
+
+## Blue/green on a local Docker target
+
+Register a new target with **Local Docker · blue/green**, or API capability `docker-blue-green-v1`. Copy [agent-blue-green.json](../examples/agent-blue-green.json) and replace the paths and target UUID. The three host ports must be distinct and unprivileged: `host_port` is the agent's loopback HTTP proxy, while `blue_port` and `green_port` are Docker's loopback backend ports. Keep this configuration, the target ID and the persistent state directory together for the life of the target. Run the agent as a supervised service. Your ingress can terminate TLS and forward requests to `host_port`.
+
+Set the release environment's `strategy` to `blue-green`; [blue-green-process.yaml](../examples/blue-green-process.yaml) shows both staging and production. The pinned `dockerImageId`, optional `dockerArchivePath`, secret references, selector and HTTP check work as they do for recreate. The agent starts a candidate in the inactive slot, verifies its HTTP response and container identity, confirms the lease, then durably switches the proxy route. A final HTTP check goes through the proxy before success is reported. The former active container stays running until the next deployment needs that slot.
+
+| Registered target capability | Recreate | Blue/green |
+| ---------------------------- | -------- | ---------- |
+| `docker-recreate-v1`         | Yes      | No         |
+| `ssh-docker-recreate-v1`     | Yes      | No         |
+| `docker-blue-green-v1`       | No       | Yes        |
+
+Incompatible combinations fail with `INCOMPATIBLE_TARGET_STRATEGY` before assignment. Rolling remains a declaration only and fails with `UNSUPPORTED_PROCESS`. An agent must advertise `docker-blue-green-v1` to claim either a deployment or recovery job. Upgrading the control plane alone does not enable this strategy on older agents.
+
+Before switching traffic, failure or cancellation removes the candidate and leaves the active route in place. After a switch, recovery durably restores the previous route before deleting the interrupted attempt's container. If this was the first deployment, there is no previous route and the proxy returns HTTP 503. Cleanup reports `previous_route_restored` or `no_previous_route` separately from the deployment's failure code. The Targets screen shows that outcome. Restoring a route does not assert that the old application is healthy now, so the control plane leaves the target's release state **Unknown** until a new deployment succeeds.
+
+A crash or an expired lease requires a cleanup-only assignment with a higher fence. The environment stays locked until recovery is confirmed. A failed cleanup, corrupt route file or unavailable Docker daemon leaves reconciliation outstanding. A lost success response does not trigger local cleanup: if the server committed success, the new route stays active; otherwise lease expiry starts recovery. Keep the original state directory when restarting or replacing a certificate. Do not delete, copy back an old version of, or hand-edit `route-<target-id>.json` to unlock a target.
+
+This is a single-host HTTP strategy. The proxy runs inside the agent, so restarting or stopping the agent interrupts application traffic; container restart policy remains `no`. Gateway outages alone do not stop the proxy. Two application containers must fit on the host and tolerate running concurrently against shared data. Requests already in progress keep their selected backend across a route switch, but there is no connection-drain guarantee when a later deployment removes that slot. Arbitrary TCP routing, SSH blue/green, multi-host traffic control, automatic rollback after a completed deployment and database recovery are not implemented.

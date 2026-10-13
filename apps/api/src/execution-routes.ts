@@ -57,6 +57,7 @@ export async function registerExecutionRoutes(api: FastifyInstance, execution: E
           state,
           fence,
           result_code,
+          recovery,
           phase,
           phase_updated_at,
           lease_expires_at,

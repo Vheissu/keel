@@ -72,8 +72,10 @@ export async function createGateway(execution: ExecutionService, tls: ServerOpti
     const input = z
       .object({
         capabilities: z
-          .array(z.enum(['deployment-secrets-v1', 'ssh-docker-recreate-v1']))
-          .max(2)
+          .array(
+            z.enum(['deployment-secrets-v1', 'ssh-docker-recreate-v1', 'docker-blue-green-v1']),
+          )
+          .max(3)
           .default([]),
       })
       .strict()
@@ -84,6 +86,7 @@ export async function createGateway(execution: ExecutionService, tls: ServerOpti
         identities.get(req)!,
         input.capabilities.includes('deployment-secrets-v1'),
         input.capabilities.includes('ssh-docker-recreate-v1'),
+        input.capabilities.includes('docker-blue-green-v1'),
       ),
     };
   });

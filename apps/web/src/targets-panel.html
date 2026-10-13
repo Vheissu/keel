@@ -59,7 +59,8 @@
     <div>
       <label for="target-connection">Connection</label>
       <select id="target-connection" value.bind="capability">
-        <option value="docker-recreate-v1">Local Docker</option>
+        <option value="docker-recreate-v1">Local Docker · recreate</option>
+        <option value="docker-blue-green-v1">Local Docker · blue/green</option>
         <option value="ssh-docker-recreate-v1">Docker over SSH</option>
       </select>
     </div>
@@ -182,7 +183,9 @@
           <td>
             <strong>${target.name}</strong>
             <small>
-              ${target.capability === 'ssh-docker-recreate-v1' ? 'Docker over SSH' : 'Local Docker'}
+              ${target.capability === 'ssh-docker-recreate-v1' ? 'Docker over SSH · recreate' :
+              target.capability === 'docker-blue-green-v1' ? 'Local Docker · blue/green' : 'Local
+              Docker · recreate'}
             </small>
             <small><code>${target.id}</code></small>
           </td>
@@ -228,6 +231,10 @@
           <td>
             ${attempt.result_code ? label(attempt.result_code.toLowerCase()) : 'Pending'}
             <small>${guidance(attempt)}</small>
+            <small if.bind="attempt.recovery">
+              ${attempt.recovery === 'previous_route_restored' ? 'Previous route restored; release
+              state remains unverified.' : 'No previous route; target returns HTTP 503.'}
+            </small>
           </td>
         </tr>
       </tbody>

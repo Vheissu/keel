@@ -1,0 +1,24 @@
+apiVersion: keel.dev/v1alpha1
+kind: DeploymentProcess
+metadata:
+  name: blue-green-web
+spec:
+  artifact:
+    source: release
+    name: application
+    # Replace with docker image inspect --format '{{.Id}}' your-image:version
+    dockerImageId: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  environments:
+    staging:
+      strategy: blue-green
+      targetSelector:
+        labels: { app: web, tier: staging }
+      verify:
+        http: { path: / }
+    production:
+      strategy: blue-green
+      requiresApproval: true
+      targetSelector:
+        labels: { app: web, tier: production }
+      verify:
+        http: { path: / }

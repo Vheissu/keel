@@ -7,7 +7,6 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -83,20 +82,23 @@ func run(configPath string) error {
 	agent := &Agent{
 		config: config,
 		client: client,
-		docker: func(ctx context.Context, input io.Reader, args ...string) ([]byte, error) {
-			return dockerCommand(ctx, input, append([]string{"--host", "unix://" + config.DockerSocket}, args...)...)
-		},
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	closeProxies, err := agent.startProxies()
+	if err != nil {
+		return err
+	}
+	defer closeProxies()
+
 	log.Print("Deployment agent polling gateway")
 	var pollFailure string
 	var pollLogged time.Time
 	for ctx.Err() == nil {
 		body, err := agent.request(ctx, "poll", struct {
 			Capabilities []string `json:"capabilities"`
-		}{[]string{"deployment-secrets-v1", "ssh-docker-recreate-v1"}})
+		}{[]string{"deployment-secrets-v1", "ssh-docker-recreate-v1", "docker-blue-green-v1"}})
 		var reply struct {
 			Job *Job `json:"job"`
 		}

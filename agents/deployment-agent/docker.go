@@ -60,7 +60,7 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 	return length, nil
 }
 
-func containerName(j Job) string { return "keel-target-" + j.TargetID }
+func containerName(j Job) string { return "keel-target-" + j.TargetID + j.slot }
 
 func (a *Agent) cleanup(ctx context.Context, j Job) error {
 	// Listing succeeds even when absent; a daemon error must never look like cleanup success.
@@ -243,6 +243,10 @@ func (a *Agent) deploy(ctx context.Context, j Job, t Target) string {
 	}
 	defer clear(secretInput)
 
+	if j.Strategy == "blue-green" {
+		return a.deployBlueGreen(ctx, j, t, secretInput)
+	}
+
 	// Recheck immediately before replacing the target. Heartbeats also cancel in-flight work.
 	action, err := a.confirmLease(ctx, j)
 	if err != nil {
@@ -259,6 +263,10 @@ func (a *Agent) deploy(ctx context.Context, j Job, t Target) string {
 		return "DOCKER_FAILED"
 	}
 
+	return a.startAndVerify(ctx, j, t, secretInput)
+}
+
+func (a *Agent) startAndVerify(ctx context.Context, j Job, t Target, secretInput []byte) string {
 	args := []string{
 		"container", "create",
 		"--name", containerName(j),
@@ -285,11 +293,11 @@ func (a *Agent) deploy(ctx context.Context, j Job, t Target) string {
 	}
 	args = append(args, j.ImageID)
 
-	if _, err = a.docker(ctx, environment, args...); err != nil {
+	if _, err := a.docker(ctx, environment, args...); err != nil {
 		return "DOCKER_FAILED"
 	}
 
-	if _, err = a.docker(ctx, nil, "container", "start", containerName(j)); err != nil {
+	if _, err := a.docker(ctx, nil, "container", "start", containerName(j)); err != nil {
 		return "DOCKER_FAILED"
 	}
 

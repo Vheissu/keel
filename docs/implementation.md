@@ -8,7 +8,7 @@ The control-plane foundation, GitHub ingestion, Bitbucket publishing and local/S
 - Local workspace bootstrap with separate operator and approver tokens, hashed credentials, and fixed staging/production environments.
 - Project creation, artifact upload/download, immutable releases with canonical process snapshots, and deployment requests.
 - SHA-256 verification, atomic content-addressed local blob writes, database immutability triggers, and composite foreign keys across organisation/project references.
-- Strict deployment process validation for release artifacts, environment selectors, recreate/rolling strategy declarations, and optional HTTP verification declarations. The Docker executor accepts recreate, a pinned image ID and an HTTP verification path; rolling remains a declaration only.
+- Strict deployment process validation for release artifacts, environment selectors, recreate/blue-green/rolling strategy declarations, and optional HTTP verification declarations. Execution requires a pinned image ID and an HTTP verification path; rolling remains a declaration only.
 - Environment approval enforcement, separation of duties, environment request locks, cancellation/rejection, append-only audit/deployment events, and transactional outbox writes.
 - Persistent request idempotency, scoped tokens, request validation, bounded uploads, stable errors, and process-local rate limiting.
 - GitHub Actions adapter with workflow discovery, authoritative run checks, paginated artifact discovery, signed download handling and SHA-256 verification. Bitbucket uses a separate publishing flow; other providers remain explicitly unavailable.
@@ -21,6 +21,7 @@ The control-plane foundation, GitHub ingestion, Bitbucket publishing and local/S
 - Temporal deployment workflows and transactional outbox delivery, with stable workflow IDs.
 - A separate mutual-TLS gateway and outbound Go agent with scoped downloads, heartbeats, monotonic target fences, draining and revocation.
 - SSH Docker targets with strict host-key verification, local connection allowlists, a remote helper, durable remote fences and session locks.
+- Local Docker blue/green execution with two container slots, an agent-managed HTTP proxy, durable route switching, explicit target compatibility and fenced route recovery.
 - Controlled Docker recreate execution of a retained image archive, HTTP verification, cancellation cleanup and expiry reconciliation.
 - Target registration, agent state and verified-release projections in the UI.
 - Explicit Docker archive entry selection inside retained GitHub ZIPs, with bounded reads and archive validation.
@@ -58,7 +59,7 @@ The control-plane foundation, GitHub ingestion, Bitbucket publishing and local/S
 
 ## Next increment
 
-Add a second deployment strategy with explicit target compatibility and recovery behavior. SAML, SCIM, non-container SSH deployments and automated rollback remain later work.
+Add deployment lifecycle hooks with explicit execution limits, secret handling and failure behavior. SAML, SCIM, non-container SSH deployments, multi-host strategies and automated rollback remain later work.
 
 ## Decisions and constraints
 

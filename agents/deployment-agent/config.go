@@ -12,10 +12,16 @@ import (
 	"strings"
 )
 
+type BlueGreenConfig struct {
+	BluePort  int `json:"blue_port"`
+	GreenPort int `json:"green_port"`
+}
+
 type Target struct {
-	SSH           *SSHConfig `json:"ssh,omitempty"`
-	HostPort      int        `json:"host_port"`
-	ContainerPort int        `json:"container_port"`
+	BlueGreen     *BlueGreenConfig `json:"blue_green,omitempty"`
+	SSH           *SSHConfig       `json:"ssh,omitempty"`
+	HostPort      int              `json:"host_port"`
+	ContainerPort int              `json:"container_port"`
 }
 
 type Config struct {
@@ -35,6 +41,8 @@ type Lease struct {
 }
 
 type Job struct {
+	Strategy string `json:"strategy"`
+	slot     string
 	Lease
 	Capability  string `json:"capability"`
 	Mode        string `json:"mode"`
@@ -48,6 +56,7 @@ type Job struct {
 }
 
 type Result struct {
+	Recovery string `json:"recovery,omitempty"`
 	Lease
 	Outcome string `json:"outcome"`
 	Code    string `json:"code"`
@@ -94,23 +103,43 @@ func validateConfig(c Config) error {
 		} else if c.DockerSocket == "" {
 			return errors.New("local targets require a Docker socket")
 		}
-		key := fmt.Sprintf("%s:%d", host, t.HostPort)
-		if ports[key] {
-			return errors.New("target host ports must be unique per host")
+
+		targetPorts := []int{t.HostPort}
+		if t.BlueGreen != nil {
+			if t.SSH != nil {
+				return errors.New("blue/green is supported only on local Docker targets")
+			}
+			targetPorts = append(targetPorts, t.BlueGreen.BluePort, t.BlueGreen.GreenPort)
 		}
-		ports[key] = true
+
+		for _, port := range targetPorts {
+			key := fmt.Sprintf("%s:%d", host, port)
+			if port < 1024 || port > 65535 || ports[key] {
+				return errors.New("target host ports must be unprivileged and unique per host")
+			}
+
+			ports[key] = true
+		}
 	}
 
 	return nil
 }
 
 func validateJob(j Job) error {
-	if j.Capability != "" && j.Capability != "docker-recreate-v1" && j.Capability != "ssh-docker-recreate-v1" {
+	if j.Capability != "" && j.Capability != "docker-recreate-v1" && j.Capability != "ssh-docker-recreate-v1" && j.Capability != "docker-blue-green-v1" {
 		return errors.New("unsupported target capability")
 	}
 
 	if !uuidPattern.MatchString(j.AttemptID) || !uuidPattern.MatchString(j.TargetID) || j.Fence < 1 || !digestPattern.MatchString(j.Token) {
 		return errors.New("invalid lease")
+	}
+
+	if j.Capability == "docker-blue-green-v1" {
+		if j.Strategy != "blue-green" {
+			return errors.New("blue/green target requires blue/green strategy")
+		}
+	} else if j.Strategy != "" && j.Strategy != "recreate" {
+		return errors.New("target requires recreate strategy")
 	}
 
 	if j.Mode == "cleanup" {

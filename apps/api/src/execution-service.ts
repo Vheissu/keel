@@ -8,7 +8,8 @@ import {
 } from '../../../packages/domain/src/index.js';
 import {
   parseProcess,
-  supportsDockerRecreate,
+  supportsDockerDeployment,
+  supportsTargetStrategy,
 } from '../../../packages/deployment-schema/src/index.js';
 import { ControlPlane } from './control-plane.js';
 import { sha256 } from './artifact-store.js';
@@ -28,7 +29,9 @@ export const targetInput = z
     project_id: uuid,
     environment_id: uuid,
     agent_id: uuid,
-    capability: z.enum(['docker-recreate-v1', 'ssh-docker-recreate-v1']).optional(),
+    capability: z
+      .enum(['docker-recreate-v1', 'ssh-docker-recreate-v1', 'docker-blue-green-v1'])
+      .optional(),
     labels: z
       .record(z.string().min(1).max(100), z.string().min(1).max(100))
       .refine((v) => Object.keys(v).length > 0 && Object.keys(v).length <= 20),
@@ -45,6 +48,7 @@ export const leaseInput = z
 
 export const resultInput = leaseInput
   .extend({
+    recovery: z.enum(['previous_route_restored', 'no_previous_route']).optional(),
     outcome: z.enum(['succeeded', 'failed', 'cancelled']),
     code: z.enum([
       'HTTP_VERIFIED',
@@ -72,6 +76,8 @@ export const progressInput = leaseInput
       'downloading',
       'loading_image',
       'replacing_container',
+      'starting_candidate',
+      'switching_traffic',
       'verifying_http',
       'cleaning_up',
     ]),
@@ -386,7 +392,8 @@ export class ExecutionService {
             id,
             target_id,
             agent_id,
-            fence
+            fence,
+            recovery
           FROM
             deployment_attempts
           WHERE
@@ -531,7 +538,7 @@ export class ExecutionService {
       const process = parseProcess(release.manifest.process);
       const config = process.spec.environments[env.slug];
 
-      if (!supportsDockerRecreate(process, config)) {
+      if (!supportsDockerDeployment(process, config)) {
         await this.event(tx, d, 'failed', 'UNSUPPORTED_PROCESS');
 
         return true;
@@ -576,6 +583,12 @@ export class ExecutionService {
       }
 
       const target = targets.rows[0];
+
+      if (!supportsTargetStrategy(target.capability, config.strategy)) {
+        await this.event(tx, d, 'failed', 'INCOMPATIBLE_TARGET_STRATEGY');
+
+        return true;
+      }
 
       if (d.rollback_plan_id) {
         const plan = (
@@ -624,7 +637,12 @@ export class ExecutionService {
     });
   }
 
-  async claim(agent: AgentIdentity, supportsSecrets = false, supportsSSH = false) {
+  async claim(
+    agent: AgentIdentity,
+    supportsSecrets = false,
+    supportsSSH = false,
+    supportsBlueGreen = false,
+  ) {
     return transaction(this.control.db, async (tx) => {
       await this.lockAgent(tx, agent);
 
@@ -641,8 +659,7 @@ export class ExecutionService {
             a.organisation_id = $1
             AND a.agent_id = $2
             AND (
-              $5::boolean
-              OR EXISTS (
+              EXISTS (
                 SELECT
                   1
                 FROM
@@ -650,7 +667,11 @@ export class ExecutionService {
                 WHERE
                   t.organisation_id = a.organisation_id
                   AND t.id = a.target_id
-                  AND t.capability = 'docker-recreate-v1'
+                  AND (
+                    t.capability = 'docker-recreate-v1'
+                    OR (t.capability = 'ssh-docker-recreate-v1' AND $5::boolean)
+                    OR (t.capability = 'docker-blue-green-v1' AND $6::boolean)
+                  )
               )
             )
             AND (
@@ -680,7 +701,14 @@ export class ExecutionService {
           FOR UPDATE OF
             d SKIP LOCKED
         `,
-        [agent.organisation_id, agent.id, agent.state, supportsSecrets, supportsSSH],
+        [
+          agent.organisation_id,
+          agent.id,
+          agent.state,
+          supportsSecrets,
+          supportsSSH,
+          supportsBlueGreen,
+        ],
       );
 
       const d = candidates.rows[0] as Deployment | undefined;
@@ -785,6 +813,7 @@ export class ExecutionService {
         mode: cleanup ? 'cleanup' : 'deploy',
         target_id: a.target_id,
         capability: targetFence.capability,
+        strategy: process.spec.environments[env.slug].strategy,
         digest: release.manifest.artifact.digest,
         size: release.manifest.artifact.size,
         image_id: process.spec.artifact.dockerImageId,
@@ -997,6 +1026,24 @@ export class ExecutionService {
         throw new DomainError('INVALID_RESULT', 'Outcome and result code do not match.', 400);
       }
 
+      const target = (
+        await tx.query(
+          'SELECT capability FROM deployment_targets WHERE organisation_id=$1 AND id=$2',
+          [agent.organisation_id, a.target_id],
+        )
+      ).rows[0];
+
+      const needsRecovery =
+        target.capability === 'docker-blue-green-v1' && input.outcome !== 'succeeded';
+
+      if (needsRecovery !== !!input.recovery) {
+        throw new DomainError(
+          'INVALID_RESULT',
+          'Blue/green failures must confirm route recovery.',
+          400,
+        );
+      }
+
       const status = d.status === 'cancel_requested' ? 'cancelled' : input.outcome;
 
       if (status === 'succeeded') {
@@ -1020,12 +1067,13 @@ export class ExecutionService {
           SET
             state = $2,
             result_code = $3,
+            recovery = $4,
             lease_hash = NULL,
             updated_at = clock_timestamp()
           WHERE
             id = $1
         `,
-        [a.id, status, input.code],
+        [a.id, status, input.code, input.recovery ?? null],
       );
 
       await this.event(tx, d, status, input.code);

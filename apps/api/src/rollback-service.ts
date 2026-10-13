@@ -12,7 +12,8 @@ import {
 import {
   parseProcess,
   requiresApproval,
-  supportsDockerRecreate,
+  supportsDockerDeployment,
+  supportsTargetStrategy,
 } from '../../../packages/deployment-schema/src/index.js';
 import type { ControlPlane } from './control-plane.js';
 
@@ -264,10 +265,13 @@ export class RollbackService {
     const process = parseProcess(release.manifest.process);
     const config = process.spec.environments[environment.slug];
 
-    if (!supportsDockerRecreate(process, config)) {
+    if (
+      !supportsDockerDeployment(process, config) ||
+      !supportsTargetStrategy(target.capability, config.strategy)
+    ) {
       throw new DomainError(
         'UNSUPPORTED_PROCESS',
-        'This retained release does not support the Docker recreate executor.',
+        'This retained release is not compatible with the target strategy.',
         409,
       );
     }
@@ -401,10 +405,9 @@ export class RollbackService {
         !p.environment_ids.includes(environment.promotion_from_environment_id)
           ? null
           : checked.evidence,
-      strategy: 'recreate',
+      strategy: checked.config.strategy,
       health_path: checked.config.verify.http.path,
-      warning:
-        'This redeploys application code and causes downtime. It does not restore databases, undo migrations or reverse external side effects. Check compatibility before proceeding.',
+      warning: `This redeploys application code using ${checked.config.strategy}.${checked.config.strategy === 'recreate' ? ' It causes downtime.' : ''} It does not restore databases, undo migrations or reverse external side effects. Check compatibility before proceeding.`,
     };
   }
 

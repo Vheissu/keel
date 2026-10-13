@@ -291,8 +291,29 @@ test('connects GitHub, retries a failed import, and uses the retained artifact i
   ).toBeVisible();
 
   await page.getByRole('link', { name: 'Releases', exact: true }).click();
+  let releaseArtifacts!: () => void;
+
+  const artifactOptions = new Promise<void>((resolve) => {
+    releaseArtifacts = resolve;
+  });
+
+  await page.route(/\/api\/v1\/resources\/artifacts(?:\?|$)/, async (route) => {
+    await artifactOptions;
+    await route.continue();
+  });
+
   await page.getByRole('button', { name: 'Create release', exact: true }).click();
   await page.getByLabel('Release version', { exact: true }).fill('2.0.0');
+
+  try {
+    await expect(
+      page.getByRole('dialog').getByRole('button', { name: 'Create release', exact: true }),
+    ).toBeDisabled();
+  } finally {
+    releaseArtifacts();
+  }
+
+  await expect(page.getByLabel('Artifact', { exact: true })).not.toHaveValue('');
 
   await page
     .getByRole('dialog')
@@ -427,6 +448,8 @@ test('registers and drains private agents, maps local and SSH targets and remain
   await page.getByRole('button', { name: 'Add target', exact: true }).click();
   await page.getByLabel('Name', { exact: true }).fill('Web staging');
   await expect(page.getByLabel('Connection', { exact: true })).toHaveValue('docker-recreate-v1');
+  await page.getByLabel('Connection', { exact: true }).selectOption('docker-blue-green-v1');
+  await expect(page.getByLabel('Connection', { exact: true })).toHaveValue('docker-blue-green-v1');
   await page.getByLabel('Connection', { exact: true }).selectOption('ssh-docker-recreate-v1');
   await page.getByLabel('Environment', { exact: true }).selectOption({ label: 'Staging' });
   await page.getByRole('button', { name: 'Save registration' }).click();

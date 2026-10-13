@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -77,6 +78,18 @@ func (a *Agent) execute(parent context.Context, j Job) {
 		return
 	}
 
+	if (j.Capability == "docker-blue-green-v1") != (target.BlueGreen != nil) {
+		log.Print("Target strategy differs from local configuration; reconciliation required")
+		return
+	}
+
+	if target.BlueGreen != nil {
+		if err := a.fenceBlueGreen(j); err != nil {
+			log.Printf("Cannot fence blue/green target: %v", err)
+			return
+		}
+	}
+
 	// Each attempt owns its transport. Reconnection for cleanup takes the same remote lock.
 	if target.SSH != nil {
 		remote := &sshTransport{config: *target.SSH, job: j}
@@ -84,6 +97,12 @@ func (a *Agent) execute(parent context.Context, j Job) {
 		copy := *a
 		copy.docker = remote.docker
 		copy.health = remote.health
+		a = &copy
+	} else if a.docker == nil {
+		copy := *a
+		copy.docker = func(ctx context.Context, input io.Reader, args ...string) ([]byte, error) {
+			return dockerCommandWithLock(ctx, input, lock, append([]string{"--host", "unix://" + a.config.DockerSocket}, args...)...)
+		}
 		a = &copy
 	}
 
@@ -108,11 +127,18 @@ func (a *Agent) execute(parent context.Context, j Job) {
 		}
 	}
 
-	// Secret preflight happens before replacement; keep the existing application running.
-	if code != "HTTP_VERIFIED" && code != "SECRET_UNAVAILABLE" {
+	recovery := ""
+	// Blue/green always confirms the route, including failures before candidate creation.
+	if code != "HTTP_VERIFIED" && (target.BlueGreen != nil || code != "SECRET_UNAVAILABLE") {
 		cleanupContext, stop := context.WithTimeout(context.Background(), 30*time.Second)
 		a.progress(cleanupContext, j, "cleaning_up")
-		err := a.cleanup(cleanupContext, j)
+		var err error
+		if target.BlueGreen != nil {
+			recovery, err = a.recoverBlueGreen(cleanupContext, j)
+		} else {
+			err = a.cleanup(cleanupContext, j)
+		}
+
 		stop()
 		if err != nil {
 			cancel(nil)
@@ -122,7 +148,7 @@ func (a *Agent) execute(parent context.Context, j Job) {
 		}
 	}
 
-	result := Result{Lease: j.Lease, Outcome: "failed", Code: code}
+	result := Result{Lease: j.Lease, Outcome: "failed", Code: code, Recovery: recovery}
 	if code == "HTTP_VERIFIED" {
 		result.Outcome = "succeeded"
 	}

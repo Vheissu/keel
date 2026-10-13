@@ -111,7 +111,7 @@ const resources: Record<string, Resource> = {
   },
   attempts: {
     table: 'deployment_attempts',
-    columns: `t.id, t.deployment_id, t.target_id, t.agent_id, t.state, t.fence, t.result_code, t.phase,
+    columns: `t.id, t.deployment_id, t.target_id, t.agent_id, t.state, t.fence, t.result_code, t.recovery, t.phase,
       t.phase_updated_at, t.lease_expires_at, t.created_at, t.updated_at, target.name AS target_name`,
     joins:
       'JOIN deployment_targets target ON target.organisation_id = t.organisation_id AND target.id = t.target_id',

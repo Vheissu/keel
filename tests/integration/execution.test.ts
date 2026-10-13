@@ -612,3 +612,127 @@ it('gates SSH deployment and reconciliation claims on the SSH capability', async
   expect(cleanup).toMatchObject({ capability: 'ssh-docker-recreate-v1', mode: 'cleanup' });
   expect(cleanup!.fence).toBeGreaterThan(job!.fence);
 });
+
+it('rejects incompatible target strategies before assignment', async () => {
+  await db.query("UPDATE deployment_targets SET capability='docker-blue-green-v1' WHERE id=$1", [
+    target.id,
+  ]);
+
+  const d = await requestDeployment();
+
+  await execution.tick(f.org, d.id);
+
+  expect(
+    (await db.query('SELECT status,result_code FROM deployments WHERE id=$1', [d.id])).rows[0],
+  ).toEqual({ status: 'failed', result_code: 'INCOMPATIBLE_TARGET_STRATEGY' });
+
+  expect(await execution.claim(agent, true, true, true)).toBeNull();
+});
+
+async function blueGreenRelease() {
+  const original = (await db.query('SELECT * FROM releases WHERE id=$1', [release.id])).rows[0];
+  const process = original.manifest.process;
+
+  process.spec.environments.staging.strategy = 'blue-green';
+
+  const artifact = (await db.query('SELECT id FROM artifacts WHERE project_id=$1', [project.id]))
+    .rows[0];
+
+  release = await mutate((tx) =>
+    control.release(tx, p, {
+      project_id: project.id,
+      artifact_id: artifact.id,
+      version: 'blue-green',
+      process,
+    }),
+  );
+}
+
+it('gates blue/green claims and recovery on explicit agent support', async () => {
+  await blueGreenRelease();
+
+  await db.query("UPDATE deployment_targets SET capability='docker-blue-green-v1' WHERE id=$1", [
+    target.id,
+  ]);
+
+  const d = await requestDeployment();
+
+  await execution.tick(f.org, d.id);
+  expect(await execution.claim(agent, true, true)).toBeNull();
+  const job = (await execution.claim(agent, true, false, true))!;
+
+  expect(job).toMatchObject({ strategy: 'blue-green', capability: 'docker-blue-green-v1' });
+
+  await expect(
+    execution.complete(agent, { ...lease(job), outcome: 'failed', code: 'HEALTH_FAILED' }),
+  ).rejects.toMatchObject({ code: 'INVALID_RESULT' });
+
+  await execution.progress(agent, { ...lease(job), phase: 'starting_candidate' });
+  await execution.progress(agent, { ...lease(job), phase: 'switching_traffic' });
+
+  await db.query(
+    "UPDATE deployment_attempts SET lease_expires_at=now()-interval '1 second' WHERE id=$1",
+    [job.attempt_id],
+  );
+
+  await execution.tick(f.org, d.id);
+  expect(await execution.claim(agent, true, true)).toBeNull();
+  const cleanup = (await execution.claim(agent, true, false, true))!;
+
+  expect(cleanup.mode).toBe('cleanup');
+  expect(cleanup.fence).toBeGreaterThan(job.fence);
+
+  await expect(
+    execution.complete(agent, {
+      ...lease(job),
+      outcome: 'failed',
+      code: 'RECONCILED',
+      recovery: 'previous_route_restored',
+    }),
+  ).rejects.toMatchObject({ code: 'STALE_LEASE' });
+
+  await execution.complete(agent, {
+    ...lease(cleanup),
+    outcome: 'failed',
+    code: 'RECONCILED',
+    recovery: 'previous_route_restored',
+  });
+
+  expect(
+    (await db.query('SELECT state,recovery FROM deployment_attempts WHERE id=$1', [job.attempt_id]))
+      .rows[0],
+  ).toEqual({ state: 'failed', recovery: 'previous_route_restored' });
+
+  expect(
+    (await db.query('SELECT current_state FROM deployment_targets WHERE id=$1', [target.id]))
+      .rows[0].current_state,
+  ).toBe('unknown');
+});
+
+it('rejects blue/green on SSH and rejects recovery claims from recreate agents', async () => {
+  const { job } = await assigned();
+
+  await expect(
+    execution.complete(agent, {
+      ...lease(job),
+      outcome: 'failed',
+      code: 'HEALTH_FAILED',
+      recovery: 'previous_route_restored',
+    }),
+  ).rejects.toMatchObject({ code: 'INVALID_RESULT' });
+
+  await execution.complete(agent, { ...lease(job), outcome: 'failed', code: 'HEALTH_FAILED' });
+  await blueGreenRelease();
+
+  await db.query("UPDATE deployment_targets SET capability='ssh-docker-recreate-v1' WHERE id=$1", [
+    target.id,
+  ]);
+
+  const d = await requestDeployment();
+
+  await execution.tick(f.org, d.id);
+
+  expect(
+    (await db.query('SELECT result_code FROM deployments WHERE id=$1', [d.id])).rows[0].result_code,
+  ).toBe('INCOMPATIBLE_TARGET_STRATEGY');
+});

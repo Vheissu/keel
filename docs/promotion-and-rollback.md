@@ -43,6 +43,6 @@ Use a stable `--idempotency-key` when retrying a request after a lost response. 
 
 ## Current boundaries
 
-This stage supports explicit rollback of one Docker target using the recreate strategy. There is no automatic rollback, coordinated service rollback, database restore, promotion freshness window, deployment freeze, or compatibility inference. A retained release can also be requested normally; that still uses the current promotion and approval policy, but does not carry a rollback plan.
+Explicit rollback supports one Docker target using the retained release’s recreate or blue/green strategy. Preflight checks compatibility with the registered target capability; a blue/green rollback uses the same candidate verification and route recovery as a normal deployment. There is no automatic rollback, coordinated service rollback, database restore, promotion freshness window, deployment freeze, or compatibility inference. A retained release can also be requested normally; that still uses the current promotion and approval policy, but does not carry a rollback plan.
 
 The test suite covers policy permissions and cycles, exact-release evidence, immutable admission, expired/stale plans, organisation isolation, retained-byte loss and target substitution. The live execution test uses PostgreSQL, Temporal, mutual TLS, the Go agent and Docker to recover an interrupted deployment, restore a retained release, then promote that release to a second target after separate approval. Provider responses remain fixtures; tests do not connect a live GitHub repository.

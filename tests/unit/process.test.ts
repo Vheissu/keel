@@ -18,7 +18,7 @@ describe('deployment process contract', () => {
   it('rejects unsupported strategies rather than implying traffic control', () => {
     const process = deploymentProcess();
 
-    process.spec.environments.staging.strategy = 'blue-green';
+    process.spec.environments.staging.strategy = 'canary';
     expect(() => parseProcess(process)).toThrow();
   });
 

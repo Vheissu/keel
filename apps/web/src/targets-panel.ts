@@ -29,6 +29,7 @@ interface Attempt {
   state: string;
   fence: number;
   result_code: string | null;
+  recovery: string | null;
   phase: string;
   phase_updated_at: string;
 }

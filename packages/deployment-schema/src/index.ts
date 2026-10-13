@@ -10,7 +10,7 @@ export const maxSecretValueBytes = 8192;
 
 const environment = z
   .object({
-    strategy: z.enum(['recreate', 'rolling']),
+    strategy: z.enum(['recreate', 'rolling', 'blue-green']),
     targetSelector: z.object({ labels: z.record(z.string().min(1), z.string().min(1)) }).strict(),
     requiresApproval: z.boolean().optional(),
     secrets: z
@@ -117,16 +117,27 @@ export function requiresApproval(
   return environment.requires_approval || !!config.requiresApproval;
 }
 
-// The Docker agent only runs recreate deployments of a pinned image with HTTP verification.
-export function supportsDockerRecreate(
+// Executable Docker processes require a pinned image and HTTP verification.
+export function supportsDockerDeployment(
   process: DeploymentProcess,
   config: EnvironmentProcess | undefined,
 ): config is EnvironmentProcess & { verify: NonNullable<EnvironmentProcess['verify']> } {
   return (
     !!config &&
-    config.strategy === 'recreate' &&
+    ['recreate', 'blue-green'].includes(config.strategy) &&
     !!config.verify &&
     !!process.spec.artifact.dockerImageId &&
     Object.keys(config.targetSelector.labels).length > 0
   );
+}
+
+// Capabilities are strategy-specific: registering a target never opts it into another strategy.
+export function supportsTargetStrategy(
+  capability: string,
+  strategy: EnvironmentProcess['strategy'],
+) {
+  return strategy === 'blue-green'
+    ? capability === 'docker-blue-green-v1'
+    : strategy === 'recreate' &&
+        ['docker-recreate-v1', 'ssh-docker-recreate-v1'].includes(capability);
 }

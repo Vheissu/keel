@@ -969,7 +969,7 @@
       <button
         type="submit"
         class="button primary"
-        disabled.bind="busy || (form === 'deploy' && (!promotion || !promotion.eligible || checkingPromotion))"
+        disabled.bind="busy || (form === 'release' && (!projectId || !artifactId)) || (form === 'deploy' && (!promotion || !promotion.eligible || checkingPromotion))"
       >
         ${form === 'project' ? 'Create project' : form === 'artifact' ? 'Publish artifact' : form
         === 'release' ? 'Create release' : 'Request deployment'}

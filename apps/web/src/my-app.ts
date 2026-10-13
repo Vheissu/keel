@@ -828,7 +828,7 @@ spec:
   }
 
   async submit() {
-    if (this.busy) {
+    if (this.busy || (this.form === 'release' && (!this.projectId || !this.artifactId))) {
       return;
     }
 
