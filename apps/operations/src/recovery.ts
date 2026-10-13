@@ -158,6 +158,8 @@ export async function quarantine(db: Database) {
     const organisations = (await tx.query('SELECT id FROM organisations')).rows;
 
     await tx.query('DELETE FROM sso_attempts');
+    await tx.query('DELETE FROM passkey_attempts');
+    await tx.query('DELETE FROM passkeys');
     await tx.query('DELETE FROM mfa_challenges');
     await tx.query('DELETE FROM mfa_enrollments');
     await tx.query('DELETE FROM mfa_recovery_codes');

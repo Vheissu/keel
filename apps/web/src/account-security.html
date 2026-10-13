@@ -2,6 +2,73 @@
 <div class="alert success" role="status" if.bind="notice">${notice}</div>
 <template if.bind="data">
   <section>
+    <h2>Passkeys</h2>
+    <p>
+      Sign in using your device’s fingerprint, face recognition or PIN. Your authenticator code is
+      still required when MFA is enabled.
+    </p>
+    <p class="help">
+      Keep your password for account recovery and security changes. Removing a passkey signs out all
+      sessions and revokes your API tokens.
+    </p>
+    <p if.bind="!passkeysSupported">
+      Passkeys need a supported browser and a hostname. Use HTTPS with a domain, or localhost for
+      development.
+    </p>
+    <form class="target-form" submit.trigger:prevent="addPasskey()">
+      <label for="passkey-password">Password for passkey changes</label>
+      <input
+        id="passkey-password"
+        type="password"
+        autocomplete="current-password"
+        required
+        maxlength="128"
+        value.bind="passkeyPassword"
+      />
+      <template if.bind="passkeysSupported && data.passkeys.length < 10">
+        <label for="passkey-name">Passkey name</label>
+        <input
+          id="passkey-name"
+          required
+          maxlength="100"
+          placeholder="e.g. Personal laptop"
+          value.bind="passkeyName"
+        />
+        <button type="submit" class="button primary" disabled.bind="busy">Add passkey</button>
+      </template>
+    </form>
+    <p if.bind="!data.passkeys.length">No passkeys added yet.</p>
+    <div class="table-wrap" if.bind="data.passkeys.length">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Added</th>
+            <th>Last used</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr repeat.for="key of data.passkeys; key: id">
+            <td>${key.name}</td>
+            <td>${formatDate(key.created_at)}</td>
+            <td>${key.last_used_at ? formatDate(key.last_used_at) : 'Not used yet'}</td>
+            <td>
+              <button
+                type="button"
+                class="button danger"
+                disabled.bind="busy || !passkeyPassword"
+                click.trigger="removePasskey(key.id)"
+              >
+                Remove passkey and sign out
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+  <section>
     <h2>Authenticator app</h2>
     <p>
       ${data.mfa_enabled ? 'MFA is enabled for your account in every workspace.' : 'Add a second
@@ -154,7 +221,7 @@
             <td class="session-browser">
               <strong if.bind="session.current">This session</strong>
               <span>${session.user_agent || 'Unknown browser'}</span>
-              <small>${session.mfa_verified ? 'MFA verified' : 'Password sign-in'}</small>
+              <small>${session.mfa_verified ? 'MFA verified' : 'MFA not verified'}</small>
             </td>
             <td>${session.ip_address || 'Unknown'}</td>
             <td>${formatDate(session.created_at)}</td>

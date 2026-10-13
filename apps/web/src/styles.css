@@ -1361,3 +1361,7 @@ workspace-access fieldset input {
 .session-browser span {
   display: block;
 }
+
+account-security > section + section {
+  margin-top: 2rem;
+}

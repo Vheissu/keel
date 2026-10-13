@@ -213,6 +213,15 @@
       <p if.bind="account && !memberships.length && !invitation">
         You have no active workspace memberships. Ask a workspace owner for an invitation.
       </p>
+      <button
+        if.bind="passkeysSupported && !account && !mfaChallenge && !resetToken && (!invitation || invitation.existing_account)"
+        type="button"
+        class="button secondary"
+        disabled.bind="busy"
+        click.trigger="signInWithPasskey()"
+      >
+        Sign in with a passkey
+      </button>
       <form
         if.bind="!account && !mfaChallenge && !resetToken && !invitation"
         submit.trigger:prevent="startSso()"

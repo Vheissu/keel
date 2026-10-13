@@ -1,3 +1,8 @@
+import {
+  browserSupportsWebAuthn,
+  startRegistration,
+  type PublicKeyCredentialCreationOptionsJSON,
+} from '@simplewebauthn/browser';
 import { bindable } from 'aurelia';
 import { Api } from './api';
 import { errorMessage, formatDate } from './format';
@@ -13,7 +18,10 @@ type Session = {
   mfa_verified: boolean;
 };
 
+type Passkey = { id: string; name: string; created_at: string; last_used_at: string | null };
+
 type Security = {
+  passkeys: Passkey[];
   mfa_enabled: boolean;
   recovery_codes_remaining: number;
   sessions: Session[];
@@ -23,6 +31,12 @@ export class AccountSecurity {
   @bindable api!: Api;
   @bindable signedOut!: () => void;
   data: Security | null = null;
+  passkeyName = '';
+  passkeyPassword = '';
+  passkeysSupported =
+    browserSupportsWebAuthn() &&
+    !/^[\d.]+$/.test(location.hostname) &&
+    !location.hostname.includes(':');
   password = '';
   code = '';
   secret = '';
@@ -40,6 +54,7 @@ export class AccountSecurity {
 
   unbinding() {
     this.active = false;
+    this.passkeyPassword = '';
     this.password = '';
     this.code = '';
     this.secret = '';
@@ -71,9 +86,43 @@ export class AccountSecurity {
       }
     } finally {
       this.busy = false;
+      this.passkeyPassword = '';
       this.password = '';
       this.code = '';
     }
+  }
+
+  addPasskey() {
+    return this.run(async () => {
+      const result = await this.api.auth<{
+        attempt: string;
+        options: PublicKeyCredentialCreationOptionsJSON;
+      }>('/passkeys/enroll', {
+        name: this.passkeyName,
+        current_password: this.passkeyPassword,
+      });
+
+      const response = await startRegistration({ optionsJSON: result.options });
+
+      if (!this.active) {
+        return;
+      }
+
+      await this.api.auth('/passkeys/confirm', { attempt: result.attempt, response });
+      this.passkeyName = '';
+      this.notice = 'Passkey added. You can use it the next time you sign in.';
+      await this.load();
+    });
+  }
+
+  removePasskey(id: string) {
+    return this.run(async () => {
+      await this.api.auth('/passkeys/remove', { id, current_password: this.passkeyPassword });
+
+      if (this.active) {
+        this.signedOut();
+      }
+    });
   }
 
   cancelSetup() {

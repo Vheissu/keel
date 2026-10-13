@@ -88,7 +88,31 @@ This clears MFA, revokes all sessions and API tokens, invalidates password-reset
 
 Restore retains and verifies encrypted authenticator secrets, while invalidating pending challenges, setup and recovery codes. Generate new recovery codes after signing in with the authenticator. MFA settings and the last used code step reflect the backup date; use operator recovery if the restored authenticator is no longer available.
 
-SAML, passkeys, SCIM, email delivery, custom roles and project-scoped tokens remain later work. Workspace creation and account recovery are server operations.
+SAML, SCIM, email delivery, custom roles and project-scoped tokens remain later work. Workspace creation and account recovery are server operations.
+
+## Passkeys
+
+Open **Account security**, enter your current password, name the device or key, and choose **Add passkey**. Keel supports up to ten passkeys per account. Enrollment requires an active session, including the authenticator step if MFA is enabled. Your browser asks you to approve the passkey with a fingerprint, face recognition or device PIN. Give each passkey a name you can recognize later.
+
+Choose **Sign in with a passkey** on the sign-in screen. Discoverable credentials let the browser select the account without entering an email. Keel requires user presence and device verification on every sign-in. Accounts with MFA still need an authenticator or recovery code afterward. Passkeys do not satisfy a workspace’s SSO requirement or replace its authenticator policy. Password sign-in remains available, subject to the same workspace policies.
+
+Passkeys are bound to the hostname in `KEEL_PUBLIC_URL`; the exact origin is checked on each response. Use HTTPS in production and keep the hostname stable. Device and browser support varies. Use `http://localhost` for development; IP addresses such as `127.0.0.1` cannot be WebAuthn relying parties. Moving to a different hostname requires enrolling new passkeys. Keel stores the public key, signature counter and device metadata; the private key stays with the authenticator or its sync provider. It uses [SimpleWebAuthn](https://simplewebauthn.dev/docs/packages/server) to verify WebAuthn responses.
+
+Registration and sign-in challenges expire in five minutes and work once. Registration belongs to the browser session that started it and requires a fresh password check. Sign-in uses an HttpOnly, SameSite=Strict cookie to bind the challenge to the requesting browser. Challenge values are hashed in PostgreSQL. Verification checks the origin, relying-party ID, challenge, signature, account handle and device verification. Counters are updated under the account lock. Synced passkeys that report zero counters are supported.
+
+The passkey list shows names, creation dates and last use. Enter your password before removing a passkey. Removal signs out every browser session, revokes managed tokens and cancels pending account challenges. Other passkeys remain usable. If a device is lost, sign in using your password and MFA, then remove its passkey. Server-assisted password recovery removes all passkeys when the recovery link is redeemed; an ordinary password change retains them. Neither operation disables MFA.
+
+A database restore clears passkeys and pending WebAuthn challenges. This avoids restoring a removed credential or rolling its signature counter backward. Sign in using your password and MFA, then enroll passkeys again.
+
+`GET /api/auth/security` includes `passkeys` with `id`, `name`, `created_at`, `last_used_at` and `backed_up`. The JSON POST routes below require the configured Origin. Enrollment, confirmation and removal also require a browser session and CSRF header. These routes do not persist idempotency responses.
+
+| Route                        | Body                               | Result                                                           |
+| ---------------------------- | ---------------------------------- | ---------------------------------------------------------------- |
+| `/api/auth/passkeys/enroll`  | `{name, current_password}`         | `{attempt, options}` for WebAuthn registration                   |
+| `/api/auth/passkeys/confirm` | `{attempt, response}`              | Saves the verified registration                                  |
+| `/api/auth/passkeys/options` | `{}`                               | `{options}` for WebAuthn authentication; sets a challenge cookie |
+| `/api/auth/passkeys/login`   | `{response}` with challenge cookie | Session cookie, or `{mfa_required: true, challenge}`             |
+| `/api/auth/passkeys/remove`  | `{id, current_password}`           | Removes the key and clears the session cookie                    |
 
 ## API
 

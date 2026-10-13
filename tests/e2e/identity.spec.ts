@@ -17,7 +17,7 @@ import { identityAdmin } from '../../apps/operations/src/identity-admin.js';
 const schema = `identity_e2e_${randomUUID().replaceAll('-', '')}`;
 const admin = new pg.Pool({ connectionString: testDatabaseUrl });
 const db = new pg.Pool({ connectionString: testDatabaseUrl, options: `-c search_path=${schema}` });
-const origin = 'http://127.0.0.1:5174';
+let origin = 'http://127.0.0.1:5174';
 const password = 'a long and memorable password';
 let app: FastifyInstance;
 let root: string;
@@ -36,7 +36,11 @@ test.beforeAll(async () => {
   await mkdir('output/playwright', { recursive: true });
 });
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page }, testInfo) => {
+  origin = testInfo.title.includes('enrolls a passkey')
+    ? 'http://localhost:5174'
+    : 'http://127.0.0.1:5174';
+
   const f = await fixture(db);
 
   workspace = f.org;
@@ -450,4 +454,73 @@ test('completes Keel MFA after SSO before enabling both workspace requirements',
   } finally {
     await provider.close();
   }
+});
+
+test('enrolls a passkey, signs in, completes MFA and removes the credential', async ({ page }) => {
+  const cdp = await page.context().newCDPSession(page);
+
+  await cdp.send('WebAuthn.enable');
+
+  const { authenticatorId } = await cdp.send('WebAuthn.addVirtualAuthenticator', {
+    options: {
+      protocol: 'ctap2',
+      transport: 'internal',
+      hasResidentKey: true,
+      hasUserVerification: true,
+      isUserVerified: true,
+      automaticPresenceSimulation: true,
+    },
+  });
+
+  await page.goto(link);
+  await page.getByLabel('Your name', { exact: true }).fill('Passkey owner');
+  await page.getByLabel('Password (at least 15 characters)', { exact: true }).fill(password);
+  await page.getByRole('button', { name: 'Create account and join', exact: true }).click();
+  await page.getByRole('link', { name: 'Account security', exact: true }).click();
+  await page.getByLabel('Password for passkey changes').fill(password);
+  await page.getByLabel('Passkey name', { exact: true }).fill('Personal laptop');
+  await page.getByRole('button', { name: 'Add passkey', exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Passkey added.' })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'Personal laptop', exact: true })).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.screenshot({ path: 'output/playwright/passkeys-desktop.png', fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: 'output/playwright/passkeys-mobile.png', fullPage: true });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole('button', { name: 'Disconnect Passkey owner' }).click();
+  await page.getByRole('button', { name: 'Sign in with a passkey', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Passkeys', exact: true })).toBeVisible();
+  await page.getByRole('link', { name: 'Account security', exact: true }).click();
+  await page.getByLabel('Current password', { exact: true }).fill(password);
+  await page.getByRole('button', { name: 'Set up authenticator', exact: true }).click();
+  const secret = await page.getByLabel('Authenticator setup key', { exact: true }).inputValue();
+
+  await page.getByLabel('Authenticator code', { exact: true }).fill(authenticatorCode(secret));
+  await page.getByRole('button', { name: 'Enable MFA', exact: true }).click();
+
+  const recovery = (await page.getByLabel('Recovery codes', { exact: true }).inputValue()).split(
+    '\n',
+  )[0];
+
+  await page.getByRole('button', { name: 'Disconnect Passkey owner' }).click();
+  await page.getByRole('button', { name: 'Sign in with a passkey', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Verify and sign in' })).toBeVisible();
+  await page.getByLabel('Authenticator or recovery code', { exact: true }).fill(recovery);
+  await page.getByRole('button', { name: 'Verify and sign in', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Passkeys', exact: true })).toBeVisible();
+  await page.getByRole('link', { name: 'Account security', exact: true }).click();
+  await page.getByLabel('Password for passkey changes').fill(password);
+  await page.getByRole('button', { name: 'Remove passkey and sign out', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Sign in to Keel' })).toBeVisible();
+
+  expect(
+    (
+      await db.query('SELECT 1 FROM passkeys p JOIN users u ON u.id=p.user_id WHERE u.email=$1', [
+        email,
+      ])
+    ).rowCount,
+  ).toBe(0);
+
+  await cdp.send('WebAuthn.removeVirtualAuthenticator', { authenticatorId });
 });

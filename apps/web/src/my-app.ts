@@ -1,3 +1,8 @@
+import {
+  browserSupportsWebAuthn,
+  startAuthentication,
+  type PublicKeyCredentialRequestOptionsJSON,
+} from '@simplewebauthn/browser';
 import { ResourcePage } from './resource-page';
 import { Api, type Dashboard } from './api';
 import { queueTask } from 'aurelia';
@@ -242,7 +247,7 @@ export class MyApp {
       Notifications: 'Delivery history and webhook destinations for deployment events.',
       Integrations: 'Connect existing CI workflows and retain their build artifacts.',
       'Audit log': 'A record of changes and the people behind them.',
-      'Account security': 'Authenticator protection and active browser sessions.',
+      'Account security': 'Passkeys, authenticator protection and active browser sessions.',
       'Workspace access': 'Workspace members, invitations and API tokens.',
     }[this.page];
   }
@@ -404,6 +409,47 @@ export class MyApp {
 
     if (!this.memberships.some((member) => member.id === this.selectedWorkspace)) {
       this.selectedWorkspace = this.memberships[0]?.id || '';
+    }
+  }
+
+  passkeysSupported =
+    browserSupportsWebAuthn() &&
+    !/^[\d.]+$/.test(location.hostname) &&
+    !location.hostname.includes(':');
+
+  async signInWithPasskey() {
+    this.busy = true;
+    this.error = '';
+
+    try {
+      const { options } = await this.api.auth<{ options: PublicKeyCredentialRequestOptionsJSON }>(
+        '/passkeys/options',
+        {},
+      );
+
+      const response = await startAuthentication({ optionsJSON: options });
+
+      const result = await this.api.auth<{ mfa_required?: boolean; challenge?: string }>(
+        '/passkeys/login',
+        { response },
+      );
+
+      if (result.mfa_required && result.challenge) {
+        this.mfaChallenge = result.challenge;
+        this.mfaCode = '';
+
+        return;
+      }
+
+      await this.restoreAccount();
+
+      if (!this.inviteToken) {
+        await this.switchWorkspace();
+      }
+    } catch (error) {
+      this.handleError(error);
+    } finally {
+      this.busy = false;
     }
   }
 

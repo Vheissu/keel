@@ -63,6 +63,7 @@ export async function accountAudit(tx: Transaction, userId: string, action: stri
 export async function clearChallenges(tx: Transaction, userId: string) {
   await tx.query('DELETE FROM mfa_challenges WHERE user_id=$1', [userId]);
   await tx.query('DELETE FROM mfa_enrollments WHERE user_id=$1', [userId]);
+  await tx.query('DELETE FROM passkey_attempts WHERE user_id=$1', [userId]);
 }
 
 export async function revokeAccountCredentials(tx: Transaction, userId: string) {
@@ -172,7 +173,8 @@ export class AccountSecurity {
               AND attempts < 5
             RETURNING
               user_id,
-              sso_connection_id
+              sso_connection_id,
+              passkey_id
           `,
           [sha256(challenge)],
         )
@@ -215,6 +217,8 @@ export class AccountSecurity {
           connection_id: attempt.sso_connection_id,
           mfa_verified: true,
         });
+      } else if (attempt.passkey_id) {
+        await accountAudit(tx, user.id, 'account.passkey_signed_in', { mfa_verified: true });
       } else {
         await accountAudit(tx, user.id, 'account.mfa_signed_in');
       }
@@ -341,6 +345,12 @@ export class AccountSecurity {
           enabled_at: user.mfa_enabled_at,
           recovery_codes_remaining: recovery.count,
           sessions,
+          passkeys: (
+            await tx.query(
+              'SELECT id,name,created_at,last_used_at,backed_up FROM passkeys WHERE user_id=$1 ORDER BY created_at,id',
+              [user.id],
+            )
+          ).rows,
         };
       });
     });

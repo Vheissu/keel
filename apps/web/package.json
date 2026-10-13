@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@aurelia/runtime-html": "2.0.0-rc.2",
+    "@simplewebauthn/browser": "^14.0.0",
     "aurelia": "2.0.0-rc.2"
   }
 }

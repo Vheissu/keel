@@ -1,3 +1,4 @@
+import { passkeyAuthenticator } from '../../tests/passkey-authenticator.js';
 import { run } from './process.js';
 import { authenticatorCode } from '../../tests/authenticator.js';
 import assert from 'node:assert/strict';
@@ -392,6 +393,41 @@ try {
   sessionHeaders['x-csrf-token'] = confirmation.json().csrf;
   const oldRecoveryCode = confirmation.json().recovery_codes[0];
 
+  console.log('Enrolling a passkey through the packaged HTTPS API.');
+  const passkey = passkeyAuthenticator();
+
+  const passkeyOptions = await http(
+    '/api/auth/passkeys/enroll',
+    {
+      name: 'Recovery drill key',
+      current_password: ownerPassword,
+    },
+    '',
+    false,
+    sessionHeaders,
+  );
+
+  assert.equal(passkeyOptions.status, 200);
+
+  const passkeyAdded = await http(
+    '/api/auth/passkeys/confirm',
+    {
+      attempt: passkeyOptions.json().attempt,
+      response: passkey.registration(
+        passkeyOptions.json().options.challenge,
+        installation.publicUrl,
+      ),
+    },
+    '',
+    false,
+    sessionHeaders,
+  );
+
+  assert.equal(passkeyAdded.status, 200);
+  const securityBefore = await http('/api/auth/security', undefined, '', false, sessionHeaders);
+
+  assert.equal(securityBefore.json().passkeys.length, 1);
+
   console.log('Configuring packaged SSO and verifying workspace policy recovery.');
   const ssoFile = join(root, 'sso.json');
 
@@ -604,6 +640,12 @@ try {
   const nextCookie = verifiedLogin.headers['set-cookie']![0].split(';')[0];
   const nextSession = await http('/api/auth/session', undefined, '', false, { cookie: nextCookie });
 
+  const restoredSecurity = await http('/api/auth/security', undefined, '', false, {
+    cookie: nextCookie,
+  });
+
+  assert.deepEqual(restoredSecurity.json().passkeys, []);
+
   const replacement = await http(
     '/api/v1/identity/tokens',
     { name: 'After restore', permissions: ['read', 'write'], expires_in_days: 1 },
@@ -679,7 +721,7 @@ try {
   );
 
   console.log(
-    'PASS: TLS, least-privilege runtime, stop barrier, durable restart, encrypted backup, corruption rejection, fresh-volume restore, retained bytes and keys, agent and identity quarantine, retained MFA, SSO configuration, policy recovery and recovery-code invalidation.',
+    'PASS: TLS, least-privilege runtime, stop barrier, durable restart, encrypted backup, corruption rejection, fresh-volume restore, retained bytes and keys, agent and identity quarantine, retained MFA, SSO configuration, passkey enrollment and quarantine, policy recovery and recovery-code invalidation.',
   );
 } finally {
   for (const [directory, project] of [

@@ -54,3 +54,7 @@ Run a drill with your own off-host backup and image archive before relying on th
 Hosted accounts retain their encrypted MFA authenticator secret after restore. Pending MFA challenges, setup and recovery codes are invalidated to prevent reuse of codes consumed after the backup. Sign in with the authenticator and replace recovery codes, or follow [operator MFA recovery](identity.md#mfa-and-active-sessions). The restore verifier checks that retained MFA secrets decrypt with the restored credential key.
 
 SSO provider configuration, account bindings and workspace policies also reflect the backup date. Verification checks the provider encryption envelopes. Pending SSO attempts are removed, and restored sessions and managed tokens are revoked. Test the provider before requiring SSO again; use [workspace policy recovery](identity.md#workspace-authentication-policy) if the retained provider is no longer available.
+
+## Passkeys after restore
+
+Restore clears registered passkeys and pending WebAuthn challenges. This prevents a backup from reviving removed credentials or rolling back signature counters. Users sign in with their password and MFA, then add passkeys again from Account security. Keep the public hostname stable for future passkey registrations. Server-assisted password recovery also removes passkeys when its link is redeemed.

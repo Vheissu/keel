@@ -1,3 +1,4 @@
+import { Passkeys } from './passkeys.js';
 import { Sso } from './sso.js';
 import {
   authPolicyInput,
@@ -31,6 +32,7 @@ export async function registerAuthRoutes(app: FastifyInstance, identity?: Identi
 
   await identity.security.register(app);
   await new Sso(identity).register(app);
+  await new Passkeys(identity).register(app);
 
   await app.register(
     async (auth) => {
@@ -210,6 +212,7 @@ export async function registerAuthRoutes(app: FastifyInstance, identity?: Identi
             );
           }
 
+          await tx.query('DELETE FROM passkeys WHERE user_id=$1', [reset.user_id]);
           await resetPassword(tx, reset.user_id, next);
         });
 
