@@ -90,7 +90,7 @@ it('verifies all retained artifacts and encrypted versions and fails for corrupt
     }),
   );
 
-  expect(await verify(db)).toMatchObject({ migrations: 11, artifacts: 1, secret_versions: 1 });
+  expect(await verify(db)).toMatchObject({ migrations: 12, artifacts: 1, secret_versions: 1 });
   vi.stubEnv('KEEL_DEPLOYMENT_SECRET_KEY', randomBytes(32).toString('base64'));
   await expect(verify(db)).rejects.toThrow('decrypt');
   await writeFile(join(root, f.org, digest), 'tampered');
@@ -260,6 +260,64 @@ it('verifies retained MFA secrets and quarantines recovery codes, challenges and
     (await db.query('SELECT revoked_at FROM browser_sessions WHERE id=$1', [sessionId])).rows[0]
       .revoked_at,
   ).not.toBeNull();
+
+  vi.stubEnv('KEEL_CREDENTIAL_KEY', randomBytes(32).toString('base64'));
+  await expect(verify(db)).rejects.toThrow('decrypt');
+});
+
+it('verifies encrypted SSO configuration and removes pending attempts while retaining policy', async () => {
+  const connection = randomUUID();
+  const vault = new CredentialVault(process.env.KEEL_CREDENTIAL_KEY!, 'sso');
+  const configuration = vault.encrypt(f.org, connection, { client_secret: 'retained-secret' });
+
+  await db.query(
+    `
+      INSERT INTO
+        sso_connections (organisation_id, id, name, configuration)
+      VALUES
+        ($1, $2, $3, $4)
+    `,
+    [f.org, connection, 'Company', configuration],
+  );
+
+  await db.query(
+    `
+      INSERT INTO
+        sso_attempts (
+          state_hash,
+          binding_hash,
+          connection_id,
+          proof,
+          expires_at
+        )
+      VALUES
+        (
+          'state',
+          'binding',
+          $1,
+          $2,
+          now() + interval '5 minutes'
+        )
+    `,
+    [connection, vault.encrypt(f.org, connection, { verifier: 'old' })],
+  );
+
+  await db.query(
+    'INSERT INTO workspace_auth_policies(organisation_id,require_sso) VALUES($1,true)',
+    [f.org],
+  );
+
+  expect(await verify(db)).toMatchObject({ sso_connections: 1 });
+  await quarantine(db);
+  expect((await db.query('SELECT * FROM sso_attempts')).rowCount).toBe(0);
+
+  expect((await db.query('SELECT * FROM sso_connections')).rows[0].configuration).toEqual(
+    configuration,
+  );
+
+  expect(
+    (await db.query('SELECT require_sso FROM workspace_auth_policies')).rows[0].require_sso,
+  ).toBe(true);
 
   vi.stubEnv('KEEL_CREDENTIAL_KEY', randomBytes(32).toString('base64'));
   await expect(verify(db)).rejects.toThrow('decrypt');

@@ -171,21 +171,55 @@ export class AccountSecurity {
               AND expires_at > now()
               AND attempts < 5
             RETURNING
-              user_id
+              user_id,
+              sso_connection_id
           `,
           [sha256(challenge)],
         )
       ).rows[0];
 
-      if (!attempt || !(await this.consume(tx, user, code))) {
+      if (!attempt) {
         // Return instead of throwing so the failed-attempt count commits.
         return null;
       }
 
-      await tx.query('DELETE FROM mfa_challenges WHERE token_hash=$1', [sha256(challenge)]);
-      await accountAudit(tx, user.id, 'account.mfa_signed_in');
+      if (attempt.sso_connection_id) {
+        const connection = await tx.query(
+          `
+            SELECT
+              1
+            FROM
+              sso_connections c
+              JOIN memberships m ON m.organisation_id = c.organisation_id
+            WHERE
+              c.id = $1
+              AND m.user_id = $2
+              AND m.removed_at IS NULL
+          `,
+          [attempt.sso_connection_id, user.id],
+        );
 
-      return this.identity.issueSession(tx, user.id, req, true);
+        if (!connection.rowCount) {
+          return null;
+        }
+      }
+
+      if (!(await this.consume(tx, user, code))) {
+        return null;
+      }
+
+      await tx.query('DELETE FROM mfa_challenges WHERE token_hash=$1', [sha256(challenge)]);
+
+      if (attempt.sso_connection_id) {
+        await accountAudit(tx, user.id, 'account.sso_signed_in', {
+          connection_id: attempt.sso_connection_id,
+          mfa_verified: true,
+        });
+      } else {
+        await accountAudit(tx, user.id, 'account.mfa_signed_in');
+      }
+
+      return this.identity.issueSession(tx, user.id, req, true, attempt.sso_connection_id);
     });
 
     if (!token) {
@@ -427,7 +461,15 @@ export class AccountSecurity {
             );
 
             await revokeAccountCredentials(tx, user.id);
-            const token = await identity.issueSession(tx, user.id, req, true);
+
+            const token = await identity.issueSession(
+              tx,
+              user.id,
+              req,
+              true,
+              session.sso_connection_id,
+              session.authenticated_at,
+            );
 
             const codes = await this.recoveryCodes(tx, user.id);
 

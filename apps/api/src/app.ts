@@ -56,6 +56,14 @@ export async function createApp(
     logger: logger
       ? {
           ...(typeof logger === 'object' ? logger : {}),
+          serializers: {
+            req: (req) => ({
+              method: req.method,
+              url: req.url?.split('?')[0],
+              hostname: req.hostname,
+              remoteAddress: req.ip,
+            }),
+          },
           redact: ['req.headers.authorization', 'req.headers.cookie', 'res.headers["set-cookie"]'],
         }
       : false,

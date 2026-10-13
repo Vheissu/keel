@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import { configureSso } from '../../api/src/sso.js';
 import { accountAudit, revokeAccountCredentials } from '../../api/src/account-security.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -11,6 +13,59 @@ export async function identityAdmin(db: Database, args: string[], origin: string
   const [command, first, second] = args;
 
   identityOrigin(origin);
+
+  if (command === 'configure-sso' && args.length === 3) {
+    const contents = await readFile(second, 'utf8');
+    let config: unknown;
+
+    try {
+      config = JSON.parse(contents);
+    } catch {
+      throw new Error('The SSO configuration file must contain valid JSON.');
+    }
+
+    return configureSso(db, z.string().uuid().parse(first), config, origin);
+  }
+
+  if (command === 'reset-auth-policy' && args.length === 2) {
+    const organisation = z.string().uuid().parse(first);
+
+    await transaction(db, async (tx) => {
+      const workspace = await tx.query(
+        'SELECT id FROM organisations WHERE id=$1 FOR NO KEY UPDATE',
+        [organisation],
+      );
+
+      if (!workspace.rowCount) {
+        throw new Error('Workspace not found.');
+      }
+
+      await tx.query('DELETE FROM workspace_auth_policies WHERE organisation_id=$1', [
+        organisation,
+      ]);
+
+      const actor = randomUUID();
+
+      await tx.query(
+        "INSERT INTO actors(id,organisation_id,name) VALUES($1,$2,'Server operator')",
+        [actor, organisation],
+      );
+
+      await auditEvent(
+        tx,
+        {
+          organisation_id: organisation,
+          actor_id: actor,
+          name: 'Server operator',
+          permissions: [],
+        },
+        'workspace.auth_policy_reset',
+        organisation,
+      );
+    });
+
+    return { reset: true };
+  }
 
   if (command === 'reset-mfa' && args.length === 2) {
     const email = emailInput.parse(first);
@@ -162,6 +217,6 @@ export async function identityAdmin(db: Database, args: string[], origin: string
   }
 
   throw new Error(
-    'Use invite-owner <workspace-id> <email>, create-workspace <name> <email>, reset-password <email>, or reset-mfa <email>.',
+    'Use invite-owner <workspace-id> <email>, create-workspace <name> <email>, reset-password <email>, reset-mfa <email>, configure-sso <workspace-id> <config-file>, or reset-auth-policy <workspace-id>.',
   );
 }

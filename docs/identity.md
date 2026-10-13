@@ -88,7 +88,7 @@ This clears MFA, revokes all sessions and API tokens, invalidates password-reset
 
 Restore retains and verifies encrypted authenticator secrets, while invalidating pending challenges, setup and recovery codes. Generate new recovery codes after signing in with the authenticator. MFA settings and the last used code step reflect the backup date; use operator recovery if the restored authenticator is no longer available.
 
-SSO, passkeys, mandatory workspace MFA policies, configurable session lifetimes, email delivery, custom roles and project-scoped tokens remain later work. Workspace creation and account recovery are server operations.
+SAML, passkeys, SCIM, email delivery, custom roles and project-scoped tokens remain later work. Workspace creation and account recovery are server operations.
 
 ## API
 
@@ -132,3 +132,59 @@ For MFA accounts, `/api/auth/login` returns `{mfa_required: true, challenge}` wi
 | `/api/auth/sessions/revoke`    | `{id}` or `{others: true}` | Revocation count and `signed_out` flag                                                         |
 
 The authenticator implementation follows [RFC 6238](https://www.rfc-editor.org/rfc/rfc6238), with enrollment and recovery controls informed by the [OWASP MFA guidance](https://cheatsheetseries.owasp.org/cheatsheets/Multifactor_Authentication_Cheat_Sheet.html).
+
+## Workspace SSO
+
+Keel supports one OpenID Connect provider per workspace using the authorization-code flow, S256 PKCE and signed RS256 ID tokens. The provider must support `client_secret_post`, the `openid email` scopes, a verified email claim and `auth_time`. Keel checks issuer, audience, expiry, signature, nonce and state. Configure the provider to accept this exact callback URL:
+
+```text
+https://keel.example/api/auth/sso/callback
+```
+
+A server operator configures the provider from a private JSON file. Copy endpoint URLs from the provider's trusted metadata. These endpoints are trusted server configuration; workspace members cannot supply or change them. HTTPS is required, except loopback HTTP when Keel itself uses a loopback HTTP development origin. Provider requests have a ten-second timeout and do not follow redirects.
+
+```json
+{
+  "name": "Company sign-in",
+  "issuer": "https://identity.example/tenant",
+  "authorization_endpoint": "https://identity.example/tenant/authorize",
+  "token_endpoint": "https://identity.example/tenant/token",
+  "jwks_uri": "https://identity.example/tenant/keys",
+  "client_id": "keel",
+  "client_secret": "replace-with-the-provider-secret"
+}
+```
+
+Restrict the file to the operator, then run either:
+
+```sh
+npm run identity -- configure-sso WORKSPACE_UUID /private/sso.json
+npm run self-host -- identity-sso --directory /srv/keel --workspace WORKSPACE_UUID --config-file /private/sso.json
+```
+
+The command stores the configuration encrypted under `KEEL_CREDENTIAL_KEY` with a separate SSO context. It prints the workspace ID and callback URL, without the secret. Replacing the configuration retires the previous subject bindings, pending SSO attempts and SSO sessions, revokes managed workspace tokens, and turns off the required-SSO rule. Members must connect the replacement provider before an owner enables that rule again. Use this procedure for client-secret rotation too.
+
+Accounts remain invitation-only. Accept a workspace invitation and sign in with your password first, including Keel MFA if enabled. In **Account security**, choose **Connect SSO account** for the workspace. The provider's verified email must match your account. The connection binds that provider's subject to your account; an email match alone never creates a connection or signs someone in. Changing a subject requires operator reconfiguration. SSO does not create memberships, synchronize roles or accept invitations automatically.
+
+After connecting, choose **Sign in with SSO**, or enter the workspace ID on the signed-out screen. An SSO session grants access only to that workspace, even if the account belongs to others. Local password sessions can still open Account security when a workspace requires SSO. If Keel MFA is enabled, SSO sign-in also requires a Keel authenticator or recovery code. Provider MFA claims do not replace that check.
+
+SSO attempts expire after ten minutes and are single-use, with a separate HttpOnly browser-binding cookie. PKCE verifiers are encrypted in the database. Callback failures return a fixed error without exposing provider responses. Access and refresh tokens are neither stored nor used. Provider logout and deprovisioning do not end an existing Keel session: remove the workspace membership or revoke the session in Keel when access must stop immediately.
+
+## Workspace authentication policy
+
+An owner can open **Workspace access** to require SSO, require a Keel authenticator, disable managed API tokens, or shorten the maximum browser-session age to 15–720 minutes. The one-hour idle limit still applies. Cookie rotation, MFA enrollment and invitation acceptance preserve the original sign-in time. Every member, including owners, must meet the policy. The owner saving a rule must already meet its new sign-in and MFA requirements; this prevents enabling a rule before testing it. Reads enforce the current policy, and writes recheck it inside the transaction.
+
+Every policy save revokes existing managed tokens for that workspace. When tokens remain allowed, they are an explicit automation exception to SSO and browser-session age limits. A user must meet the workspace's browser policy to issue a new token, and required MFA must remain enabled on the account for the token to work. Disabling tokens blocks issuance and bearer-token access.
+
+Password and MFA recovery do not remove workspace rules. For an inaccessible provider or an owner who cannot satisfy the rules, a server operator can reset the workspace policy after verifying the request:
+
+```sh
+npm run identity -- reset-auth-policy WORKSPACE_UUID
+npm run self-host -- identity-reset-policy --directory /srv/keel --workspace WORKSPACE_UUID
+```
+
+This restores optional SSO/MFA, allows tokens and restores the 12-hour maximum. It does not reinstate revoked sessions or tokens. The reset is audited. Provider configuration, account bindings and policies survive backups; restore verification decrypts provider configuration, and quarantine removes pending SSO attempts and revokes sessions and tokens.
+
+`POST /api/auth/sso/start` takes `{workspace_id, link}` and returns an authorization URL. Linking requires a local browser session and CSRF header; both modes require the configured Origin. `GET /api/auth/sso/callback` consumes the browser-bound attempt. Signed-in members can read policy; only owners can save it at `GET` and `POST /api/v1/identity/auth-policy`, with `{require_sso, require_mfa, allow_api_tokens, session_minutes}` as the write body.
+
+Protocol validation uses [openid-client's authorization-code grant checks](https://github.com/panva/openid-client/blob/main/docs/interfaces/AuthorizationCodeGrantChecks.md) and explicit ID-token signature verification.

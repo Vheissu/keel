@@ -1,3 +1,9 @@
+import { Sso } from './sso.js';
+import {
+  authPolicyInput,
+  workspaceAuthPolicy,
+  enforceWorkspaceAuth,
+} from './workspace-auth-policy.js';
 import { clearChallenges } from './account-security.js';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
@@ -24,6 +30,7 @@ export async function registerAuthRoutes(app: FastifyInstance, identity?: Identi
   const control = identity.control;
 
   await identity.security.register(app);
+  await new Sso(identity).register(app);
 
   await app.register(
     async (auth) => {
@@ -284,6 +291,74 @@ export async function registerIdentityRoutes(api: FastifyInstance, identity?: Id
   const pageInput = z
     .object({ offset: z.coerce.number().int().min(0).max(100000).default(0) })
     .strict();
+
+  api.get('/identity/auth-policy', async (req) => {
+    sessionOnly(req);
+
+    return workspaceAuthPolicy(control.db, req.principal.organisation_id);
+  });
+
+  api.post('/identity/auth-policy', async (req) => {
+    identity.admin(req.principal, true);
+    const policy = authPolicyInput.parse(req.body);
+
+    return mutate(req, async (tx) => {
+      // An owner must prove the new requirements before enforcing them for everyone.
+      await enforceWorkspaceAuth(tx, req.principal, policy);
+
+      await tx.query(
+        `
+          INSERT INTO
+            workspace_auth_policies (
+              organisation_id,
+              require_sso,
+              require_mfa,
+              allow_api_tokens,
+              session_minutes
+            )
+          VALUES
+            ($1, $2, $3, $4, $5)
+          ON CONFLICT (organisation_id) DO UPDATE
+          SET
+            require_sso = $2,
+            require_mfa = $3,
+            allow_api_tokens = $4,
+            session_minutes = $5
+        `,
+        [
+          req.principal.organisation_id,
+          policy.require_sso,
+          policy.require_mfa,
+          policy.allow_api_tokens,
+          policy.session_minutes,
+        ],
+      );
+
+      // Existing automation credentials must be reissued under the new policy.
+      await tx.query(
+        `
+          UPDATE api_tokens
+          SET
+            revoked_at = now()
+          WHERE
+            organisation_id = $1
+            AND user_id IS NOT NULL
+            AND revoked_at IS NULL
+        `,
+        [req.principal.organisation_id],
+      );
+
+      await control.audit(
+        tx,
+        req.principal,
+        'workspace.auth_policy_changed',
+        req.principal.organisation_id,
+        policy,
+      );
+
+      return policy;
+    });
+  });
 
   api.get('/identity/members', async (req) => {
     identity.admin(req.principal);

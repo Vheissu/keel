@@ -14,7 +14,8 @@ export class CredentialVault {
 
   constructor(
     encodedKey: string,
-    private purpose: 'credentials' | 'deployment-secrets' | 'notifications' | 'mfa' = 'credentials',
+    private purpose:
+      'credentials' | 'deployment-secrets' | 'notifications' | 'mfa' | 'sso' = 'credentials',
   ) {
     this.key = Buffer.from(encodedKey, 'base64');
 

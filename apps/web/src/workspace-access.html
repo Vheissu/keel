@@ -15,6 +15,56 @@
     />
     <button class="button secondary" click.trigger="revealed = ''">Hide value</button>
   </section>
+  <section if.bind="principal.role === 'owner'">
+    <h2>Authentication policy</h2>
+    <p>
+      Requirements apply to every member, including owners. Sign in using the new requirements
+      before saving. Every policy change revokes existing workspace API tokens.
+    </p>
+    <form class="target-form" submit.trigger:prevent="saveAuthPolicy()">
+      <label class="check-label">
+        <input
+          type="checkbox"
+          checked.bind="authPolicy.require_sso"
+          disabled.bind="busy || !policyLoaded"
+        />
+        Require workspace SSO
+      </label>
+      <label class="check-label">
+        <input
+          type="checkbox"
+          checked.bind="authPolicy.require_mfa"
+          disabled.bind="busy || !policyLoaded"
+        />
+        Require a Keel authenticator
+      </label>
+      <label class="check-label">
+        <input
+          type="checkbox"
+          checked.bind="authPolicy.allow_api_tokens"
+          disabled.bind="busy || !policyLoaded"
+        />
+        Allow managed API tokens
+      </label>
+      <label for="policy-session-minutes">Maximum session age (minutes)</label>
+      <input
+        id="policy-session-minutes"
+        type="number"
+        min="15"
+        max="720"
+        required
+        value.bind="authPolicy.session_minutes"
+        disabled.bind="busy || !policyLoaded"
+      />
+      <p class="help">
+        SSO requires a provider configured by your server operator. MFA uses the authenticator in
+        Account security. Allowed API tokens remain a separate way to access this workspace.
+      </p>
+      <button type="submit" class="button primary" disabled.bind="busy || !policyLoaded">
+        Save authentication policy
+      </button>
+    </form>
+  </section>
   <template if.bind="admin">
     <section>
       <h2>Members</h2>
@@ -158,7 +208,16 @@
           ${permission}
         </label>
       </fieldset>
-      <button class="button primary" type="submit" disabled.bind="busy">Create API token</button>
+      <p if.bind="policyLoaded && !authPolicy.allow_api_tokens" class="help">
+        API tokens are disabled by this workspace’s authentication policy.
+      </p>
+      <button
+        class="button primary"
+        type="submit"
+        disabled.bind="busy || !policyLoaded || !authPolicy.allow_api_tokens"
+      >
+        Create API token
+      </button>
     </form>
     <div class="table-wrap">
       <table>

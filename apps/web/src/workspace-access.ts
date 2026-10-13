@@ -48,6 +48,13 @@ export class WorkspaceAccess {
   error = '';
   notice = '';
   busy = false;
+  policyLoaded = false;
+  authPolicy = {
+    require_sso: false,
+    require_mfa: false,
+    allow_api_tokens: true,
+    session_minutes: 720,
+  };
   private active = false;
   private revision = 0;
 
@@ -88,10 +95,11 @@ export class WorkspaceAccess {
   }
 
   async load() {
+    this.policyLoaded = false;
     const revision = ++this.revision;
 
     try {
-      const [tokens, members, invitations] = await Promise.all([
+      const [tokens, members, invitations, policy] = await Promise.all([
         this.api.request<Listing<Token>>(`/identity/tokens?offset=${this.tokenOffset}`),
         this.admin
           ? this.api.request<Listing<Member>>(`/identity/members?offset=${this.memberOffset}`)
@@ -101,12 +109,15 @@ export class WorkspaceAccess {
               `/identity/invitations?offset=${this.invitationOffset}`,
             )
           : Promise.resolve(this.invitations),
+        this.api.request<typeof this.authPolicy>('/identity/auth-policy'),
       ]);
 
       if (this.active && revision === this.revision) {
         this.tokens = tokens;
         this.members = members;
         this.invitations = invitations;
+        this.authPolicy = policy;
+        this.policyLoaded = true;
       }
     } catch (error) {
       if (this.active && revision === this.revision) {
@@ -138,6 +149,19 @@ export class WorkspaceAccess {
     } finally {
       this.busy = false;
     }
+  }
+
+  saveAuthPolicy() {
+    return this.run(async () => {
+      await this.api.request('/identity/auth-policy', 'POST', {
+        require_sso: this.authPolicy.require_sso,
+        require_mfa: this.authPolicy.require_mfa,
+        allow_api_tokens: this.authPolicy.allow_api_tokens,
+        session_minutes: Number(this.authPolicy.session_minutes),
+      });
+
+      this.notice = 'Authentication policy saved. Existing workspace API tokens were revoked.';
+    });
   }
 
   invite() {

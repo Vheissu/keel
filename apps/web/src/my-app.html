@@ -213,6 +213,42 @@
       <p if.bind="account && !memberships.length && !invitation">
         You have no active workspace memberships. Ask a workspace owner for an invitation.
       </p>
+      <form
+        if.bind="!account && !mfaChallenge && !resetToken && !invitation"
+        submit.trigger:prevent="startSso()"
+      >
+        <h3>Workspace SSO</h3>
+        <label for="sso-workspace">Workspace ID</label>
+        <input
+          id="sso-workspace"
+          value.bind="ssoWorkspace"
+          required
+          maxlength="36"
+          autocomplete="off"
+        />
+        <button type="submit" class="button secondary" disabled.bind="busy">
+          Sign in with SSO
+        </button>
+      </form>
+      <div if.bind="account && selectedMembership.sso_name" class="target-form">
+        <p>SSO provider: ${selectedMembership.sso_name}</p>
+        <button
+          if.bind="!selectedMembership.sso_linked && !ssoSessionWorkspace"
+          class="button secondary"
+          click.trigger="startSso(true)"
+          disabled.bind="busy"
+        >
+          Connect SSO account
+        </button>
+        <button
+          if.bind="selectedMembership.sso_linked"
+          class="button primary"
+          click.trigger="startSso()"
+          disabled.bind="busy"
+        >
+          Sign in with SSO
+        </button>
+      </div>
       <button if.bind="account" class="button secondary" click.trigger="signOut()">Sign out</button>
     </section>
     <section
@@ -254,6 +290,39 @@
       <boat-mark animated.bind="true"></boat-mark>
       <span>Loading workspace…</span>
     </div>
+    <section if.bind="account && hasSso && page === 'Account security'" class="target-form">
+      <h2>Workspace SSO</h2>
+      <p>
+        Connect each provider while signed in with your password. Your workspace owner can provide
+        the workspace ID for future SSO sign-ins.
+      </p>
+      <div repeat.for="member of memberships">
+        <template if.bind="member.sso_name">
+          <h3>${member.name}</h3>
+          <p>${member.sso_name} · ${member.sso_linked ? 'Connected' : 'Not connected'}</p>
+          <p>
+            Workspace ID:
+            <code>${member.id}</code>
+          </p>
+          <button
+            if.bind="!member.sso_linked && !ssoSessionWorkspace"
+            class="button secondary"
+            click.trigger="startSso(true, member.id)"
+            disabled.bind="busy"
+          >
+            Connect SSO account
+          </button>
+          <button
+            if.bind="member.sso_linked"
+            class="button secondary"
+            click.trigger="startSso(false, member.id)"
+            disabled.bind="busy"
+          >
+            Sign in with SSO
+          </button>
+        </template>
+      </div>
+    </section>
     <account-security
       if.bind="account && !api.token && page === 'Account security'"
       api.bind="api"

@@ -64,7 +64,44 @@ export class MyApp {
   token = '';
   hosted = false;
   account: { id: string; name: string; email: string } | null = null;
-  memberships: { id: string; name: string; role: string }[] = [];
+  memberships: {
+    id: string;
+    name: string;
+    role: string;
+    sso_name?: string;
+    sso_linked?: boolean;
+  }[] = [];
+  ssoWorkspace = '';
+  ssoSessionWorkspace = '';
+
+  get hasSso() {
+    return this.memberships.some((member) => member.sso_name);
+  }
+
+  get selectedMembership() {
+    return this.memberships.find((member) => member.id === this.selectedWorkspace);
+  }
+
+  async startSso(
+    link = false,
+    workspace = this.account ? this.selectedWorkspace : this.ssoWorkspace,
+  ) {
+    this.busy = true;
+    this.error = '';
+
+    try {
+      const result = await this.api.auth<{ url: string }>('/sso/start', {
+        workspace_id: workspace,
+        link,
+      });
+
+      window.location.assign(result.url);
+    } catch (error) {
+      this.handleError(error);
+      this.busy = false;
+    }
+  }
+
   selectedWorkspace = '';
   email = '';
   password = '';
@@ -296,7 +333,15 @@ export class MyApp {
 
   async loadAccount() {
     const hash = window.location.hash;
-    const secret = new URLSearchParams(hash.split('?')[1] || '').get('token') || '';
+    const params = new URLSearchParams(hash.split('?')[1] || '');
+    const secret = params.get('token') || '';
+    const sso = hash.startsWith('#sso?');
+
+    if (sso) {
+      this.mfaChallenge = params.get('challenge') || '';
+      window.history.replaceState(null, '', '#account-security');
+      this.page = 'Account security';
+    }
 
     if (hash.startsWith('#accept-invite?')) {
       this.inviteToken = secret;
@@ -320,6 +365,13 @@ export class MyApp {
       if (this.account && !this.inviteToken && !this.resetToken) {
         await this.switchWorkspace();
       }
+
+      if (sso && params.has('error')) {
+        this.error =
+          'SSO could not be completed. Sign in with your password, connect your SSO account in Account security, and try again.';
+      } else if (sso && params.has('linked')) {
+        this.notice = 'SSO account connected. You can now sign in with your workspace provider.';
+      }
     } catch (error) {
       this.handleError(error);
     }
@@ -330,13 +382,25 @@ export class MyApp {
       enabled: boolean;
       user: { id: string; name: string; email: string } | null;
       csrf?: string;
-      memberships: { id: string; name: string; role: string }[];
+      sso_workspace?: string;
+      memberships: {
+        id: string;
+        name: string;
+        role: string;
+        sso_name?: string;
+        sso_linked?: boolean;
+      }[];
     }>('/session');
 
     this.hosted = result.enabled;
     this.account = result.user;
     this.memberships = result.memberships;
     this.api.csrf = result.csrf || '';
+    this.ssoSessionWorkspace = result.sso_workspace || '';
+
+    if (result.sso_workspace) {
+      this.selectedWorkspace = result.sso_workspace;
+    }
 
     if (!this.memberships.some((member) => member.id === this.selectedWorkspace)) {
       this.selectedWorkspace = this.memberships[0]?.id || '';
@@ -477,6 +541,7 @@ export class MyApp {
   }
 
   disconnect() {
+    this.ssoSessionWorkspace = '';
     this.mfaChallenge = '';
     this.mfaCode = '';
     this.refreshRevision++;

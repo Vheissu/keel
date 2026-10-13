@@ -101,6 +101,13 @@ export async function verify(db: Database) {
     notificationVault.decrypt(endpoint.organisation_id, endpoint.id, endpoint.credentials);
   }
 
+  const ssoVault = new CredentialVault(process.env.KEEL_CREDENTIAL_KEY!, 'sso');
+  const providers = (await db.query('SELECT * FROM sso_connections')).rows;
+
+  for (const provider of providers) {
+    ssoVault.decrypt(provider.organisation_id, provider.id, provider.configuration);
+  }
+
   const mfaVault = new CredentialVault(process.env.KEEL_CREDENTIAL_KEY!, 'mfa');
 
   const accounts = (await db.query('SELECT id,mfa_secret FROM users WHERE mfa_secret IS NOT NULL'))
@@ -138,6 +145,7 @@ export async function verify(db: Database) {
   return {
     migrations: applied.length,
     mfa_accounts: accounts.length,
+    sso_connections: providers.length,
     artifacts: artifacts.length,
     connections: connections.length,
     notification_endpoints: endpoints.length,
@@ -149,6 +157,7 @@ export async function quarantine(db: Database) {
   return transaction(db, async (tx) => {
     const organisations = (await tx.query('SELECT id FROM organisations')).rows;
 
+    await tx.query('DELETE FROM sso_attempts');
     await tx.query('DELETE FROM mfa_challenges');
     await tx.query('DELETE FROM mfa_enrollments');
     await tx.query('DELETE FROM mfa_recovery_codes');

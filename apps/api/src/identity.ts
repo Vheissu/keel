@@ -1,3 +1,4 @@
+import { enforceWorkspaceAuth, workspaceAuthPolicy } from './workspace-auth-policy.js';
 import { AccountSecurity, accountAudit } from './account-security.js';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { FastifyRequest } from 'fastify';
@@ -110,6 +111,8 @@ export class Identity {
                 s.id AS session_id,
                 s.user_id,
                 s.mfa_verified,
+                s.sso_connection_id,
+                s.authenticated_at,
                 u.email,
                 u.name
               FROM
@@ -161,6 +164,8 @@ export class Identity {
     return { ...row, csrf: csrfFor(token) } as {
       session_id: string;
       mfa_verified: boolean;
+      sso_connection_id: string | null;
+      authenticated_at: Date;
       user_id: string;
       email: string;
       name: string;
@@ -197,7 +202,7 @@ export class Identity {
       );
     }
 
-    return {
+    const principal = {
       organisation_id: organisation,
       actor_id: member.actor_id,
       name: session.name,
@@ -206,6 +211,10 @@ export class Identity {
       session_id: session.session_id,
       role: member.role,
     };
+
+    await enforceWorkspaceAuth(this.control.db, principal);
+
+    return principal;
   }
 
   async sessionInfo(req: FastifyRequest) {
@@ -221,10 +230,22 @@ export class Identity {
           SELECT
             m.organisation_id AS id,
             o.name,
-            m.role
+            m.role,
+            c.name AS sso_name,
+            c.id AS sso_connection_id,
+            EXISTS (
+              SELECT
+                1
+              FROM
+                sso_identities si
+              WHERE
+                si.connection_id = c.id
+                AND si.user_id = m.user_id
+            ) AS sso_linked
           FROM
             memberships m
             JOIN organisations o ON o.id = m.organisation_id
+            LEFT JOIN sso_connections c ON c.organisation_id = o.id
           WHERE
             m.user_id = $1
             AND m.removed_at IS NULL
@@ -241,10 +262,20 @@ export class Identity {
       user: { id: session.user_id, name: session.name, email: session.email },
       csrf: session.csrf,
       memberships,
+      sso_workspace: session.sso_connection_id
+        ? memberships.find((m) => m.sso_connection_id === session.sso_connection_id)?.id
+        : null,
     };
   }
 
-  async issueSession(tx: Transaction, userId: string, req?: FastifyRequest, mfaVerified = false) {
+  async issueSession(
+    tx: Transaction,
+    userId: string,
+    req?: FastifyRequest,
+    mfaVerified = false,
+    ssoConnection: string | null = null,
+    authenticatedAt?: Date,
+  ) {
     const token = newOpaque();
 
     await tx.query(
@@ -257,17 +288,21 @@ export class Identity {
             expires_at,
             user_agent,
             ip_address,
-            mfa_verified
+            mfa_verified,
+            sso_connection_id,
+            authenticated_at
           )
         VALUES
           (
             $1,
             $2,
             $3,
-            now() + interval '12 hours',
+            COALESCE($8::timestamptz, now()) + interval '12 hours',
             $4,
             $5,
-            $6
+            $6,
+            $7,
+            COALESCE($8::timestamptz, now())
           )
       `,
       [
@@ -277,6 +312,8 @@ export class Identity {
         (req?.headers['user-agent'] || '').slice(0, 512),
         (req?.ip || '').slice(0, 255),
         mfaVerified,
+        ssoConnection,
+        authenticatedAt ?? null,
       ],
     );
 
@@ -607,7 +644,14 @@ export class Identity {
         { role: invite.role },
       );
 
-      return this.issueSession(tx, userId!, req, session?.mfa_verified ?? false);
+      return this.issueSession(
+        tx,
+        userId!,
+        req,
+        session?.mfa_verified ?? false,
+        session?.sso_connection_id ?? null,
+        session?.authenticated_at,
+      );
     });
   }
 
@@ -730,6 +774,16 @@ export class Identity {
   async issueToken(tx: Transaction, p: Principal, input: z.infer<typeof tokenInput>) {
     if (!p.session_id || !p.user_id) {
       throw new DomainError('FORBIDDEN', 'Sign in to manage your API tokens.', 403);
+    }
+
+    const policy = await workspaceAuthPolicy(tx, p.organisation_id);
+
+    if (!policy.allow_api_tokens) {
+      throw new DomainError(
+        'AUTH_POLICY_REQUIRED',
+        'API tokens are disabled for this workspace.',
+        403,
+      );
     }
 
     if (input.permissions.some((permission) => !p.permissions.includes(permission))) {

@@ -1,3 +1,4 @@
+import { enforceWorkspaceAuth } from './workspace-auth-policy.js';
 import type { Database, Transaction } from '../../../packages/database/src/index.js';
 import {
   DomainError,
@@ -74,6 +75,8 @@ export async function authenticateToken(
   }
 
   delete row.removed_at;
+
+  await enforceWorkspaceAuth(db, row);
 
   return row;
 }
@@ -166,6 +169,8 @@ export async function lockPrincipal(tx: Transaction, p: Principal) {
         `,
         [p.token_id, p.user_id],
       );
+
+  await enforceWorkspaceAuth(tx, p);
 
   if (!credential.rowCount) {
     throw unauthenticated();

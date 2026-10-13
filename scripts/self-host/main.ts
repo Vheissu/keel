@@ -1,6 +1,6 @@
 import { parseArgs } from 'node:util';
 import { randomBytes } from 'node:crypto';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile, readFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { backup, restore, validateBackup } from './backup.js';
 import { readKey } from './archive.js';
@@ -24,6 +24,8 @@ const help = `Keel self-hosted operations
   npm run self-host -- identity-create --directory <directory> --name <name> --email <email>
   npm run self-host -- identity-reset --directory <directory> --email <email>
   npm run self-host -- identity-reset-mfa --directory <directory> --email <email>
+  npm run self-host -- identity-sso --directory <directory> --workspace <uuid> --config-file <path>
+  npm run self-host -- identity-reset-policy --directory <directory> --workspace <uuid>
 
 Init options: --public-url https://keel.example:8443 --https-port 8443 --agent-port 8444 --bind 127.0.0.1 --image-tag 0.1.0
 Stop requires completed deployments and reconciliation. Backups require all services stopped.
@@ -48,6 +50,7 @@ try {
       bind: { type: 'string' },
       'image-tag': { type: 'string' },
       'key-file': { type: 'string' },
+      'config-file': { type: 'string' },
       output: { type: 'string' },
       backup: { type: 'string' },
     },
@@ -166,14 +169,30 @@ try {
 
           case 'identity-reset':
 
+          case 'identity-sso':
+          case 'identity-reset-policy':
+
           case 'identity-reset-mfa': {
             if (!installation.publicUrl) {
               throw new Error('Set publicUrl in installation.json to enable hosted identity.');
             }
 
             let args: string[];
+            const volumes: string[] = [];
 
-            if (command === 'identity-owner') {
+            if (command === 'identity-sso') {
+              const configFile = join(lock, 'sso.json');
+              const contents = await readFile(resolve(required('config-file')));
+
+              // The private lock directory protects the host copy; the mounted file is
+              // readable by the container's unprivileged user on Linux as well as macOS.
+              await writeFile(configFile, contents, { mode: 0o444, flag: 'wx' });
+
+              volumes.push('--volume', `${configFile}:/run/keel-sso.json:ro`);
+              args = ['configure-sso', required('workspace'), '/run/keel-sso.json'];
+            } else if (command === 'identity-reset-policy') {
+              args = ['reset-auth-policy', required('workspace')];
+            } else if (command === 'identity-owner') {
               args = ['invite-owner', required('workspace'), required('email')];
             } else if (command === 'identity-create') {
               args = ['create-workspace', required('name'), required('email')];
@@ -189,6 +208,7 @@ try {
                 'run',
                 '--rm',
                 '--no-deps',
+                ...volumes,
                 'operations',
                 'identity',
                 ...args,

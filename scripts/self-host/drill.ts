@@ -1,3 +1,4 @@
+import { run } from './process.js';
 import { authenticatorCode } from '../../tests/authenticator.js';
 import assert from 'node:assert/strict';
 import { randomUUID, randomBytes, X509Certificate } from 'node:crypto';
@@ -391,11 +392,90 @@ try {
   sessionHeaders['x-csrf-token'] = confirmation.json().csrf;
   const oldRecoveryCode = confirmation.json().recovery_codes[0];
 
+  console.log('Configuring packaged SSO and verifying workspace policy recovery.');
+  const ssoFile = join(root, 'sso.json');
+
+  await writeFile(
+    ssoFile,
+    JSON.stringify({
+      name: 'Recovery provider',
+      issuer: 'https://identity.example',
+      authorization_endpoint: 'https://identity.example/authorize',
+      token_endpoint: 'https://identity.example/token',
+      jwks_uri: 'https://identity.example/keys',
+      client_id: 'keel-recovery',
+      client_secret: randomBytes(32).toString('base64url'),
+    }),
+    { mode: 0o600 },
+  );
+
+  const sso = JSON.parse(
+    await run(process.execPath, [
+      '--import',
+      'tsx',
+      'scripts/self-host/main.ts',
+      'identity-sso',
+      '--directory',
+      original,
+      '--workspace',
+      snapshot.organisation.id,
+      '--config-file',
+      ssoFile,
+    ]),
+  );
+
+  assert.equal(sso.configured, true);
+
+  const policy = await http(
+    '/api/v1/identity/auth-policy',
+    {
+      require_sso: false,
+      require_mfa: true,
+      allow_api_tokens: false,
+      session_minutes: 30,
+    },
+    '',
+    false,
+    sessionHeaders,
+  );
+
+  assert.equal(policy.status, 200);
+
+  const disabledToken = await http(
+    '/api/v1/identity/tokens',
+    {
+      name: 'Disabled',
+      permissions: ['read'],
+      expires_in_days: 1,
+    },
+    '',
+    false,
+    sessionHeaders,
+  );
+
+  assert.equal(disabledToken.status, 403);
+
+  const resetPolicy = JSON.parse(
+    await run(process.execPath, [
+      '--import',
+      'tsx',
+      'scripts/self-host/main.ts',
+      'identity-reset-policy',
+      '--directory',
+      original,
+      '--workspace',
+      snapshot.organisation.id,
+    ]),
+  );
+
+  assert.equal(resetPolicy.reset, true);
+
   const mfaVerification = JSON.parse(
     await compose(original, installation, ['run', '--rm', '--no-deps', 'operations', 'verify']),
   );
 
   assert.equal(mfaVerification.mfa_accounts, 1);
+  assert.equal(mfaVerification.sso_connections, 1);
 
   const managed = await http(
     '/api/v1/identity/tokens',
@@ -599,7 +679,7 @@ try {
   );
 
   console.log(
-    'PASS: TLS, least-privilege runtime, stop barrier, durable restart, encrypted backup, corruption rejection, fresh-volume restore, retained bytes and keys, agent and identity quarantine, retained MFA and recovery-code invalidation.',
+    'PASS: TLS, least-privilege runtime, stop barrier, durable restart, encrypted backup, corruption rejection, fresh-volume restore, retained bytes and keys, agent and identity quarantine, retained MFA, SSO configuration, policy recovery and recovery-code invalidation.',
   );
 } finally {
   for (const [directory, project] of [
