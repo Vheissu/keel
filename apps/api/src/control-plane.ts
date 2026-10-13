@@ -19,7 +19,11 @@ import {
   type Deployment,
   type ExecutionRequest,
 } from '../../../packages/domain/src/index.js';
-import { parseProcess, requiresApproval } from '../../../packages/deployment-schema/src/index.js';
+import {
+  parseProcess,
+  requiresApproval,
+  type RunbookInputValues,
+} from '../../../packages/deployment-schema/src/index.js';
 import { sha256, type ArtifactStore } from './artifact-store.js';
 import { DeliveryPolicy } from './delivery-policy.js';
 import { DeploymentSecrets } from './deployment-secrets.js';
@@ -481,9 +485,12 @@ export class ControlPlane {
       throw new DomainError('INVALID_STATE', 'This request can no longer be cancelled.', 409);
     }
 
+    let inputValues: RunbookInputValues | undefined;
+
     if (action === 'approve' && d.kind === 'runbook') {
       const version = await this.runbooks.version(tx, p.organisation_id, d.runbook_version_id);
 
+      inputValues = await this.runbooks.reviewedInputs(tx, d);
       await this.store.get(p.organisation_id, version.manifest.artifact.digest);
     } else if (action === 'approve') {
       const release = (
@@ -527,7 +534,9 @@ export class ControlPlane {
       tx,
       p,
       result.rows[0],
-      runbook && action === 'approve' ? { acknowledge_external_effects: true } : {},
+      runbook && action === 'approve'
+        ? { acknowledge_external_effects: true, input_values: inputValues }
+        : {},
     );
 
     return result.rows[0];

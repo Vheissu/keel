@@ -729,6 +729,7 @@ export class ExecutionService {
     supportsBlueGreen = false,
     supportsHooks = false,
     supportsRunbooks = false,
+    supportsRunbookInputs = false,
   ) {
     return transaction(this.control.db, async (tx) => {
       await this.lockAgent(tx, agent);
@@ -746,6 +747,13 @@ export class ExecutionService {
             a.organisation_id = $1
             AND a.agent_id = $2
             AND (d.kind <> 'runbook' OR $8::boolean)
+            AND (
+              $9::boolean OR NOT EXISTS (
+                SELECT 1 FROM runbook_plans p
+                WHERE p.organisation_id = d.organisation_id AND p.id = d.runbook_plan_id
+                  AND p.input_values <> '{}'::jsonb
+              )
+            )
             AND (
               EXISTS (
                 SELECT
@@ -806,6 +814,7 @@ export class ExecutionService {
           supportsBlueGreen,
           supportsHooks,
           supportsRunbooks,
+          supportsRunbookInputs,
         ],
       );
 
@@ -896,6 +905,7 @@ export class ExecutionService {
         );
 
         const spec = version.manifest.process.spec;
+        const inputs = cleanup ? {} : await this.control.runbooks.reviewedInputs(tx, d);
 
         return {
           attempt_id: a.id,
@@ -908,6 +918,13 @@ export class ExecutionService {
           strategy: 'task',
           hooks: null,
           runbook: { ...spec.task, secrets: Object.keys(spec.secrets ?? {}) },
+          ...(Object.keys(inputs).length
+            ? {
+                runbook_inputs: Object.fromEntries(
+                  Object.entries(inputs).map(([name, value]) => [name, String(value)]),
+                ),
+              }
+            : {}),
           digest: version.manifest.artifact.digest,
           size: version.manifest.artifact.size,
           image_id: spec.artifact.dockerImageId,

@@ -1,5 +1,9 @@
 import { bindable, queueTask } from 'aurelia';
-import type { RunbookProcess } from '../../../packages/deployment-schema/src/index';
+import type {
+  RunbookProcess,
+  RunbookInput,
+  RunbookInputValues,
+} from '../../../packages/deployment-schema/src/index';
 import type { RunbookRun } from '../../../packages/domain/src/index';
 import { Api } from './api';
 import { ResourcePage } from './resource-page';
@@ -27,6 +31,7 @@ interface Version {
 }
 
 interface Review {
+  input_values: RunbookInputValues;
   id: string;
   manifest: Manifest;
   version: number;
@@ -47,6 +52,7 @@ interface Binding {
 }
 
 interface Run extends RunbookRun {
+  input_values: RunbookInputValues;
   runbook_name: string;
   runbook_version: number;
   manifest: Manifest;
@@ -69,6 +75,7 @@ export class RunbooksPanel {
   review: Review | null = null;
   run: Run | null = null;
   bindings: Binding[] = [];
+  inputFields: { name: string; definition: RunbookInput; value: string }[] = [];
   createOpen = false;
   projectId = '';
   environmentId = '';
@@ -164,6 +171,7 @@ spec:
   async select(definition: Definition) {
     this.selected = definition;
     this.version = null;
+    this.inputFields = [];
     this.review = null;
     this.run = null;
     this.artifactId = '';
@@ -208,6 +216,15 @@ spec:
 
   chooseVersion(version: Version) {
     this.version = version;
+
+    this.inputFields = Object.entries(version.manifest.process.spec.inputs ?? {}).map(
+      ([name, definition]) => ({
+        name,
+        definition,
+        value: definition.default === undefined ? '' : String(definition.default),
+      }),
+    );
+
     this.clearReview();
   }
 
@@ -225,6 +242,7 @@ spec:
       const review = await this.api.request<Review>('/runbook-plans', 'POST', {
         runbook_version_id: this.version.id,
         target_id: this.targetId,
+        inputs: this.inputValues(),
       });
 
       if (!this.active) {
@@ -303,6 +321,35 @@ spec:
 
   get command() {
     return JSON.stringify(this.manifest?.process.spec.task.command, null, 2);
+  }
+
+  inputValues(): RunbookInputValues {
+    const values: RunbookInputValues = {};
+
+    for (const field of this.inputFields) {
+      if (field.value === '' && field.definition.type !== 'string') {
+        continue;
+      }
+
+      if (field.definition.type === 'integer') {
+        values[field.name] = Number(field.value);
+      } else if (field.definition.type === 'boolean') {
+        values[field.name] = field.value === 'true';
+      } else {
+        values[field.name] = field.value;
+      }
+    }
+
+    return values;
+  }
+
+  get reviewedInputs() {
+    return Object.entries(this.review?.input_values ?? this.run?.input_values ?? {}).map(
+      ([name, value]) => ({
+        name,
+        value: JSON.stringify(value),
+      }),
+    );
   }
 
   get canCancel() {

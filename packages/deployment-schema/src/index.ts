@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import { parseDocument } from 'yaml';
 import { DomainError } from '../../domain/src/index.js';
+import { runbookInputsSchema } from './runbook-inputs.js';
+
+export * from './runbook-inputs.js';
 
 export const secretName = z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/);
 
@@ -196,13 +199,25 @@ export const runbookSchema = z
           .pick({ dockerImageId: true, dockerArchivePath: true })
           .required({ dockerImageId: true }),
         task: lifecycleHook.omit({ secrets: true }),
+        inputs: runbookInputsSchema.optional(),
         secrets: z
           .record(secretName, z.object({ secret: secretName }).strict())
           .refine((value) => Object.keys(value).length <= maxSecretReferences)
           .optional(),
         requiresApproval: z.boolean().default(true),
       })
-      .strict(),
+      .strict()
+      .superRefine((spec, context) => {
+        for (const name of Object.keys(spec.inputs ?? {})) {
+          if (Object.hasOwn(spec.secrets ?? {}, `KEEL_INPUT_${name}`)) {
+            context.addIssue({
+              code: 'custom',
+              path: ['inputs', name],
+              message: 'The input environment variable conflicts with a secret binding.',
+            });
+          }
+        }
+      }),
   })
   .strict();
 

@@ -11,6 +11,9 @@ import {
 } from '../../../packages/domain/src/index.js';
 import {
   parseRunbook,
+  resolveRunbookInputs,
+  runbookInputValuesSchema,
+  type RunbookInputValues,
   type RunbookProcess,
 } from '../../../packages/deployment-schema/src/index.js';
 import type { ControlPlane } from './control-plane.js';
@@ -39,6 +42,7 @@ export const runbookPlanInput = z
   .object({
     runbook_version_id: uuid,
     target_id: uuid,
+    inputs: runbookInputValuesSchema.default({}),
   })
   .strict();
 
@@ -77,6 +81,7 @@ interface RunbookPlan extends Scope {
   expired: boolean;
   restored: boolean;
   expires_at: string;
+  input_values: RunbookInputValues;
 }
 
 function assertScope(p: Principal, scope: Scope) {
@@ -253,6 +258,23 @@ export class Runbooks {
     return version;
   }
 
+  async reviewedInputs(tx: Transaction, run: RunbookRun): Promise<RunbookInputValues> {
+    const version = await this.version(tx, run.organisation_id, run.runbook_version_id);
+
+    const plan = (
+      await tx.query<RunbookPlan>(
+        'SELECT * FROM runbook_plans WHERE organisation_id=$1 AND id=$2',
+        [run.organisation_id, run.runbook_plan_id],
+      )
+    ).rows[0];
+
+    if (!plan) {
+      throw new DomainError('NOT_FOUND', 'Runbook review not found.', 404);
+    }
+
+    return resolveRunbookInputs(version.manifest.process.spec.inputs, plan.input_values);
+  }
+
   private async preflight(tx: Transaction, p: Principal, versionId: string, targetId: string) {
     const version = await this.version(tx, p.organisation_id, versionId);
 
@@ -324,9 +346,14 @@ export class Runbooks {
     };
   }
 
-  async review(tx: Transaction, p: Principal, input: z.infer<typeof runbookPlanInput>) {
+  async review(tx: Transaction, p: Principal, input: z.input<typeof runbookPlanInput>) {
     const checked = await this.preflight(tx, p, input.runbook_version_id, input.target_id);
     const { version, target, environment } = checked;
+
+    const inputValues = resolveRunbookInputs(
+      version.manifest.process.spec.inputs,
+      input.inputs ?? {},
+    );
 
     const plan = (
       await tx.query<RunbookPlan>(
@@ -343,10 +370,11 @@ export class Runbooks {
               policy_revision,
               requires_approval,
               secret_bindings,
-              created_by
+              created_by,
+              input_values
             )
           VALUES
-            ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
           RETURNING
             *
         `,
@@ -362,11 +390,13 @@ export class Runbooks {
           checked.requiresApproval,
           JSON.stringify(checked.bindings),
           p.actor_id,
+          inputValues,
         ],
       )
     ).rows[0];
 
     await this.control.audit(tx, p, 'runbook.reviewed', plan.id, {
+      input_values: inputValues,
       runbook_version_id: version.id,
       target_id: target.id,
       expected_fence: target.fence,
@@ -451,6 +481,8 @@ export class Runbooks {
 
     const checked = await this.preflight(tx, p, plan.runbook_version_id, plan.target_id);
 
+    resolveRunbookInputs(checked.version.manifest.process.spec.inputs, plan.input_values);
+
     if (
       checked.target.fence !== plan.expected_fence ||
       checked.environment.policy_revision !== plan.policy_revision ||
@@ -502,6 +534,7 @@ export class Runbooks {
     await this.control.secrets.bind(tx, run, checked.version.manifest.process.spec.secrets);
 
     await this.control.deploymentEvent(tx, p, run, {
+      input_values: plan.input_values,
       secret_bindings: plan.secret_bindings,
       acknowledge_external_effects: true,
     });

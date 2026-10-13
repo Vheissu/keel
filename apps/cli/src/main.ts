@@ -4,7 +4,11 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { readFile, stat } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
-import { parseProcess, parseRunbook } from '../../../packages/deployment-schema/src/index.js';
+import {
+  parseProcess,
+  parseRunbook,
+  resolveRunbookInputs,
+} from '../../../packages/deployment-schema/src/index.js';
 
 const options = {
   allowPositionals: true,
@@ -25,6 +29,7 @@ const options = {
     target: { type: 'string' },
     slug: { type: 'string' },
     runbook: { type: 'string' },
+    inputs: { type: 'string' },
     'acknowledge-external-effects': { type: 'boolean' },
     release: { type: 'string' },
     environment: { type: 'string' },
@@ -60,6 +65,20 @@ function parseCommandLine() {
   }
 }
 
+async function readInputs(path: string): Promise<unknown> {
+  if ((await stat(path)).size > 32768) {
+    throw new Error('Runbook input files must not exceed 32 KiB.');
+  }
+
+  const bytes = await readFile(path);
+
+  if (bytes.length > 32768) {
+    throw new Error('Runbook input files must not exceed 32 KiB.');
+  }
+
+  return JSON.parse(bytes.toString('utf8'));
+}
+
 function print(value: unknown) {
   console.log(JSON.stringify(value, null, 2));
 }
@@ -89,10 +108,10 @@ const help = `Keel · publish existing build outputs and create immutable releas
   npm run keel -- secret rotate <secret-uuid> --revision <number> --value-stdin
   npm run keel -- secret revoke <secret-uuid> --revision <number>
   npm run keel -- deployment secret-bindings <deployment-uuid>
-  npm run keel -- runbook validate <runbook.yaml>
+  npm run keel -- runbook validate <runbook.yaml> [--inputs inputs.json]
   npm run keel -- runbook create --project <uuid> --environment <uuid> --name <name> --slug <slug>
   npm run keel -- runbook publish <runbook-uuid> --artifact <uuid> --process runbook.yaml --revision <number>
-  npm run keel -- runbook review --version <version-uuid> --target <uuid>
+  npm run keel -- runbook review --version <version-uuid> --target <uuid> [--inputs inputs.json]
   npm run keel -- runbook request <review-uuid> --acknowledge-external-effects
   npm run keel -- runbook approve <run-uuid> --acknowledge-external-effects
   npm run keel -- runbook reject|cancel|secret-bindings <run-uuid>
@@ -298,7 +317,20 @@ try {
         throw new Error('Provide a runbook process file.');
       }
 
-      print({ valid: true, process: parseRunbook(await readFile(file, 'utf8')) });
+      const process = parseRunbook(await readFile(file, 'utf8'));
+
+      print({
+        valid: true,
+        process,
+        ...(values.inputs
+          ? {
+              input_values: resolveRunbookInputs(
+                process.spec.inputs,
+                await readInputs(values.inputs),
+              ),
+            }
+          : {}),
+      });
     } else if (subcommand === 'create') {
       print(
         await request('/runbooks', {
@@ -325,6 +357,7 @@ try {
         await request('/runbook-plans', {
           runbook_version_id: required('version'),
           target_id: required('target'),
+          inputs: values.inputs ? await readInputs(values.inputs) : {},
         }),
       );
     } else if (['request', 'approve', 'reject', 'cancel', 'secret-bindings'].includes(subcommand)) {

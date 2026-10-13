@@ -441,13 +441,23 @@ it('bounds hooks, isolates secrets and preserves or removes the application acco
             task,
             requiresApproval: false,
             secrets: { TASK_PASSWORD: { secret: 'PASSWORD' } },
+            inputs: {
+              LABEL: { type: 'string', maxLength: 80 },
+              LIMIT: { type: 'integer', minimum: 0, maximum: 10, default: 0 },
+              APPLY: { type: 'boolean', default: false },
+              REGION: { type: 'enum', choices: ['east', 'west'], default: 'east' },
+            },
           },
         },
       }),
     );
 
     const plan = await mutate<{ id: string }>((tx) =>
-      control.runbooks.review(tx, p, { runbook_version_id: version.id, target_id: targetId }),
+      control.runbooks.review(tx, p, {
+        runbook_version_id: version.id,
+        target_id: targetId,
+        inputs: { LABEL: '$(touch /tmp/injected)', REGION: 'west' },
+      }),
     );
 
     const result = await mutate<{ id: string }>((tx) => control.runbooks.request(tx, p, plan.id));
@@ -460,7 +470,12 @@ it('bounds hooks, isolates secrets and preserves or removes the application acco
   const retainedApplication = await applicationID();
 
   for (const [task, code] of [
-    [hook('test -n "$TASK_PASSWORD" && test -z "$OTHER_SECRET"'), 'RUNBOOK_SUCCEEDED'],
+    [
+      hook(
+        'test -n "$TASK_PASSWORD" && test -z "$OTHER_SECRET" && test "$KEEL_INPUT_LABEL" = \'$(touch /tmp/injected)\' && test ! -e /tmp/injected && test "$KEEL_INPUT_LIMIT" = 0 && test "$KEEL_INPUT_APPLY" = false',
+      ),
+      'RUNBOOK_SUCCEEDED',
+    ],
     [hook('exit 7'), 'RUNBOOK_FAILED'],
     [hook('sleep 60', 1), 'RUNBOOK_TIMEOUT'],
   ] as const) {
@@ -484,6 +499,16 @@ it('bounds hooks, isolates secrets and preserves or removes the application acco
   )[0];
 
   expect(taskInspection.Config.Env).toContain(`TASK_PASSWORD=${secret}`);
+
+  expect(taskInspection.Config.Env).toEqual(
+    expect.arrayContaining([
+      'KEEL_INPUT_LABEL=$(touch /tmp/injected)',
+      'KEEL_INPUT_LIMIT=0',
+      'KEEL_INPUT_APPLY=false',
+      'KEEL_INPUT_REGION=west',
+    ]),
+  );
+
   expect(taskInspection.HostConfig.LogConfig.Type).toBe('none');
   await mutate((tx) => control.transition(tx, p, cancelledTask.id, 'cancel', true));
   await waitResult(cancelledTask, 'CANCELLED');

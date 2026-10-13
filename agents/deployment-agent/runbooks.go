@@ -1,6 +1,36 @@
 package main
 
-import "context"
+import (
+	"context"
+	"errors"
+	"regexp"
+	"strings"
+	"unicode/utf8"
+)
+
+var runbookInputName = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,47}$`)
+
+func validateRunbookInputs(j Job) error {
+	if len(j.RunbookInputs) > 0 && j.Runbook == nil {
+		return errors.New("runbook inputs require a task")
+	}
+	if len(j.RunbookInputs) > 16 {
+		return errors.New("too many runbook inputs")
+	}
+
+	for name, value := range j.RunbookInputs {
+		if !runbookInputName.MatchString(name) || len(value) > 1024 || utf8.RuneCountInString(value) > 256 || !utf8.ValidString(value) || strings.ContainsFunc(value, func(c rune) bool { return c < 32 || c == 127 }) {
+			return errors.New("invalid runbook input")
+		}
+		for _, secret := range j.Runbook.Secrets {
+			if secret == "KEEL_INPUT_"+name {
+				return errors.New("runbook input conflicts with secret")
+			}
+		}
+	}
+
+	return nil
+}
 
 // A runbook owns only its bounded task container. It never creates, stops or
 // verifies the application's container and never switches a blue/green route.

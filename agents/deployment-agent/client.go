@@ -40,7 +40,11 @@ func (a *Agent) request(ctx context.Context, path string, input any) ([]byte, er
 
 	client := a.client
 	limit := int64(4096)
-	if path == "artifact" {
+	if path == "poll" {
+		// A bounded task can carry 32 command arguments and 16 reviewed inputs,
+		// plus secret names and lease metadata. Values never remove the response cap.
+		limit = 65536
+	} else if path == "artifact" {
 		limit = archiveLimit
 		download := *a.client
 		download.Timeout = 0

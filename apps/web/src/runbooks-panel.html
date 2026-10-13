@@ -1,6 +1,6 @@
 <p class="help">
   Runbooks execute one fixed command from a retained image. Each run requires a fresh review of its
-  target, policy and secret versions. Task output is not collected.
+  target, inputs, policy and secret versions. Task output is not collected.
 </p>
 <p class="alert error" role="alert" if.bind="error">${error}</p>
 <p class="alert success" role="status" if.bind="notice">${notice}</p>
@@ -124,7 +124,7 @@
   <p if.bind="versions && !versions.loading && !versions.items.length" class="help">
     Publish a version to review a task.
   </p>
-  <template if.bind="version && canWrite">
+  <form if.bind="version && canWrite" submit.trigger:prevent="reviewTask()">
     <fieldset disabled.bind="busy">
       <legend>Choose a target</legend>
       <resource-picker
@@ -137,11 +137,75 @@
         value.bind="targetId"
         changed.bind="() => clearReview()"
       ></resource-picker>
-      <button class="button primary" click.trigger="reviewTask()" disabled.bind="!targetId">
-        Review task
-      </button>
+      <h3 if.bind="inputFields.length">Task inputs</h3>
+      <p class="help" if.bind="inputFields.length">
+        Input values are visible in reviews, approvals and history. Use secret bindings for
+        credentials.
+      </p>
+      <div repeat.for="field of inputFields; key: name">
+        <label for="runbook-input-${field.name}">${field.name}</label>
+        <p class="help" id="runbook-input-help-${field.name}">
+          ${field.definition.description || ''}
+          <span if.bind="field.definition.type === 'string'">
+            ${field.definition.minLength}–${field.definition.maxLength} characters.
+          </span>
+          <span if.bind="field.definition.type === 'integer'">
+            Whole number, ${field.definition.minimum}–${field.definition.maximum}.
+          </span>
+          Delivered as KEEL_INPUT_${field.name}.
+        </p>
+        <input
+          if.bind="field.definition.type === 'string'"
+          id="runbook-input-${field.name}"
+          type="text"
+          value.bind="field.value"
+          minlength.bind="field.definition.minLength"
+          maxlength.bind="field.definition.maxLength"
+          required.bind="field.definition.minLength > 0"
+          aria-describedby="runbook-input-help-${field.name}"
+          input.trigger="clearReview()"
+        />
+        <input
+          if.bind="field.definition.type === 'integer'"
+          id="runbook-input-${field.name}"
+          type="number"
+          step="1"
+          value.bind="field.value"
+          min.bind="field.definition.minimum"
+          max.bind="field.definition.maximum"
+          required
+          aria-describedby="runbook-input-help-${field.name}"
+          input.trigger="clearReview()"
+        />
+        <select
+          if.bind="field.definition.type === 'boolean'"
+          id="runbook-input-${field.name}"
+          value.bind="field.value"
+          required
+          aria-describedby="runbook-input-help-${field.name}"
+          change.trigger="clearReview()"
+        >
+          <option value="">Choose true or false</option>
+          <option value="true">true</option>
+          <option value="false">false</option>
+        </select>
+        <select
+          if.bind="field.definition.type === 'enum'"
+          id="runbook-input-${field.name}"
+          value.bind="field.value"
+          required
+          aria-describedby="runbook-input-help-${field.name}"
+          change.trigger="clearReview()"
+        >
+          <option value="">Choose a value</option>
+          <option repeat.for="choice of field.definition.choices" value.bind="choice">
+            ${choice}
+          </option>
+        </select>
+      </div>
+      <button class="button primary" type="submit" disabled.bind="!targetId">Review task</button>
     </fieldset>
-  </template>
+  </form>
 </section>
 <section class="target-form" if.bind="manifest">
   <h2 if.bind="run" ref="detailHeading" tabindex="-1">
@@ -166,6 +230,18 @@
     Non-root container, read-only filesystem, 256 MiB memory, one CPU and 64 processes. No
     application health check runs afterward.
   </p>
+  <section if.bind="review || run" aria-label="Reviewed input values">
+    <h3>Reviewed inputs</h3>
+    <p repeat.for="input of reviewedInputs">
+      <strong>${input.name}</strong>
+      :
+      <code>${input.value}</code>
+    </p>
+    <p if.bind="!reviewedInputs.length">No inputs declared.</p>
+    <p class="help" if.bind="reviewedInputs.length">
+      These values are fixed for this run. Changing them requires a new review.
+    </p>
+  </section>
   <template if.bind="review">
     <h3>Review before requesting</h3>
     <p>${review.environment_name} · ${review.target_name} · Agent ${review.agent_name}</p>
@@ -181,7 +257,8 @@
     <p>${review.warning}</p>
     <label class="check-label">
       <input type="checkbox" checked.bind="acknowledged" disabled.bind="busy" />
-      I reviewed this command and understand that cancellation cannot undo external effects.
+      I reviewed this command and its input values and understand that cancellation cannot undo
+      external effects.
     </label>
     <button
       class="button primary"
@@ -210,7 +287,8 @@
     >
       <label class="check-label">
         <input type="checkbox" checked.bind="acknowledged" disabled.bind="busy" />
-        I reviewed the fixed command, target and secret versions and approve its external effects.
+        I reviewed the fixed command, input values, target and secret versions and approve its
+        external effects.
       </label>
       <button
         class="button primary"

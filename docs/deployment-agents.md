@@ -167,4 +167,6 @@ Releases may declare bounded pre- and post-deploy container hooks for every supp
 
 ## Runbook tasks
 
-Agents advertising `runbooks-v1` can execute [reviewed runbooks](runbooks.md) through the same target allowlist, mTLS leases and secret delivery. A task owns its bounded container only. Cleanup preserves application containers and blue/green routes; external task effects still require operator assessment. Upgrade the controller, gateway, worker and agent together before requesting tasks.
+Agents advertising `runbooks-v1` can execute [reviewed runbooks](runbooks.md) through the same target allowlist, mTLS leases and secret delivery. Tasks with typed inputs also require `runbook-inputs-v1`. The agent validates input names and transport bounds, then supplies literal `KEEL_INPUT_*` variables through Docker stdin alongside the selected secrets. Input values are reviewed metadata and do not change the fixed command. Poll responses remain capped at 64 KiB.
+
+A task owns its bounded container only. Cleanup preserves application containers and blue/green routes; external task effects still require operator assessment. Upgrade the controller, gateway, worker and agent together before requesting tasks.

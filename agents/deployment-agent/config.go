@@ -42,11 +42,12 @@ type Lease struct {
 }
 
 type Job struct {
-	Operation string          `json:"operation,omitempty"`
-	Runbook   *LifecycleHook  `json:"runbook,omitempty"`
-	Hooks     *LifecycleHooks `json:"hooks,omitempty"`
-	Strategy  string          `json:"strategy"`
-	slot      string
+	Operation     string            `json:"operation,omitempty"`
+	Runbook       *LifecycleHook    `json:"runbook,omitempty"`
+	RunbookInputs map[string]string `json:"runbook_inputs,omitempty"`
+	Hooks         *LifecycleHooks   `json:"hooks,omitempty"`
+	Strategy      string            `json:"strategy"`
+	slot          string
 	Lease
 	Capability  string `json:"capability"`
 	Mode        string `json:"mode"`
@@ -158,7 +159,10 @@ func validateJob(j Job) error {
 		if err := validateHooks(&LifecycleHooks{PreDeploy: j.Runbook}); err != nil {
 			return err
 		}
-	} else if j.Runbook != nil {
+		if err := validateRunbookInputs(j); err != nil {
+			return err
+		}
+	} else if j.Runbook != nil || len(j.RunbookInputs) > 0 {
 		return errors.New("runbook requires an explicit operation")
 	} else if j.Capability == "docker-blue-green-v1" {
 		if j.Strategy != "blue-green" {

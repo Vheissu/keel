@@ -79,9 +79,10 @@ export async function createGateway(execution: ExecutionService, tls: ServerOpti
               'docker-blue-green-v1',
               'deployment-hooks-v1',
               'runbooks-v1',
+              'runbook-inputs-v1',
             ]),
           )
-          .max(5)
+          .max(6)
           .default([]),
       })
       .strict()
@@ -95,6 +96,7 @@ export async function createGateway(execution: ExecutionService, tls: ServerOpti
         input.capabilities.includes('docker-blue-green-v1'),
         input.capabilities.includes('deployment-hooks-v1'),
         input.capabilities.includes('runbooks-v1'),
+        input.capabilities.includes('runbook-inputs-v1'),
       ),
     };
   });

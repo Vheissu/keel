@@ -96,7 +96,11 @@ func TestHookExecutionLimitsAndSecretIsolation(t *testing.T) {
 				case "create":
 					created = true
 					bytes, _ := io.ReadAll(input)
-					if string(bytes) != "WANTED=literal $ value\n" {
+					expected := "WANTED=literal $ value\n"
+					if scenario.phase == "runbook" {
+						expected += "KEEL_INPUT_COUNT=0\nKEEL_INPUT_DRY_RUN=false\nKEEL_INPUT_EMPTY=\nKEEL_INPUT_LABEL=$(touch /not-created)\n"
+					}
+					if string(bytes) != expected {
 						t.Fatalf("hook received unexpected secrets: %q", bytes)
 					}
 
@@ -107,7 +111,7 @@ func TestHookExecutionLimitsAndSecretIsolation(t *testing.T) {
 						}
 					}
 
-					if strings.Contains(command, "literal") || strings.Contains(command, "hidden") {
+					if strings.Contains(command, "literal") || strings.Contains(command, "hidden") || strings.Contains(command, "not-created") {
 						t.Fatal("secret in argv")
 					}
 				case "start":
@@ -135,6 +139,10 @@ func TestHookExecutionLimitsAndSecretIsolation(t *testing.T) {
 			}
 
 			hook := &LifecycleHook{Command: []string{"/bin/task", "argument"}, TimeoutSeconds: 1, Secrets: []string{"WANTED"}, Network: scenario.network}
+			if scenario.phase == "runbook" {
+				j.Runbook = hook
+				j.RunbookInputs = map[string]string{"COUNT": "0", "DRY_RUN": "false", "EMPTY": "", "LABEL": "$(touch /not-created)"}
+			}
 			code := agent.runHook(ctx, j, Target{HookNetwork: "release-tasks"}, scenario.phase, hook, []byte("WANTED=literal $ value\nOTHER=hidden\n"))
 			if code != scenario.code || !removed {
 				t.Fatalf("code=%q removed=%v", code, removed)

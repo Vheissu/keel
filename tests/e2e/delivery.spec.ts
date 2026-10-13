@@ -1267,13 +1267,60 @@ test('publishes, reviews and independently approves a bounded runbook', async ({
       spec: {
         artifact: { dockerImageId: `sha256:${'a'.repeat(64)}` },
         task: { command: ['/bin/true'], timeoutSeconds: 15 },
+        inputs: {
+          LABEL: {
+            type: 'string',
+            minLength: 1,
+            maxLength: 80,
+            description: 'Reason for this check',
+          },
+          LIMIT: { type: 'integer', minimum: 1, maximum: 10, default: 3 },
+          APPLY: { type: 'boolean', default: false },
+          REGION: { type: 'enum', choices: ['east', 'west'], default: 'east' },
+        },
       },
     }),
   );
 
   await page.getByRole('button', { name: 'Publish version', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Version 1', exact: true })).toBeVisible();
+  await page.getByLabel('LABEL', { exact: true }).fill('operator "check" <b>literal</b>');
+  await expect(page.getByLabel('LIMIT', { exact: true })).toHaveValue('3');
+  await expect(page.getByLabel('APPLY', { exact: true })).toHaveValue('false');
+  await page.getByLabel('REGION', { exact: true }).selectOption('west');
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+
+  await page.screenshot({
+    path: 'output/playwright/runbook-inputs-form-desktop.png',
+    fullPage: true,
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+
+  await page.screenshot({
+    path: 'output/playwright/runbook-inputs-form-mobile.png',
+    fullPage: true,
+  });
+
+  await page.setViewportSize({ width: 1440, height: 1000 });
+
+  const reviewResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith('/api/v1/runbook-plans') && response.request().method() === 'POST',
+  );
+
   await page.getByRole('button', { name: 'Review task', exact: true }).click();
+  expect((await reviewResponse).status()).toBe(200);
+
+  const reviewedInputs = page.getByRole('region', { name: 'Reviewed input values' });
+
+  await expect(reviewedInputs).toContainText('operator \\"check\\" <b>literal</b>');
+  await expect(reviewedInputs).toContainText('false');
+  await page.getByLabel('LIMIT', { exact: true }).fill('4');
+  await expect(page.getByRole('button', { name: 'Request run', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Review task', exact: true }).click();
+  await expect(reviewedInputs).toContainText(/LIMIT\s*:\s*4\b/);
 
   await expect(
     page.getByText('A different actor must approve this run.', { exact: false }),
@@ -1283,7 +1330,7 @@ test('publishes, reviews and independently approves a bounded runbook', async ({
 
   await page
     .getByLabel(
-      'I reviewed this command and understand that cancellation cannot undo external effects.',
+      'I reviewed this command and its input values and understand that cancellation cannot undo external effects.',
     )
     .check();
 
@@ -1307,11 +1354,24 @@ test('publishes, reviews and independently approves a bounded runbook', async ({
     await connect(approver, f.approver.token);
     await approver.getByRole('link', { name: 'Runbooks', exact: true }).click();
     await approver.getByRole('button', { name: 'Review run', exact: true }).click();
+
+    await expect(approver.getByRole('region', { name: 'Reviewed input values' })).toContainText(
+      /LIMIT\s*:\s*4\b/,
+    );
+
+    await expect(approver.getByRole('region', { name: 'Reviewed input values' })).toContainText(
+      'false',
+    );
+
+    await expect(approver.getByRole('region', { name: 'Reviewed input values' })).toContainText(
+      '"west"',
+    );
+
     await expect(approver.getByRole('button', { name: 'Approve run', exact: true })).toBeDisabled();
 
     await approver
       .getByLabel(
-        'I reviewed the fixed command, target and secret versions and approve its external effects.',
+        'I reviewed the fixed command, input values, target and secret versions and approve its external effects.',
       )
       .check();
 

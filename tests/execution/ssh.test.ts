@@ -452,7 +452,19 @@ it('deploys over verified SSH, rejects an untrusted host and reconciles interrup
         kind: 'Runbook',
         spec: {
           artifact: { dockerImageId: imageID },
-          task: { command: ['/bin/true'], timeoutSeconds: 10 },
+          task: {
+            command: [
+              '/bin/sh',
+              '-c',
+              'test "$KEEL_INPUT_LABEL" = \'remote "literal" $(false)\' && test "$KEEL_INPUT_LIMIT" = 4 && test "$KEEL_INPUT_APPLY" = false',
+            ],
+            timeoutSeconds: 10,
+          },
+          inputs: {
+            LABEL: { type: 'string', maxLength: 80 },
+            LIMIT: { type: 'integer', minimum: 1, maximum: 5, default: 4 },
+            APPLY: { type: 'boolean', default: false },
+          },
           requiresApproval: false,
         },
       },
@@ -460,7 +472,11 @@ it('deploys over verified SSH, rejects an untrusted host and reconciles interrup
   );
 
   const plan = await mutate<{ id: string }>((tx) =>
-    control.runbooks.review(tx, p, { runbook_version_id: version.id, target_id: target.id }),
+    control.runbooks.review(tx, p, {
+      runbook_version_id: version.id,
+      target_id: target.id,
+      inputs: { LABEL: 'remote "literal" $(false)' },
+    }),
   );
 
   const task = await mutate<{ id: string }>((tx) => control.runbooks.request(tx, p, plan.id));

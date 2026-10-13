@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -204,7 +205,30 @@ func (a *Agent) runHook(parent context.Context, j Job, t Target, phase string, h
 		return "SECRET_UNAVAILABLE"
 	}
 
-	defer clear(environment)
+	defer func() { clear(environment) }()
+	if phase == "runbook" {
+		if validateRunbookInputs(j) != nil {
+			return "RUNBOOK_FAILED"
+		}
+		names := make([]string, 0, len(j.RunbookInputs))
+		for name := range j.RunbookInputs {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		var inputs []byte
+		for _, name := range names {
+			inputs = append(inputs, []byte("KEEL_INPUT_"+name+"="+j.RunbookInputs[name]+"\n")...)
+		}
+		if len(inputs) > 0 {
+			// Allocate once so extending the environment cannot leave abandoned
+			// backing arrays containing copies of selected secret values.
+			combined := make([]byte, 0, len(environment)+len(inputs))
+			combined = append(combined, environment...)
+			combined = append(combined, inputs...)
+			clear(environment)
+			environment = combined
+		}
+	}
 
 	action, err := a.confirmLease(parent, j)
 	if err != nil {

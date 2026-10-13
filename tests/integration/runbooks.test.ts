@@ -260,6 +260,202 @@ it('serializes concurrent requests even when idempotency keys differ', async () 
   expect(results.map((r) => r.statusCode).sort()).toEqual([200, 409]);
 });
 
+const inputDefinitions = {
+  LABEL: { type: 'string', minLength: 0, maxLength: 80, default: '' },
+  LIMIT: { type: 'integer', minimum: 0, maximum: 20, default: 0 },
+  APPLY: { type: 'boolean', default: false },
+  REGION: { type: 'enum', choices: ['east', 'west'], default: 'east' },
+};
+
+async function publishInputs() {
+  const published = await post(`/runbooks/${book.id}/versions`, {
+    artifact_id: artifact.id,
+    expected_revision: 1,
+    process: { ...process(), spec: { ...process().spec, inputs: inputDefinitions } },
+  });
+
+  expect(published.statusCode, published.body).toBe(200);
+  version = published.json();
+}
+
+it('pins typed values and defaults through review, approval, history and agent dispatch', async () => {
+  await publishInputs();
+  const inputs = { LABEL: 'literal $(touch /tmp/not-created) = "check"', REGION: 'west' };
+  const accepted = { APPLY: false, LABEL: inputs.LABEL, LIMIT: 0, REGION: 'west' };
+
+  const reviewed = await post('/runbook-plans', {
+    runbook_version_id: version.id,
+    target_id: target.id,
+    inputs,
+  });
+
+  expect(reviewed.statusCode, reviewed.body).toBe(200);
+  const plan = reviewed.json();
+
+  expect(plan.input_values).toEqual(accepted);
+  expect(plan.manifest.process.spec.task.command).toEqual(['/bin/task']);
+
+  await expect(
+    db.query('UPDATE runbook_plans SET input_values=$1 WHERE id=$2', [{ LIMIT: 20 }, plan.id]),
+  ).rejects.toThrow();
+
+  expect(
+    (
+      await post(`/runbook-plans/${plan.id}/request`, {
+        acknowledge_external_effects: true,
+        inputs: { LIMIT: 20 },
+      })
+    ).statusCode,
+  ).toBe(400);
+
+  const run = (await request(plan.id)).json();
+
+  expect((await get(`/resources/runbook-runs/${run.id}`)).json().input_values).toEqual(accepted);
+
+  expect(
+    (
+      await post(
+        `/runbook-runs/${run.id}/approve`,
+        {
+          acknowledge_external_effects: true,
+          inputs: { LIMIT: 20 },
+        },
+        f.approver.token,
+      )
+    ).statusCode,
+  ).toBe(400);
+
+  expect(
+    (
+      await post(
+        `/runbook-runs/${run.id}/approve`,
+        {
+          acknowledge_external_effects: true,
+        },
+        f.approver.token,
+      )
+    ).statusCode,
+  ).toBe(200);
+
+  const audit = (
+    await db.query(
+      "SELECT details FROM audit_events WHERE organisation_id=$1 AND action='runbook.queued' AND resource_id=$2",
+      [f.org, run.id],
+    )
+  ).rows[0];
+
+  expect(audit.details.input_values).toEqual(accepted);
+  await execution.tick(f.org, run.id);
+  expect(await execution.claim(agent, true, false, false, true, true)).toBeNull();
+  const job = await execution.claim(agent, true, false, false, true, true, true);
+
+  expect(job).toMatchObject({
+    operation: 'runbook',
+    runbook: { command: ['/bin/task'] },
+    secret_count: 0,
+    runbook_inputs: { APPLY: 'false', LABEL: inputs.LABEL, LIMIT: '0', REGION: 'west' },
+  });
+
+  await execution.complete(agent, {
+    ...lease(job!),
+    outcome: 'succeeded',
+    code: 'RUNBOOK_SUCCEEDED',
+  });
+
+  expect((await get(`/resources/runbook-runs/${run.id}`)).json().input_values).toEqual(accepted);
+});
+
+it('rejects bad inputs before saving a review and binds idempotency to the supplied values', async () => {
+  await publishInputs();
+
+  for (const inputs of [
+    { LIMIT: '3' },
+    { LIMIT: 21 },
+    { APPLY: 'true' },
+    { REGION: 'north' },
+    { EXTRA: true },
+    { LABEL: 'line\nbreak' },
+  ]) {
+    const response = await post('/runbook-plans', {
+      runbook_version_id: version.id,
+      target_id: target.id,
+      inputs,
+    });
+
+    expect(response.statusCode, response.body).toBe(400);
+  }
+
+  expect(
+    (
+      await db.query(
+        'SELECT count(*)::integer AS count FROM runbook_plans WHERE organisation_id=$1',
+        [f.org],
+      )
+    ).rows[0].count,
+  ).toBe(0);
+
+  const key = randomUUID();
+  const input = { runbook_version_id: version.id, target_id: target.id, inputs: { LIMIT: 3 } };
+  const first = await post('/runbook-plans', input, f.operator.token, key);
+
+  expect(first.statusCode, first.body).toBe(200);
+  expect((await post('/runbook-plans', input, f.operator.token, key)).json()).toEqual(first.json());
+
+  expect(
+    (await post('/runbook-plans', { ...input, inputs: { LIMIT: 4 } }, f.operator.token, key))
+      .statusCode,
+  ).toBe(409);
+});
+
+it('retains the reviewed defaults after a new version and omits inputs from recovery assignments', async () => {
+  await publishInputs();
+  const plan = await review();
+
+  const published = await post(`/runbooks/${book.id}/versions`, {
+    artifact_id: artifact.id,
+    expected_revision: 2,
+    process: {
+      ...process(),
+      spec: {
+        ...process().spec,
+        inputs: {
+          ...inputDefinitions,
+          LIMIT: { type: 'integer', minimum: 0, maximum: 20, default: 20 },
+        },
+      },
+    },
+  });
+
+  expect(published.statusCode, published.body).toBe(200);
+  const run = (await request(plan.id)).json();
+
+  await post(
+    `/runbook-runs/${run.id}/approve`,
+    { acknowledge_external_effects: true },
+    f.approver.token,
+  );
+
+  await execution.tick(f.org, run.id);
+  const job = await execution.claim(agent, true, false, false, true, true, true);
+
+  expect(job).toMatchObject({
+    runbook_inputs: { LIMIT: '0', LABEL: '', APPLY: 'false', REGION: 'east' },
+  });
+
+  await db.query(
+    "UPDATE deployment_attempts SET lease_expires_at=now()-interval '1 second' WHERE deployment_id=$1",
+    [run.id],
+  );
+
+  await execution.tick(f.org, run.id);
+  expect(await execution.claim(agent, true, false, false, true, true)).toBeNull();
+  const cleanup = await execution.claim(agent, true, false, false, true, true, true);
+
+  expect(cleanup?.mode).toBe('cleanup');
+  expect(cleanup).not.toHaveProperty('runbook_inputs');
+  expect((await get(`/resources/runbook-runs/${run.id}`)).json().input_values.LIMIT).toBe(0);
+});
+
 it('rejects target and policy changes after review and target changes before assignment', async () => {
   const plan = await review();
 

@@ -50,7 +50,7 @@ const resources: Record<string, Resource> = {
   'runbook-runs': {
     table: 'runbook_runs',
     columns: `t.*, b.name AS runbook_name, v.version AS runbook_version, v.manifest,
-      p.name AS project_name, e.name AS environment_name, plan.target_id, target.name AS target_name,
+      p.name AS project_name, e.name AS environment_name, plan.target_id, plan.input_values, target.name AS target_name,
       a.phase, a.phase_updated_at, a.result_code AS attempt_result`,
     joins: `${projectJoin} ${environmentJoin}
       JOIN runbook_versions v ON v.organisation_id=t.organisation_id AND v.id=t.runbook_version_id

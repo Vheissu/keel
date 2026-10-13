@@ -288,6 +288,11 @@ try {
       spec: {
         artifact: { dockerImageId: `sha256:${'a'.repeat(64)}` },
         task: { command: ['/bin/task'], timeoutSeconds: 10 },
+        inputs: {
+          LABEL: { type: 'string', maxLength: 80, default: 'retained input' },
+          LIMIT: { type: 'integer', minimum: 0, maximum: 10, default: 0 },
+          APPLY: { type: 'boolean', default: false },
+        },
         secrets: { TASK_PASSWORD: { secret: 'PASSWORD' } },
       },
     },
@@ -305,6 +310,13 @@ try {
   assert.equal(runbookRun.status, 'awaiting_approval');
   await api(`/runbook-runs/${runbookRun.id}/cancel`, {});
   const retainedRunbook = await api(`/resources/runbook-runs/${runbookRun.id}`);
+
+  assert.deepEqual(retainedRunbook.input_values, {
+    LABEL: 'retained input',
+    LIMIT: 0,
+    APPLY: false,
+  });
+
   const retainedBindings = await api(`/runbook-runs/${runbookRun.id}/secret-bindings`);
 
   assert.equal((await http('/agent/v1/poll', {}, token, true)).status, 200);
