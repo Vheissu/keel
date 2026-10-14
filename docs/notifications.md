@@ -105,12 +105,14 @@ Runbook run events use `runbook.<state>` types and a `runbook_run` object instea
     "runbook_slug": "rotate-caches",
     "runbook_version_id": "<version-uuid>",
     "runbook_version": 3,
+    "runbook_schedule_id": null,
+    "scheduled_for": null,
     "result_code": null
   }
 }
 ```
 
-Dispatch on `type` and ignore unknown types. Each payload is an event-time snapshot. Deployment `kind` can also be `rollback`; `result_code` can be null in either shape. Runbook payloads exclude task commands, reviewed input values and secret bindings. Payloads exclude deployment secrets, process manifests, credentials and logs. Delivery is at least once and may arrive out of order. Use the event timestamp and event ID when building a history; fetch authoritative deployment or run state when a receiver needs its current status.
+Dispatch on `type` and ignore unknown types. Each payload is an event-time snapshot. Deployment `kind` can also be `rollback`; `result_code` can be null in either shape. `runbook_schedule_id` and `scheduled_for` identify runs created by a [schedule](runbooks.md#schedules) and are null for manual runs. Runbook payloads exclude task commands, reviewed input values and secret bindings. Payloads exclude deployment secrets, process manifests, credentials and logs. Delivery is at least once and may arrive out of order. Use the event timestamp and event ID when building a history; fetch authoritative deployment or run state when a receiver needs its current status.
 
 ## Retries and recovery
 

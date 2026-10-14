@@ -1393,3 +1393,117 @@ test('publishes, reviews and independently approves a bounded runbook', async ({
   await page.getByRole('button', { name: 'Cancel run', exact: true }).click();
   await expect(page.getByRole('status').filter({ hasText: 'cancelled' })).toBeVisible();
 });
+
+test('schedules a reviewed runbook, then stops and resumes it', async ({ page }) => {
+  const p = await control.authenticate(f.operator.token);
+
+  const mutate = <T>(work: Parameters<ControlPlane['mutate']>[3]) =>
+    control.mutate(p, randomUUID(), randomUUID(), work) as Promise<T>;
+
+  const project = await mutate<{ id: string }>((tx) =>
+    control.project(tx, p, { name: 'Scheduled project', slug: 'scheduled', description: '' }),
+  );
+
+  const bytes = Buffer.from('retained scheduled image');
+
+  const artifact = await mutate<{ id: string }>((tx) =>
+    control.artifact(
+      tx,
+      p,
+      { project_id: project.id, name: 'Nightly image', version: '1', digest: sha256(bytes) },
+      bytes,
+    ),
+  );
+
+  const execution = new ExecutionService(control);
+
+  const agent = await mutate<{ id: string }>((tx) =>
+    execution.registerAgent(tx, p, {
+      name: 'Nightly agent',
+      certificate_fingerprint: randomBytes(32).toString('hex'),
+    }),
+  );
+
+  await mutate((tx) =>
+    execution.registerTarget(tx, p, {
+      project_id: project.id,
+      environment_id: f.environments.staging,
+      agent_id: agent.id,
+      name: 'Nightly target',
+      labels: {},
+    }),
+  );
+
+  const book = await mutate<{ id: string }>((tx) =>
+    control.runbooks.create(tx, p, {
+      project_id: project.id,
+      environment_id: f.environments.staging,
+      name: 'Nightly sweep',
+      slug: 'nightly-sweep',
+      description: '',
+    }),
+  );
+
+  await mutate((tx) =>
+    control.runbooks.publish(tx, p, book.id, {
+      artifact_id: artifact.id,
+      expected_revision: 0,
+      process: {
+        apiVersion: 'keel.dev/v1alpha1',
+        kind: 'Runbook',
+        spec: {
+          artifact: { dockerImageId: `sha256:${'c'.repeat(64)}` },
+          task: { command: ['/bin/sweep'], timeoutSeconds: 15 },
+          requiresApproval: false,
+        },
+      },
+    }),
+  );
+
+  await connect(page);
+  await page.getByRole('link', { name: 'Runbooks', exact: true }).click();
+  await page.getByRole('button', { name: 'Open Nightly sweep', exact: true }).click();
+  await page.getByRole('button', { name: 'Version 1', exact: true }).click();
+  await page.getByRole('button', { name: 'Review task', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Create schedule', exact: true })).toBeDisabled();
+
+  await page
+    .getByLabel(
+      'I reviewed this command and its input values and understand that cancellation cannot undo external effects.',
+    )
+    .check();
+
+  await page.getByLabel('Schedule name', { exact: true }).fill('Nightly');
+  await page.getByLabel('Cron expression', { exact: true }).fill('* * * * *');
+
+  await expect(
+    page.getByText('Schedules can run at most once every 5 minutes.', { exact: true }),
+  ).toBeVisible();
+
+  await expect(page.getByRole('button', { name: 'Create schedule', exact: true })).toBeDisabled();
+  await page.getByLabel('Cron expression', { exact: true }).fill('15 2 * * 1-5');
+  await page.getByLabel('Time zone', { exact: true }).fill('UTC');
+  await expect(page.getByText('Next runs:', { exact: true })).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.getByRole('button', { name: 'Create schedule', exact: true }).click();
+  await expect(page.getByText(/^Schedule Nightly created\./)).toBeVisible();
+
+  const schedules = page.getByRole('region', { name: 'Runbook schedules' });
+
+  await expect(schedules).toContainText('15 2 * * 1-5');
+  await expect(schedules).toContainText('Runs queue immediately');
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: 'output/playwright/runbook-schedules-mobile.png', fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole('button', { name: 'Stop Nightly', exact: true }).click();
+  await expect(schedules).toContainText('Stopped');
+  await page.getByRole('button', { name: 'Resume Nightly', exact: true }).click();
+  await expect(schedules).toContainText(/Next /);
+
+  await page.screenshot({
+    path: 'output/playwright/runbook-schedules-desktop.png',
+    fullPage: true,
+  });
+});

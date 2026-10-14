@@ -604,6 +604,8 @@ it('sends runbook run events only to destinations that opt in, without task deta
       runbook_slug: 'rotate-caches',
       runbook_version_id: version.id,
       runbook_version: 1,
+      runbook_schedule_id: null,
+      scheduled_for: null,
       result_code: null,
     },
   });

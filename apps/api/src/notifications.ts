@@ -141,6 +141,10 @@ const runbookPayload = `
     v.id,
     'runbook_version',
     v.version,
+    'runbook_schedule_id',
+    plan.schedule_id,
+    'scheduled_for',
+    plan.scheduled_for,
     'result_code',
     d.result_code
   )
@@ -196,7 +200,9 @@ export async function enqueueNotifications(
             ? `JOIN runbook_versions v ON v.id = d.runbook_version_id
         AND v.organisation_id = d.organisation_id
         JOIN runbooks b ON b.id = v.runbook_id
-        AND b.organisation_id = v.organisation_id`
+        AND b.organisation_id = v.organisation_id
+        JOIN runbook_plans plan ON plan.id = d.runbook_plan_id
+        AND plan.organisation_id = d.organisation_id`
             : `JOIN releases r ON r.id = d.release_id
         AND r.organisation_id = d.organisation_id`
         }

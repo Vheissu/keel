@@ -29,6 +29,9 @@ const options = {
     target: { type: 'string' },
     slug: { type: 'string' },
     runbook: { type: 'string' },
+    schedule: { type: 'string' },
+    cron: { type: 'string' },
+    'time-zone': { type: 'string' },
     inputs: { type: 'string' },
     'acknowledge-external-effects': { type: 'boolean' },
     release: { type: 'string' },
@@ -113,6 +116,8 @@ const help = `Keel · publish existing build outputs and create immutable releas
   npm run keel -- runbook publish <runbook-uuid> --artifact <uuid> --process runbook.yaml --revision <number>
   npm run keel -- runbook review --version <version-uuid> --target <uuid> [--inputs inputs.json]
   npm run keel -- runbook request <review-uuid> --acknowledge-external-effects
+  npm run keel -- runbook schedule <review-uuid> --name <name> --cron '0 3 * * *' --time-zone UTC --acknowledge-external-effects
+  npm run keel -- runbook stop|resume <schedule-uuid> --revision <number>
   npm run keel -- runbook approve <run-uuid> --acknowledge-external-effects
   npm run keel -- runbook reject|cancel|secret-bindings <run-uuid>
   npm run keel -- validate <process.yaml>
@@ -126,8 +131,9 @@ Set KEEL_URL (default http://127.0.0.1:4040) and KEEL_TOKEN.
 Connection creation and rotation use KEEL_GITHUB_TOKEN and KEEL_GITHUB_WEBHOOK_SECRET.
 Bitbucket uses KEEL_BITBUCKET_TOKEN and KEEL_PUBLISH_SECRET; publishing needs only KEEL_PUBLISH_SECRET.
 For retryable CI steps, pass a stable --idempotency-key (8–128 characters).
-List resources: projects, environments, artifacts, releases, deployments, audit, agents, targets, attempts, connections, imports, secrets, notification-endpoints, notification-deliveries, notification-attempts, runbooks, runbook-versions, runbook-runs.
+List resources: projects, environments, artifacts, releases, deployments, audit, agents, targets, attempts, connections, imports, secrets, notification-endpoints, notification-deliveries, notification-attempts, runbooks, runbook-versions, runbook-runs, runbook-schedules.
 Use --project, --environment, --connection, --agent, --state or --status where the resource supports that filter.
+Runbook filters: --runbook for versions and schedules, --schedule for runs.
 Notification filters: --endpoint, --deployment (a deployment or runbook run ID), --delivery, --status.
 Creation reads KEEL_NOTIFICATION_SECRET. Add "work_kinds": ["deployment", "runbook"] to the config for runbook events.
 Results are JSON. Review a rollback plan before requesting it. Approvals remain available in the UI and API.
@@ -269,6 +275,7 @@ try {
 
     for (const [flag, parameter] of [
       ['runbook', 'runbook_id'],
+      ['schedule', 'runbook_schedule_id'],
       ['endpoint', 'endpoint_id'],
       ['delivery', 'delivery_id'],
       ['deployment', 'deployment_id'],
@@ -359,6 +366,35 @@ try {
           runbook_version_id: required('version'),
           target_id: required('target'),
           inputs: values.inputs ? await readInputs(values.inputs) : {},
+        }),
+      );
+    } else if (subcommand === 'schedule') {
+      if (!file) {
+        throw new Error('Provide the review UUID.');
+      }
+
+      if (!values['acknowledge-external-effects']) {
+        throw new Error('Review the command and pass --acknowledge-external-effects.');
+      }
+
+      print(
+        await request('/runbook-schedules', {
+          runbook_plan_id: file,
+          name: required('name'),
+          cron: required('cron'),
+          time_zone: required('time-zone'),
+          acknowledge_external_effects: true,
+        }),
+      );
+    } else if (subcommand === 'stop' || subcommand === 'resume') {
+      if (!file) {
+        throw new Error('Provide the schedule UUID.');
+      }
+
+      print(
+        await request(`/runbook-schedules/${encodeURIComponent(file)}/state`, {
+          enabled: subcommand === 'resume',
+          expected_revision: Number(required('revision')),
         }),
       );
     } else if (['request', 'approve', 'reject', 'cancel', 'secret-bindings'].includes(subcommand)) {

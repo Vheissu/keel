@@ -191,7 +191,9 @@ Polling agents advertise `deployment-hooks-v1` alongside their existing capabili
 
 ## Runbooks
 
-[Runbook endpoints and CLI commands](runbooks.md#cli-and-api) create immutable versions, review exact targets and request bounded tasks. The `runbooks`, `runbook-versions` and `runbook-runs` resources support paginated reads and individual lookups. All three accept project/environment filters; versions accept `runbook_id`, and runs accept `runbook_version_id` and `status`.
+[Runbook endpoints and CLI commands](runbooks.md#cli-and-api) create immutable versions, review exact targets and request bounded tasks. The `runbooks`, `runbook-versions`, `runbook-schedules` and `runbook-runs` resources support paginated reads and individual lookups. All four accept project/environment filters. Versions and schedules accept `runbook_id`; schedules and runs accept `runbook_version_id`; runs accept `status` and `runbook_schedule_id`.
+
+`POST /runbook-schedules` turns the caller's own unused review into a cron schedule with `{runbook_plan_id, name, cron, time_zone, acknowledge_external_effects: true}`. Invalid expressions, schedules more frequent than five minutes and unknown time zones return `INVALID_SCHEDULE`. `POST /runbook-schedules/:id/state` takes `{enabled, expected_revision}`; any writer can stop a schedule, and only its creator can resume it. See [runbook schedules](runbooks.md#schedules).
 
 Runbook processes can declare bounded string, integer, boolean and enum inputs. `POST /runbook-plans` accepts an optional `inputs` object and returns the fully resolved `input_values`, including defaults. Those values are immutable and appear in run reads and approval audits. Request and approval bodies accept only the acknowledgement; changing inputs requires another review. Agents must advertise `runbook-inputs-v1` to claim tasks with inputs. Their jobs include `runbook_inputs` as string values for literal `KEEL_INPUT_*` environment delivery. Cleanup jobs omit values and never execute the task.
 

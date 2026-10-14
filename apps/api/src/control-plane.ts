@@ -1,4 +1,5 @@
 import { Runbooks } from './runbooks.js';
+import { RunbookSchedules } from './runbook-schedules.js';
 import { auditEvent } from './audit.js';
 import { authenticateToken, lockPrincipal } from './identity-policy.js';
 import { enqueueNotifications } from './notifications.js';
@@ -50,6 +51,7 @@ export const deploymentInput = z.object({ release_id: uuid, environment_id: uuid
 
 export class ControlPlane {
   readonly runbooks = new Runbooks(this);
+  readonly schedules = new RunbookSchedules(this);
   readonly delivery = new DeliveryPolicy(this);
   readonly secrets: DeploymentSecrets;
 

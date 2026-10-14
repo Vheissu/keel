@@ -8,7 +8,7 @@ You can create projects, publish files with SHA-256 verification, create immutab
 
 Retained Docker image archives can now deploy through Temporal and an outbound-only Go agent, with mutual TLS, fenced leases, cancellation cleanup and HTTP verification. Targets can use local Docker or a Linux Docker host over SSH for recreate deployments. Local Docker also supports blue/green with an agent-managed HTTP proxy and durable recovery of the previous route. Follow the [agent setup](docs/deployment-agents.md) to enable execution. Production requires a verified staging deployment of the same release by default. [Promotion and rollback planning](docs/promotion-and-rollback.md) provide policy checks and reviewed recovery to an earlier retained release. Non-container SSH deployments, rolling deployments, registry artifacts and automatic rollback are later stages. The API never launches customer commands.
 
-[Reviewed runbooks](docs/runbooks.md) execute short operational tasks from immutable image versions, with typed inputs, explicit target and secret review, separate approval and cleanup-only recovery.
+[Reviewed runbooks](docs/runbooks.md) execute short operational tasks from immutable image versions, with typed inputs, explicit target and secret review, cron schedules, separate approval and cleanup-only recovery.
 
 Optional [pre- and post-deploy hooks](docs/lifecycle-hooks.md) run from the retained image with explicit time limits, selected secrets, restricted resources and cleanup on failure.
 

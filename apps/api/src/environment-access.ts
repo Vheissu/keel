@@ -14,6 +14,7 @@ export function environmentCondition(resource: string, parameter: string, alias 
     'runbook-versions': 'environment_id',
     'runbook-plans': 'environment_id',
     'runbook-runs': 'environment_id',
+    'runbook-schedules': 'environment_id',
     targets: 'environment_id',
     secrets: 'environment_id',
     'notification-endpoints': 'environment_id',
@@ -86,6 +87,7 @@ const tables: Record<string, string> = {
   'runbook-versions': 'runbook_versions',
   'runbook-plans': 'runbook_plans',
   'runbook-runs': 'runbook_runs',
+  'runbook-schedules': 'runbook_schedules',
   secrets: 'deployment_secrets',
   'rollback-plans': 'rollback_plans',
   'notification-endpoints': 'notification_endpoints',
@@ -178,6 +180,10 @@ export async function enforceEnvironmentRequest(db: Database, req: FastifyReques
     return record('runbook-versions', body.runbook_version_id);
   }
 
+  if (key === 'POST /runbook-schedules') {
+    return record('runbook-plans', body.runbook_plan_id);
+  }
+
   if (key === 'POST /rollback-plans') {
     await record('deployments', body.source_deployment_id);
     await record('deployments', body.candidate_deployment_id);
@@ -188,6 +194,7 @@ export async function enforceEnvironmentRequest(db: Database, req: FastifyReques
   const records: Record<string, string> = {
     'POST /runbooks/:id/versions': 'runbooks',
     'POST /runbook-plans/:id/request': 'runbook-plans',
+    'POST /runbook-schedules/:id/state': 'runbook-schedules',
     'GET /runbook-runs/:id/secret-bindings': 'runbook-runs',
     'POST /runbook-runs/:id/approve': 'runbook-runs',
     'POST /runbook-runs/:id/reject': 'runbook-runs',

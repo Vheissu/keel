@@ -10,6 +10,7 @@ import {
   runbookPlanInput,
   runbookAcknowledgement,
 } from './runbooks.js';
+import { runbookScheduleInput, runbookScheduleState } from './runbook-schedules.js';
 
 export async function registerRunbookRoutes(api: FastifyInstance, control: ControlPlane) {
   const uuid = z.string().uuid();
@@ -57,6 +58,26 @@ export async function registerRunbookRoutes(api: FastifyInstance, control: Contr
       req,
       `runbook-request:${id}:${JSON.stringify(input)}`,
       (tx) => control.runbooks.request(tx, req.principal, id),
+    );
+  });
+
+  api.post('/runbook-schedules', async (req) => {
+    const input = runbookScheduleInput.parse(req.body);
+
+    return idempotentMutation(control, req, `runbook-schedule:${JSON.stringify(input)}`, (tx) =>
+      control.schedules.create(tx, req.principal, input),
+    );
+  });
+
+  api.post<{ Params: { id: string } }>('/runbook-schedules/:id/state', async (req) => {
+    const id = uuid.parse(req.params.id);
+    const input = runbookScheduleState.parse(req.body);
+
+    return idempotentMutation(
+      control,
+      req,
+      `runbook-schedule-state:${id}:${JSON.stringify(input)}`,
+      (tx) => control.schedules.setState(tx, req.principal, id, input),
     );
   });
 

@@ -5,6 +5,8 @@ import { runbookInputsSchema } from './runbook-inputs.js';
 
 export * from './runbook-inputs.js';
 
+export * from './runbook-schedule.js';
+
 export const secretName = z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/);
 
 export const maxSecretReferences = 32;

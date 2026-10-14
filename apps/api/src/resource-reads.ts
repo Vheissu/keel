@@ -59,7 +59,27 @@ const resources: Record<string, Resource> = {
       JOIN deployment_targets target ON target.organisation_id=plan.organisation_id AND target.id=plan.target_id
       LEFT JOIN deployment_attempts a ON a.organisation_id=t.organisation_id AND a.deployment_id=t.id`,
     search: ['b.name', 't.status', 'target.name', 'p.name', 'e.name', 't.result_code'],
-    filters: ['project_id', 'environment_id', 'status', 'runbook_version_id'],
+    filters: [
+      'project_id',
+      'environment_id',
+      'status',
+      'runbook_version_id',
+      'runbook_schedule_id',
+    ],
+  },
+  'runbook-schedules': {
+    table: 'runbook_schedules',
+    columns: `t.*, b.name AS runbook_name, v.version AS runbook_version, p.name AS project_name,
+      e.name AS environment_name, plan.target_id, target.name AS target_name, plan.input_values,
+      plan.requires_approval, plan.secret_bindings, owner.name AS created_by_name`,
+    joins: `${projectJoin} ${environmentJoin}
+      JOIN runbook_versions v ON v.organisation_id=t.organisation_id AND v.id=t.runbook_version_id
+      JOIN runbooks b ON b.organisation_id=t.organisation_id AND b.id=t.runbook_id
+      JOIN runbook_plans plan ON plan.organisation_id=t.organisation_id AND plan.id=t.source_plan_id
+      JOIN deployment_targets target ON target.organisation_id=plan.organisation_id AND target.id=plan.target_id
+      JOIN actors owner ON owner.organisation_id=t.organisation_id AND owner.id=t.created_by`,
+    search: ['t.name', 'b.name', 'target.name', 't.cron', 't.last_result_code', 't.paused_code'],
+    filters: ['project_id', 'environment_id', 'runbook_id', 'runbook_version_id'],
   },
   'notification-endpoints': {
     table: 'notification_endpoints',
@@ -185,6 +205,7 @@ const querySchema = z
     deployment_id: z.string().uuid().optional(),
     runbook_id: z.string().uuid().optional(),
     runbook_version_id: z.string().uuid().optional(),
+    runbook_schedule_id: z.string().uuid().optional(),
     project_id: z.string().uuid().optional(),
     environment_id: z.string().uuid().optional(),
     connection_id: z.string().uuid().optional(),

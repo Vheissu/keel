@@ -16,7 +16,8 @@ const address = process.env.TEMPORAL_ADDRESS || '127.0.0.1:7233';
 const namespace = process.env.TEMPORAL_NAMESPACE || 'default';
 const taskQueue = process.env.TEMPORAL_TASK_QUEUE || 'keel-deployments';
 const db = database(process.env.DATABASE_URL);
-const execution = new ExecutionService(new ControlPlane(db, artifactStore()));
+const control = new ControlPlane(db, artifactStore());
+const execution = new ExecutionService(control);
 const connection = await Connection.connect({ address });
 const native = await NativeConnection.connect({ address });
 const client = new Client({ connection, namespace });
@@ -30,7 +31,7 @@ const worker = await Worker.create({
 });
 
 // Temporal's Runtime already shuts the worker down on SIGINT, SIGTERM, SIGQUIT and SIGUSR2,
-// guarding against repeated signals. Outbox delivery stops once the worker has stopped.
+// guarding against repeated signals. Outbox delivery and schedules stop once the worker has stopped.
 let stopping = false;
 
 const dispatch = async () => {
@@ -40,6 +41,13 @@ const dispatch = async () => {
       await heartbeat();
     } catch {
       console.error('Deployment outbox delivery failed; it will retry.');
+    }
+
+    // Scheduled runs are admitted here, beside the dispatcher that starts their workflows.
+    try {
+      await control.schedules.runDue();
+    } catch {
+      console.error('Runbook schedules could not be checked; they will retry.');
     }
 
     await new Promise((resolve) => setTimeout(resolve, 1000));

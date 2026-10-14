@@ -72,6 +72,39 @@ Tasks receive literal environment variables named `KEEL_INPUT_<NAME>`. For examp
 
 Input values are visible metadata. Keep credentials in secret bindings. Runbooks with no input definitions continue to work without supplying values.
 
+## Schedules
+
+A schedule repeats one review on a cron timetable. After **Review task**, acknowledge the external effects and choose **Create schedule** instead of **Request run**. The review must be your own, unexpired and unused. A review supplies either one manual run or one schedule. Each occurrence uses the reviewed version, target, input values, approval requirement, environment policy revision and secret versions. Publishing a newer version does not change an existing schedule.
+
+Cron expressions have five numeric fields: minute, hour, day of month, month and day of week (`0` or `7` is Sunday). Fields accept `*`, lists, ranges and steps, such as `30 2 * * 1-5` or `*/15 * * * *`. Names such as `MON` are not supported. When both day fields are restricted, a day matches either field; when either starts with `*`, both must match. Schedules may run at most once every five minutes, and an expression must have an occurrence within eight years.
+
+Times are evaluated in an IANA time zone such as `UTC` or `Australia/Brisbane`. A wall time skipped by a daylight-saving change does not run that day. A repeated wall time runs once, at its first occurrence. The UI previews the next three times with the browser's time-zone data; the server's `next_run_at` is authoritative.
+
+The workflow worker checks due schedules every second, beside the outbox dispatcher. Each occurrence creates its own review snapshot and an ordinary run requested by the schedule's creator. Runs go to `awaiting_approval` or `queued` exactly as a manual request would. The creator cannot approve a scheduled run. A run awaiting approval holds the environment lock until it is approved, rejected or cancelled.
+
+An occurrence is skipped, and the schedule continues, when:
+
+| Code                                                                                  | Reason                                                                                                                     |
+| ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `ENVIRONMENT_BUSY`                                                                    | Another deployment or runbook request holds the environment lock, including the previous scheduled run.                    |
+| `SCHEDULE_MISSED`                                                                     | The worker reached the occurrence more than five minutes late. Overdue occurrences never run as a burst.                   |
+| `AGENT_UNAVAILABLE`, `ARTIFACT_UNAVAILABLE`, `STORAGE_UNAVAILABLE`, `SCHEDULE_FAILED` | The target's agent is not active, the retained image or its storage is unavailable, or the occurrence failed unexpectedly. |
+
+The schedule pauses and needs a new review when:
+
+| Code                            | Reason                                                                          |
+| ------------------------------- | ------------------------------------------------------------------------------- |
+| `STALE_RUNBOOK_SCHEDULE`        | The environment policy, approval requirement or a bound secret version changed. |
+| `SECRET_UNAVAILABLE`            | A bound secret was revoked or removed.                                          |
+| `SCHEDULE_OWNER_ACCESS_CHANGED` | The creator lost write access to the project and environment.                   |
+| `INSTALLATION_RESTORED`         | The installation was restored from a backup after the schedule was created.     |
+
+Target fences are not pinned, because deployments and earlier runs advance them. Each occurrence pins the fence at admission, so the ordinary assignment check still fails the run with `RUNBOOK_TARGET_CHANGED` if the target changes before dispatch.
+
+A workspace member's schedule continues while their membership and role permit writes. A schedule created with a bootstrap token continues while that actor has an unrevoked, unexpired write token covering the project and environment.
+
+Any actor with `write` can stop a schedule. Only its creator can resume it, and resuming repeats the policy, secret and recovery checks. A schedule that paused for a stale review cannot resume; create a new one from a fresh review. Schedule definitions are immutable and retained. Skips and pauses are recorded in the audit log as `runbook.schedule_skipped` and `runbook.schedule_paused`. They do not send webhook notifications.
+
 ## Execution and recovery
 
 Update the API, gateway, workflow worker and Go agent together. Agents advertise `runbooks-v1`; tasks with inputs also require `runbook-inputs-v1`, including cleanup assignments. An older agent cannot claim work whose inputs it would ignore. The review requires an active registered agent but does not prove that the agent is online or upgraded. Unclaimed assignments eventually fail with `AGENT_UNAVAILABLE`.
@@ -96,6 +129,11 @@ npm run keel -- runbook publish RUNBOOK_ID --artifact ARTIFACT_ID --process runb
 npm run keel -- list runbook-versions --runbook RUNBOOK_ID
 npm run keel -- runbook review --version VERSION_ID --target TARGET_ID --inputs inputs.json
 npm run keel -- runbook request REVIEW_ID --acknowledge-external-effects
+# Or create a schedule from the review instead of a single run.
+npm run keel -- runbook schedule REVIEW_ID --name 'Nightly cache check' --cron '30 2 * * *' --time-zone UTC --acknowledge-external-effects
+npm run keel -- list runbook-schedules --runbook RUNBOOK_ID
+npm run keel -- runbook stop SCHEDULE_ID --revision 1
+npm run keel -- runbook resume SCHEDULE_ID --revision 2
 # Use a different approving actor's token after reviewing the run.
 npm run keel -- runbook approve RUN_ID --acknowledge-external-effects
 npm run keel -- list runbook-runs --project PROJECT_ID --environment ENVIRONMENT_ID
@@ -107,22 +145,24 @@ Publishing uses the definition's current `revision`; each publication increments
 
 `--inputs` reads a JSON object from a file, capped at 32 KiB. Omit it when all declared inputs have defaults or the runbook has no inputs. Local validation with `--inputs` prints the resolved values. Review responses and run resource reads expose them as `input_values`; the review request body uses `inputs`.
 
-| Method | Path                                | Purpose                                                         |
-| ------ | ----------------------------------- | --------------------------------------------------------------- |
-| POST   | `/runbooks/validate`                | Validate `{process}` without publishing                         |
-| POST   | `/runbooks`                         | Create `{project_id, environment_id, name, slug, description?}` |
-| POST   | `/runbooks/:id/versions`            | Publish `{artifact_id, process, expected_revision}`             |
-| POST   | `/runbook-plans`                    | Review `{runbook_version_id, target_id, inputs?}`               |
-| POST   | `/runbook-plans/:id/request`        | Request with `{acknowledge_external_effects: true}`             |
-| POST   | `/runbook-runs/:id/approve`         | Approve with the same acknowledgement                           |
-| POST   | `/runbook-runs/:id/reject`          | Reject with `{}`                                                |
-| POST   | `/runbook-runs/:id/cancel`          | Cancel with `{}`                                                |
-| GET    | `/runbook-runs/:id/secret-bindings` | Read pinned secret metadata                                     |
+| Method | Path                                | Purpose                                                                      |
+| ------ | ----------------------------------- | ---------------------------------------------------------------------------- |
+| POST   | `/runbooks/validate`                | Validate `{process}` without publishing                                      |
+| POST   | `/runbooks`                         | Create `{project_id, environment_id, name, slug, description?}`              |
+| POST   | `/runbooks/:id/versions`            | Publish `{artifact_id, process, expected_revision}`                          |
+| POST   | `/runbook-plans`                    | Review `{runbook_version_id, target_id, inputs?}`                            |
+| POST   | `/runbook-plans/:id/request`        | Request with `{acknowledge_external_effects: true}`                          |
+| POST   | `/runbook-schedules`                | Schedule `{runbook_plan_id, name, cron, time_zone}` with the acknowledgement |
+| POST   | `/runbook-schedules/:id/state`      | Stop or resume with `{enabled, expected_revision}`                           |
+| POST   | `/runbook-runs/:id/approve`         | Approve with the same acknowledgement                                        |
+| POST   | `/runbook-runs/:id/reject`          | Reject with `{}`                                                             |
+| POST   | `/runbook-runs/:id/cancel`          | Cancel with `{}`                                                             |
+| GET    | `/runbook-runs/:id/secret-bindings` | Read pinned secret metadata                                                  |
 
-Paths use the `/api/v1` prefix. Catalogue, version and run reads use `/resources/runbooks`, `/resources/runbook-versions` and `/resources/runbook-runs`, including individual `/:id` lookups. Each supports pagination, search and project/environment filters; versions also accept `runbook_id`, and runs accept `runbook_version_id` and `status`.
+Paths use the `/api/v1` prefix. Catalogue, version, schedule and run reads use `/resources/runbooks`, `/resources/runbook-versions`, `/resources/runbook-schedules` and `/resources/runbook-runs`, including individual `/:id` lookups. Each supports pagination, search and project/environment filters. Versions and schedules also accept `runbook_id`; schedules and runs accept `runbook_version_id`; runs accept `status` and `runbook_schedule_id`. Run reads include `runbook_schedule_id` and `scheduled_for`, which are null for manual runs. Schedule reads include `next_run_at`, `paused_code`, `last_result_code`, `last_scheduled_for`, `last_run_id` and the reviewed target and input values.
 
-Runbook definitions, versions, reviews, runs and audit records are retained in PostgreSQL. Existing backups include their artifacts and encrypted secret versions. Restore quarantines agents and invalidates the target state, so old reviews must be repeated before new work. Active or reconciling tasks block a clean backup. No retention expiry or deletion flow is provided yet.
+Runbook definitions, versions, reviews, schedules, runs and audit records are retained in PostgreSQL. Existing backups include their artifacts and encrypted secret versions. Restore quarantines agents and invalidates the target state, so old reviews must be repeated before new work. Active or reconciling tasks block a clean backup. No retention expiry or deletion flow is provided yet.
 
 Runbook run events can be sent to signed webhook destinations that opt in with the `runbook` event source. Payloads carry run, runbook and version metadata only; they exclude task commands, reviewed input values and secret bindings. Destinations created before this option, or without it, continue to receive deployment events only. See [notifications](notifications.md).
 
-Multi-step workflows, schedules, automatic retries and task-output logs are not implemented. Inspect the run history and audit log for task results.
+Multi-step workflows, automatic retries, schedule notifications and task-output logs are not implemented. Inspect the run history and audit log for task results.

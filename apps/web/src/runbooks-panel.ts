@@ -4,6 +4,7 @@ import type {
   RunbookInput,
   RunbookInputValues,
 } from '../../../packages/deployment-schema/src/index';
+import { cronOccurrences } from '../../../packages/deployment-schema/src/runbook-schedule';
 import type { RunbookRun } from '../../../packages/domain/src/index';
 import { Api } from './api';
 import { ResourcePage } from './resource-page';
@@ -51,7 +52,37 @@ interface Binding {
   version: number;
 }
 
+interface Schedule {
+  id: string;
+  name: string;
+  cron: string;
+  time_zone: string;
+  enabled: boolean;
+  revision: number;
+  next_run_at: string | null;
+  paused_code: string | null;
+  last_result_code: string | null;
+  last_scheduled_for: string | null;
+  runbook_name: string;
+  runbook_version: number;
+  environment_name: string;
+  target_name: string;
+  requires_approval: boolean;
+  created_by: string;
+  created_by_name: string;
+}
+
+function localZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
+}
+
 interface Run extends RunbookRun {
+  runbook_schedule_id: string | null;
+  scheduled_for: string | null;
   input_values: RunbookInputValues;
   runbook_name: string;
   runbook_version: number;
@@ -69,6 +100,7 @@ export class RunbooksPanel {
   @bindable actorId = '';
   catalogue!: ResourcePage<Definition>;
   runs!: ResourcePage<Run>;
+  schedules!: ResourcePage<Schedule>;
   versions: ResourcePage<Version> | null = null;
   selected: Definition | null = null;
   version: Version | null = null;
@@ -84,6 +116,9 @@ export class RunbooksPanel {
   artifactId = '';
   targetId = '';
   acknowledged = false;
+  scheduleName = '';
+  cron = '0 3 * * *';
+  timeZone = localZone();
   busy = false;
   error = '';
   notice = '';
@@ -105,13 +140,15 @@ spec:
   binding() {
     this.catalogue = new ResourcePage(this.api, 'runbooks', 'runbooks');
     this.runs = new ResourcePage(this.api, 'runbook-runs', 'runbook-runs');
-    void Promise.all([this.catalogue.start(), this.runs.start()]);
+    this.schedules = new ResourcePage(this.api, 'runbook-schedules', 'runbook-schedules');
+    void Promise.all([this.catalogue.start(), this.runs.start(), this.schedules.start()]);
   }
 
   unbinding() {
     this.active = false;
     this.catalogue.dispose();
     this.runs.dispose();
+    this.schedules.dispose();
     this.versions?.dispose();
   }
 
@@ -139,7 +176,12 @@ spec:
 
   async refresh() {
     await this.perform(async () => {
-      await Promise.all([this.catalogue.load(), this.runs.load(), this.versions?.load()]);
+      await Promise.all([
+        this.catalogue.load(),
+        this.runs.load(),
+        this.schedules.load(),
+        this.versions?.load(),
+      ]);
 
       if (this.run) {
         await this.readRun(this.run.id);
@@ -273,6 +315,79 @@ spec:
       await this.readRun(run.id);
       this.notice = 'Run requested. Refresh to follow its progress.';
     });
+  }
+
+  async createSchedule() {
+    if (!this.review || !this.acknowledged) {
+      return;
+    }
+
+    await this.perform(async () => {
+      const schedule = await this.api.request<Schedule>('/runbook-schedules', 'POST', {
+        runbook_plan_id: this.review!.id,
+        name: this.scheduleName,
+        cron: this.cron,
+        time_zone: this.timeZone,
+        acknowledge_external_effects: true,
+      });
+
+      if (!this.active) {
+        return;
+      }
+
+      this.review = null;
+      this.acknowledged = false;
+      this.scheduleName = '';
+      await this.schedules.load();
+      this.notice = `Schedule ${schedule.name} created. Its first run is ${this.date(schedule.next_run_at!)}.`;
+    });
+  }
+
+  async setSchedule(schedule: Schedule, enabled: boolean) {
+    await this.perform(async () => {
+      await this.api.request(`/runbook-schedules/${schedule.id}/state`, 'POST', {
+        enabled,
+        expected_revision: schedule.revision,
+      });
+
+      if (this.active) {
+        await this.schedules.load();
+      }
+    });
+  }
+
+  // Previews use the browser's time zone data; the server's next run time is authoritative.
+  get schedulePreview(): { times: string[]; error: string } {
+    try {
+      const times = cronOccurrences(this.cron, this.timeZone, new Date(), 3);
+
+      // dateStyle and timeStyle cannot be combined with timeZoneName.
+      const format = new Intl.DateTimeFormat(undefined, {
+        weekday: 'short',
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        timeZone: this.timeZone,
+        timeZoneName: 'short',
+      });
+
+      return {
+        times: times.map((date) => format.format(date)),
+        error: times.length ? '' : 'This schedule never runs.',
+      };
+    } catch (error) {
+      return { times: [], error: errorMessage(error, 'Enter a valid schedule.') };
+    }
+  }
+
+  scheduleState(schedule: Schedule) {
+    if (schedule.enabled) {
+      return `Next ${this.date(schedule.next_run_at!)}`;
+    }
+
+    return schedule.paused_code ? `Paused · ${schedule.paused_code}` : 'Stopped';
   }
 
   async readRun(id: string) {

@@ -14,6 +14,7 @@ export function projectCondition(resource: string, parameter: string, alias = 't
     'runbook-versions': 'project_id',
     'runbook-plans': 'project_id',
     'runbook-runs': 'project_id',
+    'runbook-schedules': 'project_id',
     targets: 'project_id',
     connections: 'project_id',
     imports: 'project_id',
@@ -75,6 +76,7 @@ const tables: Record<string, string> = {
   'runbook-versions': 'runbook_versions',
   'runbook-plans': 'runbook_plans',
   'runbook-runs': 'runbook_runs',
+  'runbook-schedules': 'runbook_schedules',
   connections: 'provider_connections',
   imports: 'artifact_imports',
   secrets: 'deployment_secrets',
@@ -172,6 +174,10 @@ export async function enforceProjectRequest(db: Database, req: FastifyRequest) {
     return record('runbook-versions', body.runbook_version_id);
   }
 
+  if (key === 'POST /runbook-schedules') {
+    return record('runbook-plans', body.runbook_plan_id);
+  }
+
   if (key === 'POST /rollback-plans') {
     await record('deployments', body.source_deployment_id);
     await record('deployments', body.candidate_deployment_id);
@@ -182,6 +188,7 @@ export async function enforceProjectRequest(db: Database, req: FastifyRequest) {
   const records: Record<string, string> = {
     'POST /runbooks/:id/versions': 'runbooks',
     'POST /runbook-plans/:id/request': 'runbook-plans',
+    'POST /runbook-schedules/:id/state': 'runbook-schedules',
     'GET /runbook-runs/:id/secret-bindings': 'runbook-runs',
     'POST /runbook-runs/:id/approve': 'runbook-runs',
     'POST /runbook-runs/:id/reject': 'runbook-runs',

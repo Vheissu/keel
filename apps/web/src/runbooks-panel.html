@@ -1,6 +1,6 @@
 <p class="help">
-  Runbooks execute one fixed command from a retained image. Each run requires a fresh review of its
-  target, inputs, policy and secret versions. Task output is not collected.
+  Runbooks execute one fixed command from a retained image. Each run or schedule requires a fresh
+  review of its target, inputs, policy and secret versions. Task output is not collected.
 </p>
 <p class="alert error" role="alert" if.bind="error">${error}</p>
 <p class="alert success" role="status" if.bind="notice">${notice}</p>
@@ -267,9 +267,58 @@
     >
       Request run
     </button>
+    <form submit.trigger:prevent="createSchedule()">
+      <fieldset disabled.bind="busy">
+        <legend>Or run it on a schedule</legend>
+        <p class="help">
+          Every scheduled run repeats this review: the same version, target, inputs, approval policy
+          and secret versions. A policy change, secret rotation, loss of your write access or an
+          installation restore pauses the schedule. Occurrences are skipped while the environment
+          has another active request.
+        </p>
+        <label for="runbook-schedule-name">Schedule name</label>
+        <input id="runbook-schedule-name" value.bind="scheduleName" maxlength="100" required />
+        <label for="runbook-schedule-cron">Cron expression</label>
+        <input
+          id="runbook-schedule-cron"
+          value.bind="cron"
+          maxlength="100"
+          spellcheck="false"
+          required
+          aria-describedby="runbook-schedule-cron-help runbook-schedule-preview"
+        />
+        <p class="help" id="runbook-schedule-cron-help">
+          Minute, hour, day of month, month and day of week, using numbers. At most once every five
+          minutes.
+        </p>
+        <label for="runbook-schedule-zone">Time zone</label>
+        <input
+          id="runbook-schedule-zone"
+          value.bind="timeZone"
+          maxlength="64"
+          spellcheck="false"
+          required
+        />
+        <div id="runbook-schedule-preview" aria-live="polite">
+          <p class="help" if.bind="schedulePreview.error">${schedulePreview.error}</p>
+          <template if.bind="!schedulePreview.error">
+            <p class="help">Next runs:</p>
+            <p repeat.for="time of schedulePreview.times">${time}</p>
+          </template>
+        </div>
+        <button
+          class="button secondary"
+          type="submit"
+          disabled.bind="!acknowledged || !scheduleName || schedulePreview.error"
+        >
+          Create schedule
+        </button>
+      </fieldset>
+    </form>
   </template>
   <template if.bind="run">
     <p>${run.environment_name} · ${run.target_name}</p>
+    <p if.bind="run.scheduled_for">Scheduled for ${date(run.scheduled_for)}</p>
     <p role="status">
       ${run.status} · ${run.phase || 'No task started'} · ${run.result_code || 'No result yet'}
     </p>
@@ -311,6 +360,70 @@
     </button>
   </template>
 </section>
+<h2>Schedules</h2>
+<page-controls if.bind="schedules" pager.bind="schedules" label="Runbook schedules"></page-controls>
+<div class="table-wrap" role="region" aria-label="Runbook schedules" tabindex="0">
+  <table>
+    <thead>
+      <tr>
+        <th>Schedule</th>
+        <th>Runbook / target</th>
+        <th>State</th>
+        <th>Last occurrence</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr repeat.for="item of schedules.items; key: id">
+        <td>
+          ${item.name}
+          <small>
+            <code>${item.cron}</code>
+            · ${item.time_zone}
+          </small>
+        </td>
+        <td>
+          ${item.runbook_name} · version ${item.runbook_version}
+          <small>${item.environment_name} · ${item.target_name}</small>
+        </td>
+        <td>
+          ${scheduleState(item)}
+          <small>
+            ${item.requires_approval ? 'Each run needs approval' : 'Runs queue immediately'} · by
+            ${item.created_by_name}
+          </small>
+        </td>
+        <td>
+          ${item.last_result_code || 'None yet'}
+          <small if.bind="item.last_scheduled_for">${date(item.last_scheduled_for)}</small>
+        </td>
+        <td>
+          <button
+            if.bind="canWrite && item.enabled"
+            class="text-button"
+            click.trigger="setSchedule(item, false)"
+            disabled.bind="busy"
+          >
+            Stop ${item.name}
+          </button>
+          <button
+            if.bind="canWrite && !item.enabled && item.created_by === actorId"
+            class="text-button"
+            click.trigger="setSchedule(item, true)"
+            disabled.bind="busy"
+          >
+            Resume ${item.name}
+          </button>
+        </td>
+      </tr>
+      <tr if.bind="schedules && !schedules.loading && !schedules.items.length">
+        <td colspan="5" class="table-empty">
+          No schedules yet. Review a task, then create a schedule from the review.
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
 <h2>Run history</h2>
 <page-controls if.bind="runs" pager.bind="runs" label="Runbook runs"></page-controls>
 <div class="table-wrap" role="region" aria-label="Runbook runs" tabindex="0">

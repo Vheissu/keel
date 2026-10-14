@@ -69,7 +69,9 @@ export interface RunbookVersion extends Scope {
   };
 }
 
-interface RunbookPlan extends Scope {
+export type Checked = Awaited<ReturnType<Runbooks['preflight']>>;
+
+export interface RunbookPlan extends Scope {
   id: string;
   runbook_version_id: string;
   target_id: string;
@@ -84,7 +86,7 @@ interface RunbookPlan extends Scope {
   input_values: RunbookInputValues;
 }
 
-function assertScope(p: Principal, scope: Scope) {
+export function assertScope(p: Principal, scope: Scope) {
   if (
     scope.organisation_id !== p.organisation_id ||
     (p.project_ids && !p.project_ids.includes(scope.project_id)) ||
@@ -275,7 +277,7 @@ export class Runbooks {
     return resolveRunbookInputs(version.manifest.process.spec.inputs, plan.input_values);
   }
 
-  private async preflight(tx: Transaction, p: Principal, versionId: string, targetId: string) {
+  async preflight(tx: Transaction, p: Principal, versionId: string, targetId: string) {
     const version = await this.version(tx, p.organisation_id, versionId);
 
     assertScope(p, version);
@@ -416,7 +418,9 @@ export class Runbooks {
     };
   }
 
-  async request(tx: Transaction, p: Principal, id: string) {
+  // Shared by manual requests and schedule creation: a review is used once, by its own author,
+  // while its target, policy and secret versions still match.
+  async reviewedPlan(tx: Transaction, p: Principal, id: string) {
     // Serialize reuse independently of the request idempotency key.
     await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`runbook-plan:${id}`]);
 
@@ -441,6 +445,7 @@ export class Runbooks {
           WHERE
             p.organisation_id = $1
             AND p.id = $2
+            AND p.schedule_id IS NULL
         `,
         [p.organisation_id, id],
       )
@@ -471,24 +476,37 @@ export class Runbooks {
     if (
       (
         await tx.query(
-          'SELECT 1 FROM deployments WHERE organisation_id=$1 AND runbook_plan_id=$2',
+          `
+            SELECT
+              1
+            FROM
+              deployments
+            WHERE
+              organisation_id = $1
+              AND runbook_plan_id = $2
+            UNION ALL
+            SELECT
+              1
+            FROM
+              runbook_schedules
+            WHERE
+              organisation_id = $1
+              AND source_plan_id = $2
+          `,
           [p.organisation_id, id],
         )
       ).rowCount
     ) {
-      throw new DomainError('RUNBOOK_ALREADY_REQUESTED', 'This review already has a run.', 409);
+      throw new DomainError(
+        'RUNBOOK_ALREADY_REQUESTED',
+        'This review already has a run or schedule.',
+        409,
+      );
     }
 
-    const checked = await this.preflight(tx, p, plan.runbook_version_id, plan.target_id);
+    const checked = await this.matchingPlan(tx, p, plan);
 
-    resolveRunbookInputs(checked.version.manifest.process.spec.inputs, plan.input_values);
-
-    if (
-      checked.target.fence !== plan.expected_fence ||
-      checked.environment.policy_revision !== plan.policy_revision ||
-      checked.requiresApproval !== plan.requires_approval ||
-      !isDeepStrictEqual(checked.bindings, plan.secret_bindings)
-    ) {
+    if (!checked) {
       throw new DomainError(
         'STALE_RUNBOOK_REVIEW',
         'The target, policy or secret versions changed. Review the runbook again.',
@@ -496,6 +514,48 @@ export class Runbooks {
       );
     }
 
+    return { plan, checked };
+  }
+
+  // Re-runs the review checks and compares them with a saved review. Returns null when the target
+  // fence (if pinned), policy or secret versions differ.
+  async matchingPlan(tx: Transaction, p: Principal, plan: RunbookPlan, { pinFence = true } = {}) {
+    const checked = await this.preflight(tx, p, plan.runbook_version_id, plan.target_id);
+
+    resolveRunbookInputs(checked.version.manifest.process.spec.inputs, plan.input_values);
+
+    if (
+      (pinFence && checked.target.fence !== plan.expected_fence) ||
+      checked.environment.policy_revision !== plan.policy_revision ||
+      checked.requiresApproval !== plan.requires_approval ||
+      !isDeepStrictEqual(checked.bindings, plan.secret_bindings)
+    ) {
+      return null;
+    }
+
+    return checked;
+  }
+
+  async request(tx: Transaction, p: Principal, id: string) {
+    const { plan, checked } = await this.reviewedPlan(tx, p, id);
+
+    return this.admit(tx, p, plan, checked, {
+      input_values: plan.input_values,
+      secret_bindings: plan.secret_bindings,
+      acknowledge_external_effects: true,
+    });
+  }
+
+  async admit(
+    tx: Transaction,
+    p: Principal,
+    plan: Pick<
+      RunbookPlan,
+      'id' | 'project_id' | 'environment_id' | 'requires_approval' | 'policy_revision'
+    > & { runbook_version_id: string },
+    checked: Checked,
+    context: Record<string, unknown>,
+  ) {
     const run = (
       await tx.query<RunbookRun>(
         `
@@ -526,18 +586,13 @@ export class Runbooks {
           p.actor_id,
           { revision: plan.policy_revision, requires_approval: plan.requires_approval },
           plan.runbook_version_id,
-          id,
+          plan.id,
         ],
       )
     ).rows[0];
 
     await this.control.secrets.bind(tx, run, checked.version.manifest.process.spec.secrets);
-
-    await this.control.deploymentEvent(tx, p, run, {
-      input_values: plan.input_values,
-      secret_bindings: plan.secret_bindings,
-      acknowledge_external_effects: true,
-    });
+    await this.control.deploymentEvent(tx, p, run, context);
 
     return run;
   }
